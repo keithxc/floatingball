@@ -1,2 +1,126 @@
 # FloatingBall
-计划做一款好用的悬浮球
+
+基于 Qt 的悬浮球小工具，优先适配触控操作与桌面快捷操作。
+
+## 当前 macOS 版行为
+
+- 单击：展开或收起动作子球
+- 左键拖动：移动悬浮球
+- 滚轮：缩放悬浮球（带小幅过渡动画）
+- 双指缩放：缩放悬浮球（macOS/触控屏）
+- 悬停：轻微放大（带过渡动画）
+- 右键 / 长按：打开快捷菜单
+- 双击：也可展开或收起动作子球
+
+## 快捷动作（macOS）
+
+- 切换输入法（Ctrl + Space）
+- 切换输入法（Command + Space）
+- 复制（Command + C）
+- 粘贴（Command + V）
+- 打开终端
+- 打开浏览器
+- 打开主目录
+
+快捷键动作会通过系统脚本触发对应按键，再执行你设置的系统行为（比如切换输入法），用于“远程场景里有时键盘事件丢失”时快速补齐操作。
+
+## Screenshot Bubble
+
+Click the main ball, then the screenshot satellite (截图). The other satellites
+open Terminal, the browser and the home directory, or trigger copy/paste.
+The screenshot panel is also available from the right-click / long-press menu.
+
+- Floating preview of all readable PNG/JPEG/WebP images in the selected directory,
+  newest first, with horizontally scrollable thumbnails.
+- Compact pearl-colored ball with line icons and gentle hover/orbit animation.
+  A single click responds immediately. Satellites shrink and fade back into the
+  ball on close, can reverse direction mid-animation, and follow mouse/touch
+  dragging synchronously during expansion, use and return.
+  The light screenshot card hides the thumbnail strip for a single image;
+  a mouse wheel or trackpad scrolls larger galleries. Drag the card header to move it.
+- Separate image clipboard and absolute original-file-path clipboard actions.
+- Freehand annotation, undo (up to 12 strokes), and Save Copy as PNG.
+- Copy Image includes current annotations; Copy Path still refers to the original.
+- The ball and satellites stay visible above normal windows when another app
+  becomes active on macOS. The screenshot panel starts pinned so it can serve
+  as a reference while working in other apps. Unpin to dismiss on focus loss;
+  Escape or Close hides it in either mode.
+- Copy and Undo also support the platform's standard keyboard shortcuts.
+- Choose a screenshot directory in the panel; the choice persists across launches.
+  macOS uses the configured system screenshot location when available, otherwise
+  the Desktop. Windows resolves the Screenshots known folder (including system
+  redirection), with a Pictures/Screenshots fallback. Linux looks for existing
+  Screenshots, 截图 or 截屏 directories under the system Pictures location, otherwise
+  uses Pictures/Screenshots. Linux tools may save elsewhere; choose that folder
+  manually. No platform screenshot settings are modified.
+- Import from Clipboard explicitly saves the current clipboard image as a unique
+  PNG in the selected directory, then shows it immediately. A missing directory
+  is created on import; browsing alone does not create it. Empty clipboard and
+  write failures show a message without replacing the current image.
+- Directory changes trigger a debounced refresh. A two-second fallback detects
+  file replacement and retries partially written images while the panel is visible
+  and outside annotation mode. Uppercase extensions are accepted.
+  It reads PNG/JPEG/WebP files from the selected directory; use a dedicated
+  screenshot folder to avoid mixing other images into the recent list.
+
+This first version offers a pen tool. Arrows, shapes and text are future work.
+Switching images discards unsaved pen strokes; copy or save the annotated image
+before selecting another thumbnail. Original screenshot files are preserved.
+
+Use `--screenshot-directory /absolute/path` to select a folder for one session
+without updating the saved folder, and `--show-screenshots` to open its preview
+on launch. Choosing a different folder in the panel still saves that explicit choice.
+
+### Build on macOS
+
+Requires Qt 6 Widgets and LinguistTools, CMake, and a C++17 toolchain.
+From the umbrella workspace, resolve an external build directory:
+
+```sh
+python3 tools/build-paths.py --project floatingball --checkout "$PWD/floatingball" --task dev --purpose work
+cmake -S floatingball -B /absolute/resolved/work/cmake -DCMAKE_PREFIX_PATH=/path/to/qt
+cmake --build /absolute/resolved/work/cmake
+```
+
+### Integration checks
+
+Enable `-DFLOATINGBALL_BUILD_TESTS=ON` when configuring the external CMake build,
+then run `ctest --test-dir /absolute/resolved/work/cmake --output-on-failure`.
+The checks use the offscreen Qt platform, isolated settings and owned temporary
+fixtures beneath that build directory. They cover folder reads, clipboard import,
+failed writes, case-insensitive extensions, partial captures, directory updates,
+annotation/undo, original-file preservation, and the screenshot satellite action.
+They also cover transparent clipboard images and hover events during orbit expansion.
+Offscreen tests do not verify native window placement, compositor stacking or
+system clipboard interoperability. macOS has been compiled and tested locally;
+the Cocoa plugin checks also cover clipboard image/path, annotation/undo,
+directory updates, compact gallery layout, wheel scrolling, and the satellite action
+with isolated settings and clipboard restoration. Native Cocoa checks also verify
+elevated window levels, front-to-back ordering above a normal window, and continued
+visibility when a separate test application becomes active. The owned focus fixture
+exits after verification. Native mouse input and switching Spaces/fullscreen remain
+separate acceptance checks.
+Windows x86_64 was compiled with Qt 6.8.3 and MinGW 13.1, and passed
+both offscreen and native Windows plugin checks. SSH-driven mouse input in the
+active Windows desktop also verified the satellite action, folder picker, clipboard,
+annotation/save/undo, folder updates, pinning above another window, focus dismissal,
+and Escape at 150% display scaling before the compact visual redesign.
+The updated visual layout still needs Windows native acceptance.
+Linux still requires native build/runtime
+acceptance; multiple monitors and other display scales need separate checks.
+
+### Windows build
+
+With Qt 6 for MinGW and its matching compiler on the process PATH, configure an
+external output directory and enable the integration checks:
+
+```powershell
+cmake -S . -B C:/path/to/build/floatingball/work/cmake -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH=C:/path/to/Qt/6.8.3/mingw_64 -DFLOATINGBALL_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build C:/path/to/build/floatingball/work/cmake --parallel 2
+ctest --test-dir C:/path/to/build/floatingball/work/cmake --output-on-failure
+```
+
+The Windows default directory uses `FOLDERID_Screenshots`, including system
+folder redirection. The compiled application links Shell32, Ole32 and UUID.
+Use `windeployqt` to collect runtime DLLs and platform/image-format plugins for
+an independent test package.

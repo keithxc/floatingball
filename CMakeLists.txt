@@ -17,6 +17,11 @@ set(TS_FILES FloatingBall_zh_CN.ts)
 set(PROJECT_SOURCES
         main.cpp
         floatingball.cpp
+        screenshotpanel.cpp
+        screenshotpanel.h
+        screenshotstore.cpp
+        screenshotstore.h
+        uiicons.h
         floatingball.h
         floatingball.ui
         ${TS_FILES}
@@ -51,6 +56,10 @@ endif()
 
 target_link_libraries(FloatingBall PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
 
+if(WIN32)
+    target_link_libraries(FloatingBall PRIVATE shell32 ole32 uuid user32)
+endif()
+
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an
 # explicit, fixed bundle identifier manually though.
@@ -74,4 +83,24 @@ install(TARGETS FloatingBall
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(FloatingBall)
+endif()
+
+option(FLOATINGBALL_BUILD_TESTS "Build screenshot and action integration checks" OFF)
+if(FLOATINGBALL_BUILD_TESTS)
+    enable_testing()
+    add_executable(floatingball-screenshot-test
+        tests/screenshot-test.cpp floatingball.cpp floatingball.h floatingball.ui
+        screenshotpanel.cpp screenshotpanel.h screenshotstore.cpp screenshotstore.h)
+    target_include_directories(floatingball-screenshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(floatingball-screenshot-test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+    if(APPLE AND NOT IOS)
+        enable_language(OBJCXX)
+        target_sources(floatingball-screenshot-test PRIVATE tests/native-window-check.mm)
+        target_link_libraries(floatingball-screenshot-test PRIVATE "-framework AppKit")
+    endif()
+    if(WIN32)
+        target_link_libraries(floatingball-screenshot-test PRIVATE shell32 ole32 uuid user32)
+    endif()
+    add_test(NAME screenshot-integration COMMAND floatingball-screenshot-test "${CMAKE_CURRENT_BINARY_DIR}/test-data")
+    set_tests_properties(screenshot-integration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

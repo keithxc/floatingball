@@ -1,302 +1,627 @@
 #include "floatingball.h"
+#include "screenshotpanel.h"
+#include "uiicons.h"
+#include <QApplication>
+#include <QTimer>
+#include <QScreen>
 #include "./ui_floatingball.h"
 
-#include <QPainter>
-#include <QBitmap>
-#include <QVector>
-
-#include <QMouseEvent>
-#include <QWheelEvent>
-#include <QWheelEvent>
-#include <QMessageBox>
-
+#include <QDebug>
+#include <QEnterEvent>
+#include <QFont>
 #include <QGestureEvent>
+#include <QLineF>
+#include <QAbstractAnimation>
+#include <QEasingCurve>
 #include <QMouseEvent>
+#include <QMoveEvent>
+#include <QSignalBlocker>
+#include <QMenu>
+#include <QPinchGesture>
+#include <QProcess>
+#include <QRegion>
+#include <QStandardPaths>
+#include <QDesktopServices>
+#include <QTouchEvent>
+#include <QTapAndHoldGesture>
+#include <QWheelEvent>
+#include <QtMath>
 
-FloatingBall::FloatingBall(QWidget *parent)
-    : QWidget(parent, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
-    , ui(new Ui::FloatingBall)
+FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
+    : QWidget(parent), ui(new Ui::FloatingBall), m_screenshotDirectory(screenshotDirectory)
 {
     ui->setupUi(this);
-    // 设置窗口的标志
-    // 使用Qt::CustomizeWindowHint标志来启用自定义窗口，这会去掉所有的默认按钮。
-    // 使用Qt::WindowTitleHint标志来显示窗口的标题栏，这会显示窗口的标题和图标。
-    // 使用Qt::WindowCloseButtonHint标志来显示窗口的关闭按钮，这会显示一个可以关闭窗口的按钮
-    setWindowFlags(Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
-    setFixedSize(200, 200); // 设置窗口的大小
 
-    // 全透明
-    // setWindowOpacity(0.2);
-    // 窗体透明
-    setAttribute(Qt::WA_TranslucentBackground, true);
-    // 隐去窗体边框
-    setWindowFlags(Qt::FramelessWindowHint);
+    setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+    // Cocoa otherwise hides tool windows whenever another app becomes active.
+    setAttribute(Qt::WA_MacAlwaysShowToolWindow);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_AcceptTouchEvents);
+    setMouseTracking(true);
 
-    // this->setAttribute(Qt::WA_TranslucentBackground, true);
+    ballLabel = new QLabel(this);
+    ballLabel->setAlignment(Qt::AlignCenter);
+    QFont font = ballLabel->font();
+    font.setPointSize(10);
+    font.setBold(false);
+    ballLabel->setFont(font);
+    ballLabel->setStyleSheet("color:#514b5f; background:transparent;");
+    setAccessibleName(QStringLiteral("FloatingBall"));
+    setToolTip(tr("点击展开快捷操作 · 拖动移动"));
+    ballLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-    // 创建圆形控件
-    circleLabel[0] = new QLabel(this);
-    // 设置圆形控件的大小
-    circleLabel[0]->resize(100, 100);
-    // 设置圆形控件的位置为窗口的中心
-    circleLabel[0]->move(width() / 2 - circleLabel[0]->width() / 2, height() / 2 - circleLabel[0]->height() / 2);
-    // 设置圆形控件的背景颜色为X色
-    circleLabel[0]->setStyleSheet("background-color: blue;");
-    // 设置圆形控件的遮罩为圆形
-    circleLabel[0]->setMask(QRegion(0, 0, 100, 100, QRegion::Ellipse));
+    m_geometryAnimation = new QPropertyAnimation(this, "geometry", this);
+    m_geometryAnimation->setDuration(140);
+    m_geometryAnimation->setEasingCurve(QEasingCurve::OutCubic);
 
+    updateBallGeometry(QSizeF(64, 64), QPointF(), false, false);
+    updateBallStyle("#faf9fc");
 
-    // 注册需要识别的手势类型
-    this->grabGesture(Qt::PinchGesture);
-    this->grabGesture(Qt::PanGesture);
-    this->grabGesture(Qt::SwipeGesture);
+    grabGesture(Qt::PinchGesture);
+    grabGesture(Qt::TapAndHoldGesture);
+    initQuickActions();
 }
 
 FloatingBall::~FloatingBall()
 {
+    if (m_orbitAnimation) m_orbitAnimation->stop();
+    if (m_geometryAnimation &&
+        m_geometryAnimation->state() == QAbstractAnimation::Running) {
+        m_geometryAnimation->stop();
+    }
+
+    for (FloatingBall *ball : qAsConst(m_orbitBalls)) {
+        if (ball) {
+            delete ball;
+        }
+    }
+    m_orbitBalls.clear();
+    for (QShortcut *shortcut : qAsConst(m_shortcutObjects)) {
+        if (shortcut) {
+            shortcut->deleteLater();
+        }
+    }
+    m_shortcutObjects.clear();
+    delete m_screenshotPanel;
     delete ui;
 }
 
-void FloatingBall::paintEvent(QPaintEvent *event)
+bool FloatingBall::event(QEvent *event)
 {
-    // // 创建一个画家对象
-    // QPainter painter(this);
-    // // 设置抗锯齿
-    // painter.setRenderHint(QPainter::Antialiasing, true);
-    // // 设置画笔颜色为黑色
-    // painter.setPen(Qt::black);
-    // // 绘制一个圆形边框
-    // painter.drawEllipse(circleLabel[0]->geometry());
+    if (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate
+        || event->type() == QEvent::TouchEnd || event->type() == QEvent::TouchCancel) {
+        return handleTouchEvent(static_cast<QTouchEvent *>(event));
+    }
+    if (event->type() == QEvent::Gesture) {
+        return gestureEvent(static_cast<QGestureEvent *>(event));
+    }
+    return QWidget::event(event);
+}
 
-    // for (auto ball : balls) {
-    //     // 获取悬浮球的中心点和半径
-    //     QPointF center = ball.first;
-    //     qreal radius = ball.second;
+void FloatingBall::updateBallGeometry(const QSizeF &size, const QPointF &anchorGlobalPos, bool keepAnchor, bool animate)
+{
+    const int diameter = qBound(kMinDiameter, qRound(qMin(size.width(), size.height())), kMaxDiameter);
+    const QSize targetSize(diameter, diameter);
 
-    //     // 绘制一个椭圆，作为悬浮球
-    //     painter.drawEllipse(center, radius, radius);
-    // }
+    QPoint targetPos = pos();
+    if (keepAnchor) {
+        targetPos = QPoint(qRound(anchorGlobalPos.x()) - targetSize.width() / 2,
+                           qRound(anchorGlobalPos.y()) - targetSize.height() / 2);
+    } else {
+        QPoint center = pos() + QPoint(width() / 2, height() / 2);
+        targetPos = QPoint(center.x() - targetSize.width() / 2,
+                           center.y() - targetSize.height() / 2);
+    }
 
+    const QRect targetGeometry(targetPos, targetSize);
+    applyGeometry(targetGeometry, animate);
+}
 
-    for (int i = 0; i < Balls.size(); i++) {
-        // // 设置圆形控件的大小
-        // circleLabel[0]->resize(100, 100);
-        // // 设置圆形控件的位置为窗口的中心
-        // circleLabel[0]->move(i * 10, i * 10);
-        // // 设置圆形控件的背景颜色为X色
-        // Balls.takeAt(i).setStyleSheet("background-color: blue;");
-        // // 设置圆形控件的遮罩为圆形
-        // Balls.takeAt(i).setMask(QRegion(0, 0, 100, 100, QRegion::Ellipse));
+void FloatingBall::startGeometryAnimation(const QRect &targetGeometry)
+{
+    if (!m_geometryAnimation) {
+        m_geometryAnimation = new QPropertyAnimation(this, "geometry", this);
+        m_geometryAnimation->setDuration(140);
+        m_geometryAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    }
+    if (m_geometryAnimation->state() == QAbstractAnimation::Running) {
+        m_geometryAnimation->stop();
+    }
+    m_geometryAnimation->setStartValue(geometry());
+    m_geometryAnimation->setEndValue(targetGeometry);
+    m_geometryAnimation->start();
+}
+
+void FloatingBall::applyGeometry(const QRect &targetGeometry, bool animate)
+{
+    if (targetGeometry.isEmpty()) {
+        return;
+    }
+    if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running) {
+        m_geometryAnimation->stop();
+    }
+
+    if (animate && targetGeometry != geometry()) {
+        startGeometryAnimation(targetGeometry);
+        return;
+    }
+
+    setGeometry(targetGeometry);
+    setMask(QRegion(rect(), QRegion::Ellipse));
+    if (ballLabel) {
+        ballLabel->setGeometry(6, height()/2+3, width()-12, height()/3);
     }
 }
 
+void FloatingBall::updateBallStyle(const QString &colorName)
+{
+    m_ballColor = QColor(colorName);
+    update();
+}
 
-// 重写鼠标进入事件
+void FloatingBall::resetTouchState()
+{
+    m_dragTouchId = -1;
+    m_dragOffset = QPointF();
+    m_isDragging = false;
+    m_isPinching = false;
+    m_initialPinchDistance = 0.0;
+    m_initialPinchSize = QSizeF();
+}
+
+bool FloatingBall::handleTouchEvent(QTouchEvent *event)
+{
+    const auto points = event->points();
+
+    if (event->type() == QEvent::TouchBegin) {
+        m_orbitAnimating = false;
+        if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running) {
+            m_geometryAnimation->stop();
+        }
+        if (points.size() >= 2) {
+            m_isPinching = true;
+            m_isDragging = false;
+            m_dragTouchId = -1;
+            m_initialPinchDistance = QLineF(points.at(0).globalPosition(), points.at(1).globalPosition()).length();
+            m_initialPinchSize = QSizeF(size());
+            return true;
+        }
+
+        if (points.size() == 1) {
+            m_isPinching = false;
+            m_isDragging = true;
+            m_dragTouchId = points.first().id();
+            m_dragOffset = points.first().globalPosition() - pos();
+            m_pressPosition = points.first().globalPosition().toPoint();
+            m_moved = false;
+            return true;
+        }
+    }
+
+    if (event->type() == QEvent::TouchUpdate) {
+        if (points.size() >= 2 && m_isPinching && m_initialPinchDistance > 0) {
+            const qreal distance = QLineF(points.at(0).globalPosition(), points.at(1).globalPosition()).length();
+            if (distance > 0) {
+                const qreal scale = distance / m_initialPinchDistance;
+                const QPointF anchor = (points.at(0).globalPosition() + points.at(1).globalPosition()) / 2;
+                updateBallGeometry(m_initialPinchSize * scale, anchor, true, false);
+            }
+            return true;
+        }
+
+        if (points.size() == 1 && (m_isDragging || m_dragTouchId == points.first().id())) {
+            const auto &point = points.first();
+            if (m_dragTouchId < 0) {
+                m_dragTouchId = point.id();
+            }
+            if (point.id() == m_dragTouchId) {
+                if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running) {
+                    m_geometryAnimation->stop();
+                }
+                if ((point.globalPosition().toPoint() - m_pressPosition).manhattanLength() >= QApplication::startDragDistance()) m_moved = true;
+                if (m_moved && !m_clickAction) move((point.globalPosition() - m_dragOffset).toPoint());
+            }
+            return true;
+        }
+
+        if (points.size() == 1 && !m_isDragging && !m_isPinching) {
+            m_isDragging = true;
+            m_dragTouchId = points.first().id();
+            m_dragOffset = points.first().globalPosition() - pos();
+            return true;
+        }
+    }
+
+    if (event->type() == QEvent::TouchEnd && m_isDragging && !m_isPinching && !m_moved) {
+        if (m_clickAction) m_clickAction();
+        else toggleOrbit();
+    }
+    resetTouchState();
+    return true;
+}
+
+bool FloatingBall::gestureEvent(QGestureEvent *event)
+{
+    QGesture *rawPinch = event->gesture(Qt::PinchGesture);
+    if (QPinchGesture *pinch = qobject_cast<QPinchGesture *>(rawPinch)) {
+        if (pinch->changeFlags() & QPinchGesture::ScaleFactorChanged) {
+            qreal factor = pinch->totalScaleFactor();
+            if (factor > 0) {
+                updateBallGeometry(QSizeF(size()) * factor, QPointF(), false, false);
+            }
+        }
+    }
+
+    if (QTapAndHoldGesture *tapHold = qobject_cast<QTapAndHoldGesture *>(event->gesture(Qt::TapAndHoldGesture))) {
+        if (tapHold->state() == Qt::GestureFinished) {
+            m_moved = true;
+            showQuickActions(mapToGlobal(tapHold->position().toPoint()));
+        }
+    }
+    return true;
+}
+
+void FloatingBall::initQuickActions()
+{
+    m_shortcutActions.clear();
+    m_quickActions.clear();
+    const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+
+#if defined(Q_OS_WIN)
+    m_shortcutActions.append({tr("打开文件资源管理器"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), QStringLiteral("explorer")});
+    m_quickActions.append({tr("打开终端"), QStringLiteral("cmd"), {"/c", "start", "cmd"}});
+    m_quickActions.append({tr("打开浏览器"), QString(), {}, QUrl(QStringLiteral("https://www.bing.com"))});
+    m_quickActions.append({tr("打开主目录"), QString(), {}, QUrl::fromLocalFile(home)});
+    m_quickActions.append({tr("打开任务管理器"), QStringLiteral("taskmgr"), {}});
+#elif defined(Q_OS_MAC)
+    m_shortcutActions.append({tr("切换输入法（Ctrl + Space）"), QKeySequence(Qt::CTRL + Qt::Key_Space),
+                              QStringLiteral("osascript"),
+                              {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to key code 49 using control down")}});
+    m_shortcutActions.append({tr("切换输入法（Command + Space）"), QKeySequence(Qt::META + Qt::Key_Space),
+                              QStringLiteral("osascript"),
+                              {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to key code 49 using command down")}});
+    m_shortcutActions.append({tr("复制"), QKeySequence(Qt::META + Qt::Key_C),
+                              QStringLiteral("osascript"),
+                              {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to keystroke \"c\" using command down")}});
+    m_shortcutActions.append({tr("粘贴"), QKeySequence(Qt::META + Qt::Key_V),
+                              QStringLiteral("osascript"),
+                              {QStringLiteral("-e"), QStringLiteral("tell application \"System Events\" to keystroke \"v\" using command down")}});
+    m_quickActions.append({tr("打开终端"), QStringLiteral("open"), {QStringLiteral("-a"), QStringLiteral("Terminal")}});
+    m_quickActions.append({tr("打开浏览器"), QString(), {}, QUrl(QStringLiteral("https://www.baidu.com"))});
+    m_quickActions.append({tr("打开主目录"), QString(), {}, QUrl::fromLocalFile(home)});
+#else
+    m_shortcutActions.append({tr("切换输入法（Ctrl + Space）"), QKeySequence(Qt::CTRL + Qt::Key_Space), QString(), {}});
+    m_shortcutActions.append({tr("复制"), QKeySequence(Qt::CTRL + Qt::Key_C), QString(), {}});
+    m_shortcutActions.append({tr("粘贴"), QKeySequence(Qt::CTRL + Qt::Key_V), QString(), {}});
+    m_quickActions.append({tr("打开终端"), QStringLiteral("x-terminal-emulator"), {}});
+    m_quickActions.append({tr("打开浏览器"), QString(), {}, QUrl(QStringLiteral("https://www.bing.com"))});
+    m_quickActions.append({tr("打开主目录"), QString(), {}, QUrl::fromLocalFile(home)});
+#endif
+
+    for (QShortcut *shortcut : qAsConst(m_shortcutObjects)) {
+        if (shortcut) {
+            shortcut->deleteLater();
+        }
+    }
+    m_shortcutObjects.clear();
+
+    for (int i = 0; i < m_shortcutActions.size(); ++i) {
+        const auto &cfg = m_shortcutActions[i];
+        if (cfg.trigger.isEmpty()) {
+            continue;
+        }
+        QShortcut *shortcut = new QShortcut(cfg.trigger, this);
+        shortcut->setContext(Qt::ApplicationShortcut);
+        connect(shortcut, &QShortcut::activated, this, [this, i]() {
+            executeKeyboardShortcut(i);
+        });
+        m_shortcutObjects.append(shortcut);
+    }
+}
+
+void FloatingBall::showQuickActions(const QPoint &globalPos)
+{
+    QMenu menu;
+    auto screenshots = menu.addAction(tr("最近截图"));
+    connect(screenshots, &QAction::triggered, this, [this]() {
+        showScreenshots();
+    });
+    menu.addSeparator();
+    for (int i = 0; i < m_quickActions.size(); ++i) {
+        QAction *action = menu.addAction(m_quickActions[i].name);
+        connect(action, &QAction::triggered, this, [this, i]() {
+            executeQuickAction(i);
+        });
+    }
+    menu.addSeparator();
+    QAction *title = menu.addAction(tr("快捷键触发动作"));
+    title->setEnabled(false);
+    for (int i = 0; i < m_shortcutActions.size(); ++i) {
+        QAction *action = menu.addAction(m_shortcutActions[i].name + QStringLiteral(" (") + m_shortcutActions[i].trigger.toString() + QLatin1Char(')'));
+        connect(action, &QAction::triggered, this, [this, i]() {
+            executeKeyboardShortcut(i);
+        });
+    }
+    menu.addSeparator();
+    QAction *exitAction = menu.addAction(tr("退出悬浮球"));
+    connect(exitAction, &QAction::triggered, this, [this]() {
+        close();
+    });
+    menu.exec(globalPos);
+}
+
+void FloatingBall::showScreenshots()
+{
+    if (!m_screenshotPanel) m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
+    m_screenshotPanel->reveal(geometry().center());
+}
+
+void FloatingBall::executeQuickAction(int index)
+{
+    if (index < 0 || index >= m_quickActions.size()) {
+        return;
+    }
+    const QuickAction &action = m_quickActions[index];
+    if (action.openUrl.isValid()) {
+        if (QDesktopServices::openUrl(action.openUrl)) {
+            return;
+        }
+    }
+    if (!action.command.isEmpty()) {
+        if (QProcess::startDetached(action.command, action.arguments)) {
+            return;
+        }
+    }
+    qDebug() << "快捷操作启动失败:" << action.name;
+}
+
+void FloatingBall::executeKeyboardShortcut(int index)
+{
+    if (index < 0 || index >= m_shortcutActions.size()) {
+        return;
+    }
+    const KeyboardShortcutAction &action = m_shortcutActions[index];
+    if (!action.command.isEmpty()) {
+        if (QProcess::startDetached(action.command, action.arguments)) {
+            return;
+        }
+    }
+    qDebug() << "快捷键动作启动失败:" << action.name;
+}
+
+    // 重写鼠标进入事件
 void FloatingBall::enterEvent(QEnterEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如改变按钮的颜色
-    FloatingBall::circleLabel[0]->setStyleSheet("background-color: yellow");
-    qDebug() << "enterEvent";
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::enterEvent(event);
+    Q_UNUSED(event)
+    // A newly shown satellite can appear beneath the cursor. Let it reach
+    // its orbit before hover scaling replaces the geometry animation.
+    if (m_orbitAnimating) return;
+    updateBallStyle("#ffffff");
+    if (!m_hoverScaled) {
+        m_hoverScaled = true;
+        m_hoverBaseSize = QSizeF(size());
+        updateBallGeometry(m_hoverBaseSize * 1.06, QPointF(), false, true);
+    }
 }
 
 // 重写鼠标离开事件
 void FloatingBall::leaveEvent(QEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如恢复按钮的颜色
-    this->circleLabel[0]->setStyleSheet("background-color: green");
-    qDebug() << "leaveEvent";
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::leaveEvent(event);
+    Q_UNUSED(event)
+    updateBallStyle(m_actionIndex == 0 ? "#f0ebff" : "#faf9fc");
+    if (m_hoverScaled) {
+        m_hoverScaled = false;
+        updateBallGeometry(m_hoverBaseSize, QPointF(), false, true);
+        m_hoverBaseSize = QSizeF();
+    }
 }
 
-static FloatingBall *newBall;
 // 重写鼠标按下事件
 void FloatingBall::mousePressEvent(QMouseEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如判断鼠标的按钮和位置
-    if (event->button() == Qt::LeftButton) // 如果是左键按下
-    {
-        qDebug() << "Left button pressed at" << event->pos();
-        // FloatingBall _sub;
-        // _sub.show();
-        // 创建一个新的悬浮球的对象，并设置其父窗口为主窗口
-        // newBall = new FloatingBall();
-        // // 设置新的悬浮球的位置和大小，使其中心与鼠标点击的位置重合
-        // newBall->setGeometry(pos().x() + 100, pos().y() + 100, 200, 200);
-        // // 显示新的悬浮球
-        // newBall->show();
-
-        // 创建圆形控件
-        // FloatingBall::circleLabel[1] = new QLabel(this);
-        // // 设置圆形控件的大小
-        // FloatingBall::circleLabel[1]->resize(100, 100);
-        // // 设置圆形控件的位置为窗口的中心
-        // FloatingBall::circleLabel[1]->move(0, 0);
-        // // 设置圆形控件的背景颜色为X色
-        // FloatingBall::circleLabel[1]->setStyleSheet("background-color: blue;");
-        // // 设置圆形控件的遮罩为圆形
-        // FloatingBall::circleLabel[1]->setMask(QRegion(0, 0, 100, 100, QRegion::Ellipse));
-
-
-        // 获取鼠标的位置
-        QPointF pos = event->pos();
-        // 生成一个随机的半径，范围为10到50
-        qreal radius = rand() % 41 + 10;
-        // 将鼠标的位置和半径作为一个对添加到悬浮球的向量中
-        balls.append(qMakePair(pos, radius));
-        // QLabel tmp = new QLabel(this);
-        // Balls.append(tmp);
-        // 更新窗口的绘图
-        this->update();
-
+    if (event->button() == Qt::RightButton) {
+        showQuickActions(event->globalPosition().toPoint());
+        return;
     }
-    else if (event->button() == Qt::RightButton) // 如果是右键按下
-    {
-        qDebug() << "Right button pressed at" << event->pos();
+
+    if (event->button() == Qt::LeftButton) {
+        m_orbitAnimating = false;
+        if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running) {
+            m_geometryAnimation->stop();
+        }
+        m_pressPosition = event->globalPosition().toPoint();
+        m_moved = false;
+        m_isDragging = true;
+        m_dragTouchId = -1;
+        m_dragOffset = event->globalPosition() - pos();
+        updateBallStyle("#e7e0fa");
+        setCursor(Qt::ClosedHandCursor);
     }
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::mousePressEvent(event);
+    QWidget::mousePressEvent(event);
 }
 
 // 重写鼠标释放事件
 void FloatingBall::mouseReleaseEvent(QMouseEvent *event)
 {
-    //
-    qDebug() << "Mouse released";
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::mouseReleaseEvent(event);
+    if (event->button() == Qt::LeftButton) {
+        if (!m_moved && !m_doubleClick) {
+            if (m_clickAction) m_clickAction();
+            else toggleOrbit();
+        }
+        m_doubleClick = false;
+        m_isDragging = false;
+        m_dragTouchId = -1;
+        unsetCursor();
+        updateBallStyle(m_actionIndex == 0 ? "#f0ebff" : "#faf9fc");
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 // 重写鼠标移动事件
 void FloatingBall::mouseMoveEvent(QMouseEvent *event)
 {
-    // 拖动鼠标可以移动小球
-    if (event->buttons() & Qt::LeftButton) {
-        // qDebug() << "event->pos() = " << event->globalPosition().toPoint();
-        this->move(event->globalPosition().toPoint() - QPoint(100,100));
+    if (m_isDragging && (event->buttons() & Qt::LeftButton)) {
+        if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running) {
+            m_geometryAnimation->stop();
+        }
+        if ((event->globalPosition().toPoint() - m_pressPosition).manhattanLength() < QApplication::startDragDistance() && !m_moved) return;
+        m_moved = true;
+        if (!m_clickAction) move(event->globalPosition().toPoint() - m_dragOffset.toPoint());
         event->accept();
+        return;
     }
+    QWidget::mouseMoveEvent(event);
 }
 
 // 重写鼠标双击事件
 void FloatingBall::mouseDoubleClickEvent(QMouseEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如弹出一个对话框
-    // QMessageBox::information(this, "Double Click", "You double clicked the button");
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::mouseDoubleClickEvent(event);
-    static bool IsShow = false;
-    if (IsShow == false) {
-        IsShow = true;
-        // 创建8个新的悬浮窗口
-        for (int i = 0; i < 8; ++i) {
-            FloatingBall *aBall = new FloatingBall;
-            aBall->move(event->globalPosition().toPoint() + QPoint(100 * cos(i * M_PI / 4), 100 * sin(i * M_PI / 4)) - QPoint(100,100));
-            BallsList.append(aBall);
-            aBall->show();
-        }
-    } else if (IsShow == true) {
-        // 清除8个悬浮窗口
-        IsShow = false;
-        for (FloatingBall *aBall : BallsList) {
-            aBall->close();
-        }
-        BallsList.clear(); // 清空列表
+    if (event->button() != Qt::LeftButton) {
+        return QWidget::mouseDoubleClickEvent(event);
+    }
+
+    m_doubleClick = true;
+    // The first release already handled the click. Ignore only the second
+    // release, rather than delaying every single click to detect a double click.
+}
+
+void FloatingBall::toggleOrbit()
+{
+    m_orbitVisible = !m_orbitVisible;
+    if (!m_orbitAnimation) {
+        m_orbitAnimation = new QVariantAnimation(this);
+        connect(m_orbitAnimation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            m_orbitProgress = value.toReal();
+            updateOrbitLayout();
+        });
+        connect(m_orbitAnimation, &QVariantAnimation::finished, this, [this]() {
+            for (FloatingBall *ball : qAsConst(m_orbitBalls)) {
+                ball->m_orbitAnimating = false;
+                if (!m_orbitVisible) { ball->hide(); ball->deleteLater(); }
+            }
+            if (!m_orbitVisible) m_orbitBalls.clear();
+        });
+    }
+    m_orbitAnimation->stop();
+
+    // Keep the same satellites when reversing an animation in progress.
+    if (m_orbitVisible && m_orbitBalls.isEmpty()) for (int i = 0; i < 6; ++i) {
+        FloatingBall *aBall = new FloatingBall;
+        aBall->setWindowFlags(windowFlags());
+        aBall->updateBallGeometry(QSizeF(64, 64), QPointF(), false, false);
+        aBall->m_actionIndex = i;
+        aBall->updateBallStyle(i == 0 ? "#f0ebff" : "#faf9fc");
+        const QStringList labels = {tr("截图"), tr("终端"), tr("浏览器"), tr("主目录"), tr("复制"), tr("粘贴")};
+        aBall->ballLabel->setText(labels[i]);
+        aBall->setAccessibleName(labels[i]);
+        aBall->setToolTip(labels[i]);
+        aBall->m_clickAction = [this, i]() {
+            if (!m_orbitVisible) return;
+            if (i == 0) {
+                showScreenshots();
+            } else if (i <= 3) executeQuickAction(i - 1);
+            else {
+                for (int j = 0; j < m_shortcutActions.size(); ++j)
+                    if (m_shortcutActions[j].name == (i == 4 ? tr("复制") : tr("粘贴"))) executeKeyboardShortcut(j);
+            }
+            toggleOrbit();
+        };
+        m_orbitBalls.append(aBall);
+    }
+
+    updateOrbitLayout();
+    for (FloatingBall *ball : qAsConst(m_orbitBalls)) {
+        ball->m_orbitAnimating = true;
+        ball->setEnabled(m_orbitVisible);
+        ball->show();
+    }
+    if (m_orbitVisible) raise();
+    {
+        // Reconfiguring a stopped QVariantAnimation can emit intermediate
+        // values at its old time. Preserve the current frame during reversal.
+        const QSignalBlocker blocker(m_orbitAnimation);
+        m_orbitAnimation->setStartValue(m_orbitProgress);
+        m_orbitAnimation->setEndValue(m_orbitVisible ? 1.0 : 0.0);
+        m_orbitAnimation->setDuration(qMax(80, qRound(qAbs((m_orbitVisible ? 1.0 : 0.0)-m_orbitProgress)*(m_orbitVisible ? 210 : 160))));
+        m_orbitAnimation->setEasingCurve(m_orbitVisible ? QEasingCurve::OutBack : QEasingCurve::InCubic);
+        m_orbitAnimation->setCurrentTime(0);
+    }
+    m_orbitAnimation->start();
+}
+
+void FloatingBall::updateOrbitLayout()
+{
+    if (m_orbitBalls.isEmpty()) return;
+    const QPointF center = QRectF(geometry()).center();
+    QScreen *screen = QGuiApplication::screenAt(center.toPoint());
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    const QRect bounds = screen->availableGeometry();
+    const qreal radius = qMax(100.0, (width()+64)/2.0+24) * m_orbitProgress;
+    const int diameter = qMax(14, qRound(64*(0.22+0.78*m_orbitProgress)));
+    for (int i = 0; i < m_orbitBalls.size(); ++i) {
+        FloatingBall *ball = m_orbitBalls[i];
+        ball->m_geometryAnimation->stop();
+        ball->m_hoverScaled = false;
+        ball->m_hoverBaseSize = QSizeF();
+        const qreal angle = qDegreesToRadians(60.0*i);
+        const QPointF pos = center + QPointF(qCos(angle)*radius, qSin(angle)*radius) - QPointF(diameter/2.0,diameter/2.0);
+        ball->setGeometry(qBound(bounds.left(),qRound(pos.x()),bounds.right()-diameter+1),
+                          qBound(bounds.top(),qRound(pos.y()),bounds.bottom()-diameter+1),diameter,diameter);
+        ball->ballLabel->setVisible(diameter>=44);
+        ball->setWindowOpacity(qBound(0.0,m_orbitProgress*1.5,1.0));
     }
 }
 
 // 重写鼠标滚轮事件
 void FloatingBall::wheelEvent(QWheelEvent *event)
 {
-    // 通过滚轮上下滚动调整浮球大小
-    QSize BallSzie = circleLabel[0]->size();
-
-    if (event->angleDelta().y() > 0) // 如果滚轮向上滚动
-    {
-        qDebug() << "向上滚动";
-        BallSzie = BallSzie + QSize(10,10);
+    m_orbitAnimating = false;
+    int target = width();
+    if (event->angleDelta().y() > 0) {
+        target += 12;
+    } else {
+        target -= 12;
     }
-    else // 如果滚轮向下滚动
-    {
-        qDebug() << "向下滚动";
-        BallSzie = BallSzie - QSize(10,10);
-    }
-    // qDebug() << circleLabel[0]->pos();
-    // qDebug() << event->globalPosition().toPoint();
-    // qDebug() << FloatingBall::pos();
-    // qDebug() << QPoint(BallSzie.width(), BallSzie.height());
-    // 设置圆形控件的位置 使圆心和鼠标点重合
-    // QPoint BallPoint = event->globalPosition().toPoint() - FloatingBall::pos() - QPoint(BallSzie.width()/2, BallSzie.height()/2);
-    // 设置圆形控件的位置 保持在窗口的正中心，也就是位置不改变
-    QPoint BallPoint = QPoint(width() / 2 - BallSzie.width() / 2, height() / 2 - BallSzie.height() / 2);
-    // qDebug() << BallPoint;
-    circleLabel[0]->move(BallPoint);
-    // 重新调整大小
-    circleLabel[0]->resize(BallSzie);
-    // 设置圆形控件的遮罩为圆形
-    circleLabel[0]->setMask(QRegion(0, 0, BallSzie.width(), BallSzie.height(), QRegion::Ellipse));
-    update();
-    // 调用基类的函数，以保留默认的行为
-    // FloatingBall::wheelEvent(event);
+    updateBallGeometry(QSizeF(target, target), QPointF(), false, true);
+    event->accept();
 }
 
-
-// 重写手势事件函数
-bool FloatingBall::gestureEvent(QGestureEvent *event)
+void FloatingBall::resizeEvent(QResizeEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如判断手势的类型，并调用相应的处理函数
-    if (QGesture *pinch = event->gesture(Qt::PinchGesture))
-        pinchTriggered(static_cast<QPinchGesture *>(pinch));
-    if (QGesture *pan = event->gesture(Qt::PanGesture))
-        panTriggered(static_cast<QPanGesture *>(pan));
-    if (QGesture *swipe = event->gesture(Qt::SwipeGesture))
-        swipeTriggered(static_cast<QSwipeGesture *>(swipe));
-    return true;
+    QWidget::resizeEvent(event);
+    if (ballLabel) {
+        ballLabel->setGeometry(6, height()/2+3, width()-12, height()/3);
+    }
+    setMask(QRegion(rect(), QRegion::Ellipse));
+    updateOrbitLayout();
 }
 
-// 处理缩放手势
-void FloatingBall::pinchTriggered(QPinchGesture *gesture)
+void FloatingBall::moveEvent(QMoveEvent *event)
 {
-    // 您可以在这里添加您想要的功能，例如根据手势的状态和缩放比例，改变标签的大小
-    QPinchGesture::ChangeFlags changeFlags = gesture->changeFlags();
-    if (changeFlags & QPinchGesture::ScaleFactorChanged) {
-        qreal value = gesture->totalScaleFactor();
-        this->resize(this->width() * value, this->height() * value);
-    }
+    QWidget::moveEvent(event);
+    // Update in the input event itself: dragging never queues another tween.
+    updateOrbitLayout();
 }
 
-// 处理移动手势
-void FloatingBall::panTriggered(QPanGesture *gesture)
+void FloatingBall::paintEvent(QPaintEvent *)
 {
-    // 您可以在这里添加您想要的功能，例如根据手势的状态和偏移量，改变标签的位置
-    Qt::GestureState state = gesture->state();
-    QPoint m_lastPoint;
-    if (state == Qt::GestureStarted) {
-        // 记录手势开始时的位置
-        m_lastPoint = gesture->hotSpot().toPoint();
-    } else if (state == Qt::GestureUpdated) {
-        // 计算手势的偏移量
-        QPoint delta = gesture->hotSpot().toPoint() - m_lastPoint;
-        // 更新标签的位置
-        this->move(this->pos() + delta);
-        // 更新上次的位置
-        m_lastPoint = gesture->hotSpot().toPoint();
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF circle = QRectF(rect()).adjusted(5, 5, -5, -5);
+    p.setPen(Qt::NoPen);
+    for (int i = 4; i > 0; --i) {
+        p.setBrush(QColor(44, 35, 65, 5 + (4-i)*2));
+        p.drawEllipse(circle.adjusted(-i, -i+2, i, i+2));
     }
-}
-
-// 处理滑动手势
-void FloatingBall::swipeTriggered(QSwipeGesture *gesture)
-{
-    // 您可以在这里添加您想要的功能，例如根据手势的方向，改变标签的颜色
-    if (gesture->state() == Qt::GestureFinished) {
-        // 获取手势的方向
-        QSwipeGesture::SwipeDirection direction = gesture->horizontalDirection();
-        // 根据方向设置标签的颜色
-        if (direction == QSwipeGesture::Left)
-            this->setStyleSheet("background-color: red");
-        else if (direction == QSwipeGesture::Right)
-            this->setStyleSheet("background-color: green");
-    }
+    QLinearGradient surface(circle.topLeft(), circle.bottomRight());
+    surface.setColorAt(0, m_ballColor.lighter(103));
+    surface.setColorAt(1, m_ballColor.darker(103));
+    p.setBrush(surface); p.setPen(QPen(QColor(255, 255, 255, 210), 1));
+    p.drawEllipse(circle);
+    const FloatingIcons::Icon icons[] = {FloatingIcons::Screenshot, FloatingIcons::Terminal,
+        FloatingIcons::Browser, FloatingIcons::Folder, FloatingIcons::Copy, FloatingIcons::Paste};
+    const qreal iconSize = width() * (m_actionIndex < 0 ? 0.42 : 0.29);
+    QRectF iconRect((width()-iconSize)/2, m_actionIndex < 0 ? (height()-iconSize)/2 : height()*0.21, iconSize, iconSize);
+    FloatingIcons::draw(p, m_actionIndex < 0 ? FloatingIcons::Orb : icons[m_actionIndex], iconRect,
+        QColor(m_actionIndex <= 0 ? "#7c67bc" : "#625a70"));
 }
