@@ -42,7 +42,7 @@ The screenshot panel is also available from the right-click / long-press menu.
 - Freehand annotation, undo (up to 12 strokes), and Save Copy as PNG.
 - Copy Image includes current annotations; Copy Path still refers to the original.
 - The ball and satellites stay visible above normal windows when another app
-  becomes active on macOS. The screenshot panel starts pinned so it can serve
+  becomes active on macOS, Windows and supported Linux desktops. The screenshot panel starts pinned so it can serve
   as a reference while working in other apps. Unpin to dismiss on focus loss;
   Escape or Close hides it in either mode.
 - Copy and Undo also support the platform's standard keyboard shortcuts.
@@ -104,10 +104,16 @@ Windows x86_64 was compiled with Qt 6.8.3 and MinGW 13.1, and passed
 both offscreen and native Windows plugin checks. SSH-driven mouse input in the
 active Windows desktop also verified the satellite action, folder picker, clipboard,
 annotation/save/undo, folder updates, pinning above another window, focus dismissal,
-and Escape at 150% display scaling before the compact visual redesign.
-The updated visual layout still needs Windows native acceptance.
-Linux still requires native build/runtime
-acceptance; multiple monitors and other display scales need separate checks.
+and Escape with the compact layout at 150% display scaling. Actual mouse dragging
+kept all satellites within one pixel of their expected positions across eight samples;
+closing frames also verified shrink/fade before the satellites disappear. Decoded
+clipboard and saved annotation pixels matched exactly.
+Linux x86_64 was built and tested on NixOS with Qt 6.11.2 and KDE/KWin 6.7.5.
+Native Wayland checks cover orbit motion and the screenshot actions. KWin inspection
+verified that the ball and pinned panel remain above a separate active application,
+and that modal folder dialogs appear above their temporarily lowered parent. A
+separate Wayland clipboard client received both the PNG image and original file path.
+Multiple monitors, other Linux compositors and other display scales need separate checks.
 
 ### Windows build
 
@@ -124,3 +130,23 @@ The Windows default directory uses `FOLDERID_Screenshots`, including system
 folder redirection. The compiled application links Shell32, Ole32 and UUID.
 Use `windeployqt` to collect runtime DLLs and platform/image-format plugins for
 an independent test package.
+
+
+### Linux / NixOS
+
+The Nix flake includes Qt's Wayland and image-format plugins and LayerShellQt.
+Build to an external result link, or run directly without changing system configuration:
+
+```sh
+nix build --out-link /absolute/path/to/build/floatingball/dist/nix-package
+nix run . -- --screenshot-directory /absolute/path/to/screenshots --show-screenshots
+```
+
+For a development build, enter `nix develop`, then use the same external CMake
+output-directory commands as above. On Wayland, FloatingBall uses LayerShellQt
+6.6 or newer to position each ball and keep the screenshot card in the compositor's
+overlay layer. Modal dialogs temporarily lower blocked floating surfaces; closing
+the dialog restores the overlay layer. The compositor must support layer-shell;
+KDE Plasma is the verified desktop. X11 uses Qt's normal topmost window hints.
+Without LayerShellQt, a plain CMake build can run on X11; native Wayland placement
+and persistent stacking are not supported by ordinary Qt window hints alone.

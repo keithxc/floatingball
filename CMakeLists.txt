@@ -22,6 +22,8 @@ set(PROJECT_SOURCES
         screenshotstore.cpp
         screenshotstore.h
         uiicons.h
+        floatingwindow.cpp
+        floatingwindow.h
         floatingball.h
         floatingball.ui
         ${TS_FILES}
@@ -55,6 +57,13 @@ else()
 endif()
 
 target_link_libraries(FloatingBall PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+if(UNIX AND NOT APPLE AND QT_VERSION_MAJOR EQUAL 6)
+    find_package(LayerShellQt 6.6 QUIET)
+    if(TARGET LayerShellQt::Interface)
+        target_link_libraries(FloatingBall PRIVATE LayerShellQt::Interface)
+        target_compile_definitions(FloatingBall PRIVATE FLOATINGBALL_LAYER_SHELL)
+    endif()
+endif()
 
 if(WIN32)
     target_link_libraries(FloatingBall PRIVATE shell32 ole32 uuid user32)
@@ -91,8 +100,13 @@ if(FLOATINGBALL_BUILD_TESTS)
     add_executable(floatingball-screenshot-test
         tests/screenshot-test.cpp floatingball.cpp floatingball.h floatingball.ui
         screenshotpanel.cpp screenshotpanel.h screenshotstore.cpp screenshotstore.h)
+    target_sources(floatingball-screenshot-test PRIVATE floatingwindow.cpp floatingwindow.h)
     target_include_directories(floatingball-screenshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(floatingball-screenshot-test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+    if(TARGET LayerShellQt::Interface)
+        target_link_libraries(floatingball-screenshot-test PRIVATE LayerShellQt::Interface)
+        target_compile_definitions(floatingball-screenshot-test PRIVATE FLOATINGBALL_LAYER_SHELL)
+    endif()
     if(APPLE AND NOT IOS)
         enable_language(OBJCXX)
         target_sources(floatingball-screenshot-test PRIVATE tests/native-window-check.mm)

@@ -1,6 +1,7 @@
 #include "screenshotpanel.h"
 #include "screenshotstore.h"
 #include "uiicons.h"
+#include "floatingwindow.h"
 #include <QGraphicsDropShadowEffect>
 #include <QStyledItemDelegate>
 #include <QScrollBar>
@@ -214,6 +215,7 @@ ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverri
     connect(qApp,&QApplication::focusChanged,this,[dismissIfUnpinned](QWidget *,QWidget *){dismissIfUnpinned();});
     connect(qApp,&QGuiApplication::focusWindowChanged,this,[dismissIfUnpinned](QWindow *){dismissIfUnpinned();});
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[dismissIfUnpinned](Qt::ApplicationState state){if(state!=Qt::ApplicationActive)dismissIfUnpinned();});
+    FloatingWindow::prepare(this,true);
 }
 void ScreenshotPanel::updateWatcher() {
     QStringList wanted;

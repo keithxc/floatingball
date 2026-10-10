@@ -13,6 +13,7 @@
 #include <QMimeData>
 #include <QSettings>
 #include <QDir>
+#include <QDialog>
 #include <QToolButton>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -50,7 +51,32 @@ int main(int argc,char **argv){
  QApplication app(argc,argv);
 #ifdef Q_OS_MACOS
  if(argc==2&&QString::fromLocal8Bit(argv[1])==QStringLiteral("--native-focus-fixture"))return runNativeFocusFixture();
+#else
+ if(argc==2&&QString::fromLocal8Bit(argv[1])==QStringLiteral("--native-focus-fixture")){
+  QWidget window;window.setWindowTitle("FloatingBall application-switch fixture");window.setGeometry(280,280,600,450);window.show();window.activateWindow();
+  QTimer::singleShot(8000,&app,&QApplication::quit);return app.exec();
+ }
 #endif
+ if(argc==3&&QString::fromLocal8Bit(argv[1])==QStringLiteral("--native-folder-fixture")){
+  ScreenshotPanel panel(nullptr,QString::fromLocal8Bit(argv[2]));panel.reveal(QPoint(100,300));
+  QTimer::singleShot(1200,&panel,[&panel]{panel.findChild<QToolButton *>("chooseDirectory")->click();});
+  QTimer::singleShot(6500,&app,[]{for(auto w:QApplication::topLevelWidgets())if(auto d=qobject_cast<QDialog *>(w))d->reject();});
+  QTimer::singleShot(9000,&app,&QApplication::quit);return app.exec();
+ }
+ if(argc==3&&QString::fromLocal8Bit(argv[1])==QStringLiteral("--native-clipboard-fixture")){
+  ClipboardGuard clipboard;
+  const QString path=QFileInfo(QString::fromLocal8Bit(argv[2])).absoluteFilePath();
+  if(QImage(path).isNull())return 1;
+  ScreenshotPanel panel(nullptr,QFileInfo(path).absolutePath());panel.reveal(QPoint(100,300));
+  QTimer::singleShot(400,&app,[&panel]{
+   for(const char *name: {"copyImage","copyPath"}) {
+    auto button=panel.findChild<QToolButton *>(name);const QPoint point=button->mapToGlobal(button->rect().center());
+    printf("CLIPBOARD_BUTTON: %s %d %d\n",name,point.x(),point.y());
+   }
+   fflush(stdout);
+  });
+  QTimer::singleShot(18000,&app,&QApplication::quit);return app.exec();
+ }
  ClipboardGuard clipboard; clipboardGuard=&clipboard;
  check(argc==2,"explicit external test directory supplied");
  check(QDir::isAbsolutePath(QString::fromLocal8Bit(argv[1])),"test directory is absolute");

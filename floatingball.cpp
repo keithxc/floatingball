@@ -1,5 +1,6 @@
 #include "floatingball.h"
 #include "screenshotpanel.h"
+#include "floatingwindow.h"
 #include "uiicons.h"
 #include <QApplication>
 #include <QTimer>
@@ -60,6 +61,7 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
     grabGesture(Qt::PinchGesture);
     grabGesture(Qt::TapAndHoldGesture);
     initQuickActions();
+    FloatingWindow::prepare(this);
 }
 
 FloatingBall::~FloatingBall()
