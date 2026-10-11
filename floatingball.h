@@ -13,6 +13,7 @@
 #include <QUrl>
 #include <QColor>
 #include <QPointer>
+#include "screenshotcapture.h"
 #include <functional>
 class ScreenshotPanel;
 class QTimer;
@@ -34,6 +35,8 @@ public:
     ~FloatingBall();
     void showScreenshots();
     void captureRegion();
+    void takeScreenshot(const CaptureOptions &options);
+    void recordScreen(bool window=false);
 
 protected:
     bool event(QEvent *event) override;

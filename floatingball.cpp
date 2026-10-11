@@ -605,8 +605,18 @@ void FloatingBall::showScreenshots()
 
 void FloatingBall::captureRegion()
 {
+    takeScreenshot({});
+}
+void FloatingBall::takeScreenshot(const CaptureOptions &options)
+{
     if (!m_screenshotPanel) m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
-    m_screenshotPanel->captureRegion(geometry().center());
+    m_screenshotPanel->takeScreenshot(geometry().center(),options);
+}
+void FloatingBall::recordScreen(bool window)
+{
+    if (!m_screenshotPanel) m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
+    m_screenshotPanel->reveal(geometry().center(),false);
+    m_screenshotPanel->startRecording(window);
 }
 
 void FloatingBall::executeQuickAction(int index)

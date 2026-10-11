@@ -24,17 +24,18 @@ families; individual Android releases can differ.
 
 ## P0: Capture a region and immediately use it
 
-Current implementation task: region capture -> saved PNG -> floating preview.
+Implemented workbench: capture mode/delay -> unique PNG -> floating preview -> annotations/copy/save.
 
-- [ ] Start region capture from the floating ball and screenshot panel.
-- [ ] Hide the ball, satellites and screenshot cards during capture.
-- [ ] Drag to select a region; cancel with Escape without creating a file.
-- [ ] Save a unique PNG in the selected screenshot directory.
-- [ ] Open the new capture immediately in the floating preview.
-- [ ] Restore previously visible windows after cancellation or failure.
-- [ ] Show actionable capture, permission and file-write errors.
-- [ ] Preserve image resolution on scaled displays; verify screen-local origins.
-- [ ] Verify real capture on macOS, Windows and pk4's KDE Wayland desktop.
+- [x] Start region capture from the floating ball and screenshot panel.
+- [x] Hide the ball, satellites and screenshot cards during capture.
+- [x] Drag to select a region; cancel with Escape without creating a file.
+- [x] Save a unique PNG in the selected screenshot directory.
+- [x] Open the new capture immediately in the floating preview.
+- [x] Restore previously visible windows after cancellation or failure.
+- [x] Show actionable capture, permission and file-write errors.
+- [x] Preserve image resolution on scaled displays; verify screen-local origins.
+- [x] Verify real desktop capture on macOS, Windows and pk4's KDE Wayland desktop.
+- [ ] Complete every interactive window/region picker acceptance scenario on each platform.
 - [ ] Add a configurable global screenshot shortcut after the button flow works.
 
 Acceptance: trigger -> select -> preview -> copy image/path or annotate, with no
@@ -59,11 +60,12 @@ and screenshot stitching.
 - [ ] Pin several images as independent reference windows.
 - [ ] Resize, zoom and pan pinned images; restore their positions.
 - [ ] Provide collapse/expand, opacity and click-through controls for reference images.
-- [ ] Add arrows, rectangles, ellipses, text and a mosaic/redaction tool.
+- [x] Add arrows, rectangles, highlighter, text and mosaic.
+- [ ] Add ellipses and irreversible solid redaction.
 - [ ] Add a screen/image color picker with HEX and RGB copy actions.
 - [ ] Offer temporary screen doodles with clear, undo and export controls.
 - [ ] Crop an existing image; rotate and mirror it.
-- [ ] Capture a window, a whole screen and a delayed capture.
+- [x] Capture a window, a whole screen and a delayed capture.
 - [ ] Support several selections in one capture session.
 - [ ] Stitch selected screenshots; then investigate scrolling capture separately.
 - [ ] Handle mixed-DPI monitors, negative screen origins and disconnected displays.
@@ -130,8 +132,9 @@ calculator.
 
 fooView reference: screen recording, GIF creation, media viewing and editing.
 
-- [ ] Record a selected region, window or screen.
-- [ ] Provide a compact start/pause/stop indicator and an explicit output path.
+- [x] Record a screen; record windows on macOS and Windows.
+- [ ] Add window recording on Wayland and region recording on macOS/Windows.
+- [x] Provide a compact pause/resume/stop control and save recordings in the selected folder.
 - [ ] Configure whether to include the cursor and click indicators.
 - [ ] Offer microphone/system audio where the platform supports it.
 - [ ] Export short recordings as GIFs or extract selected frames.
@@ -176,7 +179,7 @@ features. Desktop task automation uses each platform's available interfaces.
 | Persistent floating windows | Cocoa tool-window handling | Native topmost windows | LayerShellQt on supported Wayland compositors; X11 hints |
 | Global shortcuts | Native registration | Native registration | X11 registration; Wayland portal/compositor support |
 | Clipboard interoperation | Test a separate native consumer | Test PNG/DIB consumers | Test a separate Wayland/X11 consumer |
-| Recording / automation | Separate native capability work | Separate native capability work | Depends on compositor and portal capabilities |
+| Recording | Qt screen/window capture | Qt screen/window capture | Qt + PipeWire screen portal; window recording pending |
 
 - [ ] Test mixed display scales and multiple monitors on each platform.
 - [ ] Test capture cancellation, denied permission, busy services and unwritable directories.

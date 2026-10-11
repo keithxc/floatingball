@@ -56,7 +56,8 @@ The screenshot panel is also available from the right-click / long-press menu.
   The light screenshot card hides the thumbnail strip for a single image;
   a mouse wheel or trackpad scrolls larger galleries. Drag the card header to move it.
 - Separate image clipboard and absolute original-file-path clipboard actions.
-- Freehand annotation, undo (up to 12 strokes), and Save Copy as PNG.
+- Pen, arrow, rectangle, highlighter, mosaic and text annotations, with color
+  and thickness controls, undo (up to 12 edits), and Save Copy as PNG.
 - Copy Image includes current annotations; Copy Path still refers to the original.
 - The ball and satellites stay visible above normal windows when another app
   becomes active on macOS, Windows and supported Linux desktops. The screenshot panel starts pinned so it can serve
@@ -80,9 +81,50 @@ The screenshot panel is also available from the right-click / long-press menu.
   It reads PNG/JPEG/WebP files from the selected directory; use a dedicated
   screenshot folder to avoid mixing other images into the recent list.
 
-This first version offers a pen tool. Arrows, shapes and text are future work.
-Switching images discards unsaved pen strokes; copy or save the annotated image
-before selecting another thumbnail. Original screenshot files are preserved.
+### Capture and recording workbench
+
+The workflow follows [KDE Spectacle](https://docs.kde.org/stable_kf6/en/spectacle/spectacle/using.html):
+select a capture mode, take the screenshot, then copy, annotate or save it.
+The workbench provides region, window, current-screen and all-screen capture,
+a 0–30 second delay with Cancel, and a cursor option where supported. Ctrl/Cmd+N
+starts the selected capture mode. FloatingBall surfaces hide during acquisition;
+cancellation restores them. Successful captures are unique lossless PNG files in
+the chosen folder and appear immediately. A failed write retains the pixels for
+Copy Image or Save Copy. Capture never implicitly replaces the clipboard.
+
+Unexported annotations block changing images, importing, changing directories
+or taking another screenshot until Copy Image or Save Copy succeeds. The original
+screenshot remains unchanged; Copy Path always refers to that original file.
+
+The Recording menu records a screen, or a selected window on macOS/Windows.
+A small floating control shows elapsed time, Pause/Resume and Stop and Save.
+Videos use MP4/H.264, with WebM/VP9 as an encoder fallback, and are saved under
+`Recordings` in the chosen screenshot folder. The workbench then offers Open
+Recording and Copy Recording Path. Recording currently has no audio or GIF export.
+
+Platform details:
+
+- macOS uses the system capture service; region selection uses a frozen image
+  of the monitor containing the workbench. Native window capture uses the system
+  window picker. Screen Recording permission is required.
+- Windows captures all displays for region selection. Window screenshots select
+  a visible window rectangle, so other windows covering it remain in the image.
+- KDE Wayland uses Spectacle's native screenshot picker when available, otherwise
+  the desktop screenshot portal. Recording uses the screen-sharing portal and
+  PipeWire. KDE's chooser can provide a screen or region; window recording is
+  disabled until the Qt backend supports it. Other portal backends may expose
+  different screenshot choices. X11 window screenshots currently require region mode.
+
+Immediate CLI actions are also available:
+
+```sh
+FloatingBall --capture --capture-mode region --capture-delay 3
+FloatingBall --capture --capture-mode screen --capture-cursor
+FloatingBall --record screen
+```
+
+`--capture-mode` accepts `region`, `window`, `screen` or `desktop`.
+`--record` accepts `screen` or `window` on supported platforms.
 
 Use `--screenshot-directory /absolute/path` to select a folder for one session
 without updating the saved folder, and `--show-screenshots` to open its preview
@@ -90,7 +132,9 @@ on launch. Choosing a different folder in the panel still saves that explicit ch
 
 ### Build on macOS
 
-Requires Qt 6 Widgets and LinguistTools, CMake, and a C++17 toolchain.
+Requires Qt 6.8 or newer with Widgets, LinguistTools and Multimedia, CMake 3.16+,
+and a C++17 toolchain. Recording requires the Qt FFmpeg multimedia plugin and
+its codec libraries in the runtime package.
 From the umbrella workspace, resolve an external build directory:
 
 ```sh
@@ -107,7 +151,9 @@ The checks use the offscreen Qt platform, isolated settings and owned temporary
 fixtures beneath that build directory. They cover folder reads, clipboard import,
 failed writes, case-insensitive extensions, partial captures, directory updates,
 annotation/undo, original-file preservation, and the screenshot satellite action.
-They also cover transparent clipboard images and hover events during orbit expansion.
+They also cover transparent clipboard images, hover events during orbit expansion,
+scaled region crops, reverse drags, delayed capture cancellation, unique PNGs,
+failed-save recovery and protection of unexported annotations.
 Offscreen tests do not verify native window placement, compositor stacking or
 system clipboard interoperability. macOS has been compiled and tested locally;
 the Cocoa plugin checks also cover clipboard image/path, annotation/undo,
@@ -132,6 +178,17 @@ and that modal folder dialogs appear above their temporarily lowered parent. A
 separate Wayland clipboard client received both the PNG image and original file path.
 Multiple monitors, other Linux compositors and other display scales need separate checks.
 
+Capture/recording acceptance on 2026-10-11: macOS, Windows 125 and pk4's KDE
+Wayland each passed both CTest suites and acquired a real desktop PNG containing
+known fixture pixels. Each produced an H.264 video that decoded completely.
+macOS also passed selected-window recording and decoded all 212 screen-recording
+frames through AVFoundation; native button input
+verified recording start, pause with a stopped timer, resume, stop/save and return
+to the workbench. A 34.2-second saved video excluded the pause interval. The
+packaged Windows app and Nix wrapper also acquired fresh desktop captures.
+Mixed-DPI cross-monitor regions, every interactive window picker, audio recording
+and other Wayland compositors remain separate acceptance work.
+
 ### Windows build
 
 With Qt 6 for MinGW and its matching compiler on the process PATH, configure an
@@ -151,7 +208,8 @@ an independent test package.
 
 ### Linux / NixOS
 
-The Nix flake includes Qt's Wayland and image-format plugins and LayerShellQt.
+The Nix flake includes Qt's Wayland, image-format and multimedia plugins,
+PipeWire runtime lookup and LayerShellQt.
 Build to an external result link, or run directly without changing system configuration:
 
 ```sh

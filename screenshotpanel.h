@@ -4,7 +4,11 @@
 #include <QPoint>
 #include <QStringList>
 #include <QPointer>
+#include <QColor>
+#include <QPainterPath>
+#include "screenshotcapture.h"
 class ScreenshotCapture;
+class ScreenRecorder;
 class QFileSystemWatcher;
 class QTimer;
 class QLabel;
@@ -15,7 +19,12 @@ public:
     explicit ScreenshotCanvas(QWidget *parent = nullptr);
     QImage image;
     bool editing = false;
+    bool dirty = false;
     QList<QImage> history;
+    enum Tool { Pen, Arrow, Rectangle, Marker, Mosaic, Text };
+    Tool tool=Pen;
+    QColor ink=QColor("#ff637d");
+    int strokeWidth=4;
     void setImage(const QImage &value);
     void undo();
 protected:
@@ -27,14 +36,20 @@ private:
     QRect imageRect() const;
     QPoint imagePoint(const QPoint &point) const;
     QPoint last;
+    QPoint first;
+    QPainterPath markerPath;
+    QList<bool> undoDirtyStates;
     bool drawing = false;
 };
 class ScreenshotPanel : public QWidget {
 public:
     explicit ScreenshotPanel(QWidget *parent = nullptr, const QString &directoryOverride = QString());
+    ~ScreenshotPanel() override;
     void reveal(const QPoint &anchor, bool toggle=true);
     void captureRegion(const QPoint &anchor);
+    void takeScreenshot(const QPoint &anchor, const CaptureOptions &options);
     void showCapture(const QImage &image, const QPoint &anchor);
+    void startRecording(bool window=false);
 protected:
     void keyPressEvent(QKeyEvent *) override;
 private:
@@ -57,4 +72,9 @@ private:
     ScreenshotCapture *capture;
     QPoint captureAnchor;
     QList<QPointer<QWidget>> hiddenForCapture;
+    QWidget *captureProgress=nullptr;
+    bool transientImage=false;
+    ScreenRecorder *recorder;
+    QString recordingPath;
+    void restoreFloatingWindows();
 };

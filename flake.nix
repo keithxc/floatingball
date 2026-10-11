@@ -17,9 +17,11 @@
         nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.qt6.wrapQtAppsHook ];
         buildInputs = [
           pkgs.qt6.qtbase pkgs.qt6.qttools pkgs.qt6.qtwayland
-          pkgs.qt6.qtimageformats pkgs.kdePackages.layer-shell-qt
+          pkgs.qt6.qtimageformats pkgs.qt6.qtmultimedia pkgs.kdePackages.layer-shell-qt
         ];
         cmakeFlags = [ "-DFLOATINGBALL_BUILD_TESTS=ON" ];
+        # Qt loads PipeWire dynamically; it is not in qtmultimedia's RUNPATH.
+        qtWrapperArgs = [ "--prefix" "LD_LIBRARY_PATH" ":" "${pkgs.pipewire}/lib" ];
         doCheck = true;
         checkPhase = ''
           runHook preCheck
