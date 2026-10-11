@@ -2,6 +2,7 @@
 #include "screenshotstore.h"
 #include "uiicons.h"
 #include "floatingwindow.h"
+#include "screenshotcapture.h"
 #include <QGraphicsDropShadowEffect>
 #include <QStyledItemDelegate>
 #include <QScrollBar>
@@ -132,6 +133,7 @@ void ScreenshotCanvas::mouseReleaseEvent(QMouseEvent *) { drawing=false; }
 void ScreenshotCanvas::undo() { if (!history.isEmpty()) { image=history.takeLast(); update(); } }
 
 ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverride) : QWidget(parent) {
+    setProperty("floatingballSurface",true);
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
@@ -160,6 +162,8 @@ ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverri
         b->setToolButtonStyle(iconOnly?Qt::ToolButtonIconOnly:Qt::ToolButtonTextBesideIcon);
         if(iconOnly) b->setFixedWidth(32); return b;
     };
+    auto take=button(QStringLiteral("截取区域"),FloatingIcons::Capture,true);take->setObjectName("captureRegion");title->addWidget(take);
+    connect(take,&QToolButton::clicked,this,[this]{captureRegion(geometry().center());});
     auto pin=button(QStringLiteral("固定"),FloatingIcons::Pin,true); pin->setObjectName("headerButton"); pin->setCheckable(true); pin->setChecked(true); title->addWidget(pin);
     auto updatePinHint=[pin](bool fixed){pin->setToolTip(fixed?QStringLiteral("已固定置顶 · 点击后切换应用自动收起"):QStringLiteral("点击固定置顶 · 切换应用时保持展示"));};
     connect(pin,&QToolButton::toggled,this,updatePinHint); updatePinHint(true);
@@ -187,7 +191,8 @@ ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverri
     auto undoShortcut=new QShortcut(QKeySequence::Undo,this); connect(undoShortcut,&QShortcut::activated,undo,&QToolButton::click);
     connect(save,&QToolButton::clicked,this,[this]{
         if(canvas->image.isNull()) return;
-        QString target=QFileDialog::getSaveFileName(this,QStringLiteral("保存批注副本"),QFileInfo(currentPath).absolutePath()+"/Annotated-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmsszzz")+".png", "PNG (*.png)");
+        const QString saveDirectory=currentPath.isEmpty()?directory:QFileInfo(currentPath).absolutePath();
+        QString target=QFileDialog::getSaveFileName(this,QStringLiteral("保存批注副本"),QDir(saveDirectory).filePath("Annotated-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmsszzz")+".png"), "PNG (*.png)");
         if(target.isEmpty()) return;
         if(QFileInfo(target).absoluteFilePath()==QFileInfo(currentPath).absoluteFilePath() || (!QFileInfo(target).canonicalFilePath().isEmpty() && QFileInfo(target).canonicalFilePath()==QFileInfo(currentPath).canonicalFilePath())){status->setText(QStringLiteral("请选择新文件名，保留原截图"));return;}
         status->setText(canvas->image.save(target,"PNG")?QStringLiteral("✓ 副本已保存"):QStringLiteral("保存失败，请检查目标目录"));
@@ -209,6 +214,14 @@ ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverri
     auto timer=new QTimer(this); timer->setInterval(2000);
     connect(timer,&QTimer::timeout,this,[this]{if(isVisible()&&!canvas->editing)refresh();}); timer->start();
     updateWatcher();
+    capture=new ScreenshotCapture(this);
+    connect(capture,&ScreenshotCapture::finished,this,[this,take](const QImage &image,const QString &error,bool cancelled){
+        take->setEnabled(true);
+        for(const auto &window:hiddenForCapture)if(window)window->show();
+        hiddenForCapture.clear();
+        if(!image.isNull())showCapture(image,captureAnchor);
+        else if(!cancelled){reveal(captureAnchor,false);status->setText(error);}
+    });
     // macOS shares the "active" appearance across tool windows, so
     // isActiveWindow() does not tell us whether this panel owns keyboard focus.
     auto dismissIfUnpinned=[this,pin]{QTimer::singleShot(0,this,[this,pin]{if(isVisible()&&!pin->isChecked()&&QApplication::activeWindow()!=this&&!QApplication::activeModalWidget())hide();});};
@@ -216,6 +229,35 @@ ScreenshotPanel::ScreenshotPanel(QWidget *parent, const QString &directoryOverri
     connect(qApp,&QGuiApplication::focusWindowChanged,this,[dismissIfUnpinned](QWindow *){dismissIfUnpinned();});
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[dismissIfUnpinned](Qt::ApplicationState state){if(state!=Qt::ApplicationActive)dismissIfUnpinned();});
     FloatingWindow::prepare(this,true);
+}
+void ScreenshotPanel::captureRegion(const QPoint &anchor) {
+    if(capture->isActive())return;
+    if(canvas->editing && !canvas->history.isEmpty()){
+        reveal(anchor,false);status->setText(QStringLiteral("请先复制或另存批注，再关闭画笔开始截图"));return;
+    }
+    captureAnchor=anchor;
+    findChild<QToolButton *>("captureRegion")->setEnabled(false);
+    hiddenForCapture.clear();
+    for(QWidget *window:QApplication::topLevelWidgets())
+        if(window->isVisible() && window->property("floatingballSurface").toBool())hiddenForCapture.append(window);
+    for(const auto &window:hiddenForCapture)if(window)window->hide();
+    if(QWidget *popup=QApplication::activePopupWidget())popup->hide();
+    capture->start(anchor);
+}
+void ScreenshotPanel::showCapture(const QImage &image,const QPoint &anchor) {
+    if(image.isNull())return;
+    QString error;const QString path=ScreenshotStore::saveCapture(image,directory,&error);
+    edit->setChecked(false);canvas->editing=false;
+    if(!path.isEmpty()){
+        currentPath=path;directorySignature.clear();reveal(anchor,false);
+        status->setText(QStringLiteral("✓ 截图已保存"));
+    }else{
+        reveal(anchor,false);currentPath.clear();canvas->setImage(image);
+        details->setText(QStringLiteral("未保存 · %1 × %2").arg(image.width()).arg(image.height()));
+        for(const char *name:{"copyImage","annotate","undo","saveCopy"})findChild<QToolButton *>(name)->setEnabled(true);
+        findChild<QToolButton *>("copyPath")->setEnabled(false);
+        status->setText(QStringLiteral("保存失败，可复制或另存：")+error);
+    }
 }
 void ScreenshotPanel::updateWatcher() {
     QStringList wanted;
@@ -297,8 +339,8 @@ void ScreenshotPanel::importClipboard() {
     if(row>=0) {thumbnails->setCurrentRow(row);select(row);}
     status->setText(QStringLiteral("✓ 已导入并保存：")+QFileInfo(imported).fileName());
 }
-void ScreenshotPanel::reveal(const QPoint &anchor){
-    if(isVisible()){hide();return;} refresh();
+void ScreenshotPanel::reveal(const QPoint &anchor,bool toggle){
+    if(isVisible()){if(toggle)hide();else{refresh();raise();activateWindow();}return;} refresh();
     QScreen *screen=QGuiApplication::screenAt(anchor);if(!screen)screen=QGuiApplication::primaryScreen();
     QRect bounds=screen->availableGeometry();
     ensurePolished(); layout()->activate();

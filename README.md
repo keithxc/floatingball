@@ -2,13 +2,16 @@
 
 基于 Qt 的悬浮球小工具，优先适配触控操作与桌面快捷操作。
 
+See [TODO.md](TODO.md) for the fooView-inspired feature roadmap, implementation
+priorities and platform acceptance criteria.
+
 ## 当前 macOS 版行为
 
 - 单击：展开或收起动作子球
 - 左键拖动：移动悬浮球
 - 滚轮：缩放悬浮球（带小幅过渡动画）
 - 双指缩放：缩放悬浮球（macOS/触控屏）
-- 悬停：轻微放大（带过渡动画）
+- 悬停：平滑调整透明度，尺寸和位置保持不变
 - 右键 / 长按：打开快捷菜单
 - 双击：也可展开或收起动作子球
 
@@ -32,7 +35,21 @@ The screenshot panel is also available from the right-click / long-press menu.
 
 - Floating preview of all readable PNG/JPEG/WebP images in the selected directory,
   newest first, with horizontally scrollable thumbnails.
-- Compact pearl-colored ball with line icons and gentle hover/orbit animation.
+- Circular, AssistiveTouch-inspired charcoal ball with a white center. Its painted
+  opacity is 30% while idle, 85% during hover/menu use and 94% while dragging.
+  Leaving it idle for 1.2 seconds starts a smooth fade; an expanded orbit stays clear.
+  Action satellites use the same circular charcoal surface and stay at 85%
+  opacity while expanded, matching the main ball. Pressing an action uses 94%
+  opacity for feedback. Their icons keep the same size and stay centered on hover.
+  Hovering or leaving any circle preserves every circle's size and position;
+  only explicit resizing, dragging, screen adaptation and orbit transitions
+  update their geometry.
+  A separate translucent label bubble fades/slides in alongside the hovered
+  action and passes mouse input through; leaving smoothly dismisses it.
+  Orbit return fades are painted directly for Wayland compatibility.
+  The ball and orbit adapt to available logical screen space after resolution,
+  display scaling or monitor changes. Smaller screens reduce their size; returning
+  to a larger screen restores the preferred size and keeps surfaces within bounds.
   A single click responds immediately. Satellites shrink and fade back into the
   ball on close, can reverse direction mid-animation, and follow mouse/touch
   dragging synchronously during expansion, use and return.

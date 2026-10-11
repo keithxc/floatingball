@@ -24,6 +24,8 @@ set(PROJECT_SOURCES
         uiicons.h
         floatingwindow.cpp
         floatingwindow.h
+        screenshotcapture.cpp
+        screenshotcapture.h
         floatingball.h
         floatingball.ui
         ${TS_FILES}
@@ -57,6 +59,10 @@ else()
 endif()
 
 target_link_libraries(FloatingBall PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+if(UNIX AND NOT APPLE)
+    find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS DBus)
+    target_link_libraries(FloatingBall PRIVATE Qt${QT_VERSION_MAJOR}::DBus)
+endif()
 if(UNIX AND NOT APPLE AND QT_VERSION_MAJOR EQUAL 6)
     find_package(LayerShellQt 6.6 QUIET)
     if(TARGET LayerShellQt::Interface)
@@ -101,8 +107,12 @@ if(FLOATINGBALL_BUILD_TESTS)
         tests/screenshot-test.cpp floatingball.cpp floatingball.h floatingball.ui
         screenshotpanel.cpp screenshotpanel.h screenshotstore.cpp screenshotstore.h)
     target_sources(floatingball-screenshot-test PRIVATE floatingwindow.cpp floatingwindow.h)
+    target_sources(floatingball-screenshot-test PRIVATE screenshotcapture.cpp screenshotcapture.h)
     target_include_directories(floatingball-screenshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(floatingball-screenshot-test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(floatingball-screenshot-test PRIVATE Qt${QT_VERSION_MAJOR}::DBus)
+    endif()
     if(TARGET LayerShellQt::Interface)
         target_link_libraries(floatingball-screenshot-test PRIVATE LayerShellQt::Interface)
         target_compile_definitions(floatingball-screenshot-test PRIVATE FLOATINGBALL_LAYER_SHELL)

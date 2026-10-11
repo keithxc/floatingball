@@ -113,16 +113,16 @@ QString ScreenshotStore::defaultDirectory()
     return QDir(pictures).filePath(QStringLiteral("Screenshots"));
 }
 
-QString ScreenshotStore::importImage(const QImage &image, const QString &directory, QString *error)
+static QString saveImage(const QImage &image, const QString &directory, const QString &prefix, QString *error)
 {
     if (error) error->clear();
     auto fail = [error](const QString &message) { if (error) *error = message; return QString(); };
-    if (image.isNull()) return fail(QStringLiteral("剪贴板中没有图片"));
+    if (image.isNull()) return fail(QStringLiteral("没有可保存的图片"));
     if (directory.isEmpty() || !QDir::isAbsolutePath(directory))
         return fail(QStringLiteral("请先选择有效的截图目录"));
     if (!QDir().mkpath(directory)) return fail(QStringLiteral("无法创建截图目录，请选择可写目录"));
-    const QString name = QStringLiteral("Clipboard-%1-%2.png")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmsszzz")),
+    const QString name = QStringLiteral("%1-%2-%3.png")
+        .arg(prefix,QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmsszzz")),
              QUuid::createUuid().toString(QUuid::Id128));
     const QString path = QDir(directory).absoluteFilePath(name);
     QSaveFile file(path);
@@ -131,4 +131,13 @@ QString ScreenshotStore::importImage(const QImage &image, const QString &directo
     if (!writer.write(image)) return fail(QStringLiteral("图片保存失败：") + writer.errorString());
     if (!file.commit()) return fail(QStringLiteral("图片保存失败：") + file.errorString());
     return path;
+}
+
+QString ScreenshotStore::importImage(const QImage &image, const QString &directory, QString *error)
+{
+    return saveImage(image,directory,QStringLiteral("Clipboard"),error);
+}
+QString ScreenshotStore::saveCapture(const QImage &image, const QString &directory, QString *error)
+{
+    return saveImage(image,directory,QStringLiteral("Screenshot"),error);
 }

@@ -3,6 +3,8 @@
 #include <QImage>
 #include <QPoint>
 #include <QStringList>
+#include <QPointer>
+class ScreenshotCapture;
 class QFileSystemWatcher;
 class QTimer;
 class QLabel;
@@ -30,7 +32,9 @@ private:
 class ScreenshotPanel : public QWidget {
 public:
     explicit ScreenshotPanel(QWidget *parent = nullptr, const QString &directoryOverride = QString());
-    void reveal(const QPoint &anchor);
+    void reveal(const QPoint &anchor, bool toggle=true);
+    void captureRegion(const QPoint &anchor);
+    void showCapture(const QImage &image, const QPoint &anchor);
 protected:
     void keyPressEvent(QKeyEvent *) override;
 private:
@@ -50,4 +54,7 @@ private:
     QString directory;
     QString currentPath;
     QStringList paths;
+    ScreenshotCapture *capture;
+    QPoint captureAnchor;
+    QList<QPointer<QWidget>> hiddenForCapture;
 };

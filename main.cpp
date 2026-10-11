@@ -24,12 +24,15 @@ int main(int argc, char *argv[])
     parser.addHelpOption();
     QCommandLineOption directoryOption("screenshot-directory", "Use a screenshot folder for this session.", "path");
     QCommandLineOption previewOption("show-screenshots", "Open the screenshot panel on launch.");
+    QCommandLineOption captureOption("capture", "Capture a screen region on launch.");
     parser.addOption(directoryOption);
     parser.addOption(previewOption);
+    parser.addOption(captureOption);
     parser.process(a);
     FloatingBall w(nullptr, parser.value(directoryOption));
 
     w.show();
-    if (parser.isSet(previewOption)) QTimer::singleShot(0, &w, [&w] { w.showScreenshots(); });
+    if (parser.isSet(captureOption)) QTimer::singleShot(0, &w, [&w] { w.captureRegion(); });
+    else if (parser.isSet(previewOption)) QTimer::singleShot(0, &w, [&w] { w.showScreenshots(); });
     return a.exec();
 }

@@ -93,7 +93,10 @@ int main(int argc,char **argv){
  ScreenshotPanel panel;panel.reveal(QPoint(100,300));app.processEvents();
  auto list=panel.findChild<QListWidget *>();check(list&&list->count()==1,"recent image loaded");
  QString copyError;QImage transparent(3,2,QImage::Format_ARGB32);transparent.fill(QColor(90,140,200,80));
- check(ScreenshotStore::copyImage(transparent,&copyError)&&app.clipboard()->image()==transparent,"image clipboard preserves transparent pixels");
+ const bool transparentCopied=ScreenshotStore::copyImage(transparent,&copyError);
+ // Native clipboard changes reach Qt through the window-system event queue.
+ app.processEvents();
+ check(transparentCopied&&app.clipboard()->image()==transparent,"image clipboard preserves transparent pixels");
  auto click=[&](const QString &text){for(auto b:panel.findChildren<QToolButton *>())if(b->text()==text){b->click();return;}check(false,"button exists");};
  QToolButton *pin=nullptr;for(auto b:panel.findChildren<QToolButton *>())if(b->text()==QStringLiteral("固定"))pin=b;
  check(pin&&pin->isChecked(),"screenshot panel starts pinned for use alongside other apps");
@@ -164,6 +167,16 @@ int main(int argc,char **argv){
  }
  wait(70);drag(QPoint(35,20),"satellites follow drag in the same input event during expansion");wait(200);
  drag(QPoint(25,15),"expanded satellites follow the main ball without tweening behind it");
+ QList<FloatingBall *> hoverTargets=cells;hoverTargets.prepend(&ball);
+ QList<QRect> hoverGeometry;for(auto target:hoverTargets)hoverGeometry.append(target->geometry());
+ bool hoverStable=true;
+ for(auto target:hoverTargets) {
+  QPointF point=target->rect().center();QEnterEvent enter(point,point,target->mapToGlobal(point.toPoint()));app.sendEvent(target,&enter);
+  for(int frame=0;frame<10;++frame){wait(16);for(int i=0;i<hoverTargets.size();++i)hoverStable=hoverStable&&hoverTargets[i]->geometry()==hoverGeometry[i];}
+  QEvent leave(QEvent::Leave);app.sendEvent(target,&leave);
+  for(int frame=0;frame<10;++frame){wait(16);for(int i=0;i<hoverTargets.size();++i)hoverStable=hoverStable&&hoverTargets[i]->geometry()==hoverGeometry[i];}
+ }
+ check(hoverStable,"entering and leaving any circle keeps all orbit rectangles stable throughout every frame");
  QRect orbitBounds=ball.geometry();for(auto w:app.topLevelWidgets())if(dynamic_cast<FloatingBall *>(w)&&w->isVisible())orbitBounds=orbitBounds.united(w->geometry());
  QImage orbit(orbitBounds.size()+QSize(24,24),QImage::Format_ARGB32_Premultiplied);orbit.fill(QColor("#f1f0ed"));
  {QPainter p(&orbit);for(auto w:app.topLevelWidgets())if(dynamic_cast<FloatingBall *>(w)&&w->isVisible())p.drawPixmap(w->pos()-orbitBounds.topLeft()+QPoint(12,12),w->grab());}

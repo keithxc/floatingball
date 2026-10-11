@@ -26,12 +26,122 @@
 #include <QTouchEvent>
 #include <QTapAndHoldGesture>
 #include <QWheelEvent>
+#include <QScopedValueRollback>
 #include <QtMath>
+
+class HoverLabelBubble : public QWidget
+{
+public:
+    explicit HoverLabelBubble(QWidget *owner)
+        : QWidget(owner, Qt::ToolTip | Qt::FramelessWindowHint |
+                         Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput)
+    {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_MacAlwaysShowToolWindow);
+        setObjectName(QStringLiteral("floatingballHoverLabel"));
+        QFont labelFont = font();
+        labelFont.setPointSize(10);
+        setFont(labelFont);
+        animation = new QVariantAnimation(this);
+        connect(animation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            progress = value.toReal();
+            move(target + QPoint(0, qRound((1.0 - progress) * 4)));
+            update();
+        });
+        connect(animation, &QVariantAnimation::finished, this, [this]() {
+            if (!wanted) hide();
+        });
+        FloatingWindow::prepare(this, false);
+    }
+
+    void reveal(const QString &value, const QRect &anchor)
+    {
+        text = value;
+        setAccessibleName(value);
+        resize(fontMetrics().horizontalAdvance(text) + 24, fontMetrics().height() + 16);
+        reposition(anchor);
+        if (wanted && isVisible()) return;
+        wanted = true;
+        if (!isVisible()) {
+            progress = 0;
+            move(target + QPoint(0, 4));
+            show();
+        }
+        animate(1.0, 150);
+    }
+
+    void reposition(const QRect &anchor)
+    {
+        QScreen *screen = QGuiApplication::screenAt(anchor.center());
+        if (!screen) screen = QGuiApplication::primaryScreen();
+        if (!screen) return;
+        const QRect bounds = screen->availableGeometry();
+        int y = anchor.bottom() + 7;
+        if (y + height() > bounds.bottom() - 4) y = anchor.top() - height() - 6;
+        target = QPoint(qBound(bounds.left() + 4, anchor.center().x() - width() / 2,
+                              qMax(bounds.left() + 4, bounds.right() - width() - 3)),
+                        qBound(bounds.top() + 4, y,
+                              qMax(bounds.top() + 4, bounds.bottom() - height() - 3)));
+        move(target + QPoint(0, qRound((1.0 - progress) * 4)));
+    }
+
+    void dismiss(bool immediately = false)
+    {
+        wanted = false;
+        if (immediately) { animation->stop(); progress = 0; hide(); }
+        else if (isVisible()) animate(0.0, 100);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPixmap face(QSize(qRound(width() * devicePixelRatioF()),
+                           qRound(height() * devicePixelRatioF())));
+        face.setDevicePixelRatio(devicePixelRatioF());
+        face.fill(Qt::transparent);
+        QPainter p(&face);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF pill = QRectF(rect()).adjusted(1, 1, -1, -1);
+        p.setPen(QPen(QColor(255, 255, 255, 45), 0.7));
+        p.setBrush(QColor(33, 35, 41, 205));
+        p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+        p.setPen(QColor("#f7f7fb"));
+        p.setFont(font());
+        p.drawText(rect(), Qt::AlignCenter, text);
+        p.end();
+        QPainter output(this);
+        output.setOpacity(progress);
+        output.drawPixmap(0, 0, face);
+    }
+
+private:
+    void animate(qreal end, int duration)
+    {
+        animation->stop();
+        {
+            const QSignalBlocker blocker(animation);
+            animation->setStartValue(progress);
+            animation->setEndValue(end);
+            animation->setDuration(duration);
+            animation->setEasingCurve(end > progress ? QEasingCurve::OutCubic : QEasingCurve::InCubic);
+            animation->setCurrentTime(0);
+        }
+        animation->start();
+    }
+    QVariantAnimation *animation = nullptr;
+    QString text;
+    QPoint target;
+    qreal progress = 0;
+    bool wanted = false;
+};
 
 FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
     : QWidget(parent), ui(new Ui::FloatingBall), m_screenshotDirectory(screenshotDirectory)
 {
     ui->setupUi(this);
+    setProperty("floatingballSurface",true);
 
     setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
     // Cocoa otherwise hides tool windows whenever another app becomes active.
@@ -46,14 +156,30 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
     font.setPointSize(10);
     font.setBold(false);
     ballLabel->setFont(font);
-    ballLabel->setStyleSheet("color:#514b5f; background:transparent;");
+    // Retain action text for accessibility; visible labels use a separate bubble.
+    ballLabel->setStyleSheet("color:transparent; background:transparent;");
     setAccessibleName(QStringLiteral("FloatingBall"));
     setToolTip(tr("点击展开快捷操作 · 拖动移动"));
     ballLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    ballLabel->hide();
 
     m_geometryAnimation = new QPropertyAnimation(this, "geometry", this);
     m_geometryAnimation->setDuration(140);
     m_geometryAnimation->setEasingCurve(QEasingCurve::OutCubic);
+
+    m_opacityAnimation = new QVariantAnimation(this);
+    m_opacityAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_opacityAnimation, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant &value) {
+        m_ballOpacity = value.toReal();
+        update();
+    });
+    m_idleTimer = new QTimer(this);
+    m_idleTimer->setSingleShot(true);
+    m_idleTimer->setInterval(1200);
+    connect(m_idleTimer, &QTimer::timeout, this, [this]() {
+        animateBallOpacity(0.30, 450);
+    });
 
     updateBallGeometry(QSizeF(64, 64), QPointF(), false, false);
     updateBallStyle("#faf9fc");
@@ -62,10 +188,22 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
     grabGesture(Qt::TapAndHoldGesture);
     initQuickActions();
     FloatingWindow::prepare(this);
+    m_currentScreen = screen();
+    for (QScreen *display : QGuiApplication::screens()) watchScreen(display);
+    connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *display) {
+        watchScreen(display);
+        scheduleScreenAdaptation();
+    });
+    connect(qApp, &QGuiApplication::screenRemoved, this, [this]() {
+        scheduleScreenAdaptation();
+    });
+    scheduleScreenAdaptation();
 }
 
 FloatingBall::~FloatingBall()
 {
+    m_idleTimer->stop();
+    m_opacityAnimation->stop();
     if (m_orbitAnimation) m_orbitAnimation->stop();
     if (m_geometryAnimation &&
         m_geometryAnimation->state() == QAbstractAnimation::Running) {
@@ -90,6 +228,8 @@ FloatingBall::~FloatingBall()
 
 bool FloatingBall::event(QEvent *event)
 {
+    if (event->type() == QEvent::Hide && m_hoverLabel) m_hoverLabel->dismiss(true);
+    if (event->type() == QEvent::ScreenChangeInternal) scheduleScreenAdaptation();
     if (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate
         || event->type() == QEvent::TouchEnd || event->type() == QEvent::TouchCancel) {
         return handleTouchEvent(static_cast<QTouchEvent *>(event));
@@ -100,9 +240,59 @@ bool FloatingBall::event(QEvent *event)
     return QWidget::event(event);
 }
 
+void FloatingBall::watchScreen(QScreen *display)
+{
+    connect(display, &QScreen::geometryChanged, this, [this]() { scheduleScreenAdaptation(); });
+    connect(display, &QScreen::availableGeometryChanged, this, [this]() { scheduleScreenAdaptation(); });
+    connect(display, &QScreen::logicalDotsPerInchChanged, this, [this]() { scheduleScreenAdaptation(); });
+}
+
+void FloatingBall::scheduleScreenAdaptation()
+{
+    if (m_actionIndex >= 0 || m_screenAdaptationPending || m_adaptingScreen) return;
+    m_screenAdaptationPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_screenAdaptationPending = false;
+        if (m_actionIndex < 0) adaptToScreen();
+    });
+}
+
+void FloatingBall::adaptToScreen()
+{
+    QScreen *display = m_currentScreen;
+    if (!display || !QGuiApplication::screens().contains(display))
+        display = QGuiApplication::primaryScreen();
+    if (!display) return;
+    m_currentScreen = display;
+    fitToScreen(display->availableGeometry(), display->geometry().size());
+}
+
+void FloatingBall::fitToScreen(const QRect &bounds, const QSize &screenSize)
+{
+    if (bounds.isEmpty() || m_actionIndex >= 0) return;
+    const QScopedValueRollback<bool> guard(m_adaptingScreen, true);
+    // Work-area edges can move when an auto-hiding/magnifying dock changes.
+    // Preserve the current anchor and only clamp if it actually falls outside.
+    const QPointF center = QRectF(geometry()).center();
+    m_screenBounds = bounds;
+    // Qt reports logical pixels, so high-DPI scaling is already accounted for.
+    const QSize logicalSize = screenSize.isEmpty() ? bounds.size() : screenSize;
+    m_screenScale = qBound(0.5, qMin(logicalSize.width() / 1280.0, logicalSize.height() / 800.0), 1.0);
+    const int diameter = qBound(1, qRound(m_preferredDiameter * m_screenScale),
+                                qMin(bounds.width(), bounds.height()));
+    const QPoint position(qBound(bounds.left(), qRound(center.x() - diameter / 2.0), bounds.right() - diameter + 1),
+                          qBound(bounds.top(), qRound(center.y() - diameter / 2.0), bounds.bottom() - diameter + 1));
+    applyGeometry(QRect(position, QSize(diameter, diameter)), false);
+    updateOrbitLayout();
+    if (m_hoverLabel) m_hoverLabel->reposition(geometry());
+}
+
 void FloatingBall::updateBallGeometry(const QSizeF &size, const QPointF &anchorGlobalPos, bool keepAnchor, bool animate)
 {
-    const int diameter = qBound(kMinDiameter, qRound(qMin(size.width(), size.height())), kMaxDiameter);
+    const int diameter = qBound(qRound(kMinDiameter * m_screenScale),
+                               qRound(qMin(size.width(), size.height())),
+                               qRound(kMaxDiameter * m_screenScale));
+    m_preferredDiameter = diameter / m_screenScale;
     const QSize targetSize(diameter, diameter);
 
     QPoint targetPos = pos();
@@ -149,7 +339,7 @@ void FloatingBall::applyGeometry(const QRect &targetGeometry, bool animate)
     }
 
     setGeometry(targetGeometry);
-    setMask(QRegion(rect(), QRegion::Ellipse));
+    updateBallMask();
     if (ballLabel) {
         ballLabel->setGeometry(6, height()/2+3, width()-12, height()/3);
     }
@@ -159,6 +349,49 @@ void FloatingBall::updateBallStyle(const QString &colorName)
 {
     m_ballColor = QColor(colorName);
     update();
+}
+
+void FloatingBall::updateBallMask()
+{
+    setMask(QRegion(rect(), QRegion::Ellipse));
+}
+
+void FloatingBall::updateHoverLabel()
+{
+    if (m_actionIndex >= 0 && m_pointerInside && !m_orbitAnimating &&
+        isVisible() && width() >= 24) {
+        if (!m_hoverLabel) m_hoverLabel = new HoverLabelBubble(this);
+        m_hoverLabel->reveal(ballLabel->text(), geometry());
+    } else if (m_hoverLabel) {
+        m_hoverLabel->dismiss(m_orbitAnimating || !isVisible());
+    }
+}
+
+void FloatingBall::animateBallOpacity(qreal target, int duration)
+{
+    m_opacityAnimation->stop();
+    if (qAbs(m_ballOpacity - target) < 0.001) return;
+    {
+        const QSignalBlocker blocker(m_opacityAnimation);
+        m_opacityAnimation->setStartValue(m_ballOpacity);
+        m_opacityAnimation->setEndValue(target);
+        m_opacityAnimation->setDuration(duration);
+        m_opacityAnimation->setCurrentTime(0);
+    }
+    m_opacityAnimation->start();
+}
+
+void FloatingBall::refreshBallOpacity()
+{
+    // Paint alpha directly so idle fading works on Wayland surfaces too.
+    // Expanded actions stay as clear as the main ball, including after hover
+    // ends. Return fading is handled separately by the orbit animation.
+    if (m_actionIndex >= 0 || m_pointerInside || m_isDragging || m_isPinching || m_orbitVisible || m_menuOpen) {
+        m_idleTimer->stop();
+        animateBallOpacity(m_isDragging || m_isPinching ? 0.94 : 0.85, 120);
+    } else if (!m_idleTimer->isActive()) {
+        m_idleTimer->start();
+    }
 }
 
 void FloatingBall::resetTouchState()
@@ -186,6 +419,7 @@ bool FloatingBall::handleTouchEvent(QTouchEvent *event)
             m_dragTouchId = -1;
             m_initialPinchDistance = QLineF(points.at(0).globalPosition(), points.at(1).globalPosition()).length();
             m_initialPinchSize = QSizeF(size());
+            refreshBallOpacity();
             return true;
         }
 
@@ -196,6 +430,7 @@ bool FloatingBall::handleTouchEvent(QTouchEvent *event)
             m_dragOffset = points.first().globalPosition() - pos();
             m_pressPosition = points.first().globalPosition().toPoint();
             m_moved = false;
+            refreshBallOpacity();
             return true;
         }
     }
@@ -230,6 +465,7 @@ bool FloatingBall::handleTouchEvent(QTouchEvent *event)
             m_isDragging = true;
             m_dragTouchId = points.first().id();
             m_dragOffset = points.first().globalPosition() - pos();
+            refreshBallOpacity();
             return true;
         }
     }
@@ -239,6 +475,7 @@ bool FloatingBall::handleTouchEvent(QTouchEvent *event)
         else toggleOrbit();
     }
     resetTouchState();
+    refreshBallOpacity();
     return true;
 }
 
@@ -246,6 +483,8 @@ bool FloatingBall::gestureEvent(QGestureEvent *event)
 {
     QGesture *rawPinch = event->gesture(Qt::PinchGesture);
     if (QPinchGesture *pinch = qobject_cast<QPinchGesture *>(rawPinch)) {
+        m_isPinching = pinch->state() != Qt::GestureFinished && pinch->state() != Qt::GestureCanceled;
+        refreshBallOpacity();
         if (pinch->changeFlags() & QPinchGesture::ScaleFactorChanged) {
             qreal factor = pinch->totalScaleFactor();
             if (factor > 0) {
@@ -323,7 +562,11 @@ void FloatingBall::initQuickActions()
 
 void FloatingBall::showQuickActions(const QPoint &globalPos)
 {
+    m_menuOpen = true;
+    refreshBallOpacity();
     QMenu menu;
+    auto capture=menu.addAction(tr("截取区域"));
+    connect(capture,&QAction::triggered,this,&FloatingBall::captureRegion);
     auto screenshots = menu.addAction(tr("最近截图"));
     connect(screenshots, &QAction::triggered, this, [this]() {
         showScreenshots();
@@ -350,12 +593,20 @@ void FloatingBall::showQuickActions(const QPoint &globalPos)
         close();
     });
     menu.exec(globalPos);
+    m_menuOpen = false;
+    refreshBallOpacity();
 }
 
 void FloatingBall::showScreenshots()
 {
     if (!m_screenshotPanel) m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
     m_screenshotPanel->reveal(geometry().center());
+}
+
+void FloatingBall::captureRegion()
+{
+    if (!m_screenshotPanel) m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
+    m_screenshotPanel->captureRegion(geometry().center());
 }
 
 void FloatingBall::executeQuickAction(int index)
@@ -395,27 +646,22 @@ void FloatingBall::executeKeyboardShortcut(int index)
 void FloatingBall::enterEvent(QEnterEvent *event)
 {
     Q_UNUSED(event)
-    // A newly shown satellite can appear beneath the cursor. Let it reach
-    // its orbit before hover scaling replaces the geometry animation.
-    if (m_orbitAnimating) return;
+    m_pointerInside = true;
+    refreshBallOpacity();
+    updateHoverLabel();
+    // Hover changes appearance only. Resizing the main surface here would
+    // relayout every orbit action on each animation frame.
     updateBallStyle("#ffffff");
-    if (!m_hoverScaled) {
-        m_hoverScaled = true;
-        m_hoverBaseSize = QSizeF(size());
-        updateBallGeometry(m_hoverBaseSize * 1.06, QPointF(), false, true);
-    }
 }
 
 // 重写鼠标离开事件
 void FloatingBall::leaveEvent(QEvent *event)
 {
     Q_UNUSED(event)
+    m_pointerInside = false;
+    refreshBallOpacity();
+    updateHoverLabel();
     updateBallStyle(m_actionIndex == 0 ? "#f0ebff" : "#faf9fc");
-    if (m_hoverScaled) {
-        m_hoverScaled = false;
-        updateBallGeometry(m_hoverBaseSize, QPointF(), false, true);
-        m_hoverBaseSize = QSizeF();
-    }
 }
 
 // 重写鼠标按下事件
@@ -436,6 +682,7 @@ void FloatingBall::mousePressEvent(QMouseEvent *event)
         m_isDragging = true;
         m_dragTouchId = -1;
         m_dragOffset = event->globalPosition() - pos();
+        refreshBallOpacity();
         updateBallStyle("#e7e0fa");
         setCursor(Qt::ClosedHandCursor);
     }
@@ -455,6 +702,7 @@ void FloatingBall::mouseReleaseEvent(QMouseEvent *event)
         m_dragTouchId = -1;
         unsetCursor();
         updateBallStyle(m_actionIndex == 0 ? "#f0ebff" : "#faf9fc");
+        refreshBallOpacity();
     }
     QWidget::mouseReleaseEvent(event);
 }
@@ -490,6 +738,7 @@ void FloatingBall::mouseDoubleClickEvent(QMouseEvent *event)
 void FloatingBall::toggleOrbit()
 {
     m_orbitVisible = !m_orbitVisible;
+    refreshBallOpacity();
     if (!m_orbitAnimation) {
         m_orbitAnimation = new QVariantAnimation(this);
         connect(m_orbitAnimation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
@@ -499,6 +748,7 @@ void FloatingBall::toggleOrbit()
         connect(m_orbitAnimation, &QVariantAnimation::finished, this, [this]() {
             for (FloatingBall *ball : qAsConst(m_orbitBalls)) {
                 ball->m_orbitAnimating = false;
+                ball->updateHoverLabel();
                 if (!m_orbitVisible) { ball->hide(); ball->deleteLater(); }
             }
             if (!m_orbitVisible) m_orbitBalls.clear();
@@ -512,11 +762,12 @@ void FloatingBall::toggleOrbit()
         aBall->setWindowFlags(windowFlags());
         aBall->updateBallGeometry(QSizeF(64, 64), QPointF(), false, false);
         aBall->m_actionIndex = i;
+        aBall->updateBallMask();
         aBall->updateBallStyle(i == 0 ? "#f0ebff" : "#faf9fc");
         const QStringList labels = {tr("截图"), tr("终端"), tr("浏览器"), tr("主目录"), tr("复制"), tr("粘贴")};
         aBall->ballLabel->setText(labels[i]);
         aBall->setAccessibleName(labels[i]);
-        aBall->setToolTip(labels[i]);
+        aBall->setToolTip(QString());
         aBall->m_clickAction = [this, i]() {
             if (!m_orbitVisible) return;
             if (i == 0) {
@@ -534,6 +785,8 @@ void FloatingBall::toggleOrbit()
     updateOrbitLayout();
     for (FloatingBall *ball : qAsConst(m_orbitBalls)) {
         ball->m_orbitAnimating = true;
+        ball->refreshBallOpacity();
+        ball->updateHoverLabel();
         ball->setEnabled(m_orbitVisible);
         ball->show();
     }
@@ -557,20 +810,23 @@ void FloatingBall::updateOrbitLayout()
     const QPointF center = QRectF(geometry()).center();
     QScreen *screen = QGuiApplication::screenAt(center.toPoint());
     if (!screen) screen = QGuiApplication::primaryScreen();
-    const QRect bounds = screen->availableGeometry();
-    const qreal radius = qMax(100.0, (width()+64)/2.0+24) * m_orbitProgress;
-    const int diameter = qMax(14, qRound(64*(0.22+0.78*m_orbitProgress)));
+    if (!screen) return;
+    const QRect bounds = m_adaptingScreen ? m_screenBounds : screen->availableGeometry();
+    const qreal actionSize = qMin(64.0 * m_screenScale, qreal(qMin(bounds.width(), bounds.height())));
+    const qreal radius = qMin(qMax(100.0 * m_screenScale, (width()+actionSize)/2.0+24*m_screenScale),
+                             qMax(0.0, (qMin(bounds.width(), bounds.height()) - actionSize) / 2.0)) * m_orbitProgress;
+    const int diameter = qMax(1, qRound(actionSize*(0.22+0.78*m_orbitProgress)));
     for (int i = 0; i < m_orbitBalls.size(); ++i) {
         FloatingBall *ball = m_orbitBalls[i];
+        ball->m_screenScale = m_screenScale;
         ball->m_geometryAnimation->stop();
-        ball->m_hoverScaled = false;
-        ball->m_hoverBaseSize = QSizeF();
         const qreal angle = qDegreesToRadians(60.0*i);
         const QPointF pos = center + QPointF(qCos(angle)*radius, qSin(angle)*radius) - QPointF(diameter/2.0,diameter/2.0);
         ball->setGeometry(qBound(bounds.left(),qRound(pos.x()),bounds.right()-diameter+1),
                           qBound(bounds.top(),qRound(pos.y()),bounds.bottom()-diameter+1),diameter,diameter);
-        ball->ballLabel->setVisible(diameter>=44);
-        ball->setWindowOpacity(qBound(0.0,m_orbitProgress*1.5,1.0));
+        ball->updateHoverLabel();
+        ball->m_revealOpacity = qBound(0.0, m_orbitProgress * 1.5, 1.0);
+        ball->update();
     }
 }
 
@@ -585,6 +841,10 @@ void FloatingBall::wheelEvent(QWheelEvent *event)
         target -= 12;
     }
     updateBallGeometry(QSizeF(target, target), QPointF(), false, true);
+    if (m_actionIndex < 0) {
+        animateBallOpacity(0.85, 120);
+        refreshBallOpacity();
+    }
     event->accept();
 }
 
@@ -594,36 +854,76 @@ void FloatingBall::resizeEvent(QResizeEvent *event)
     if (ballLabel) {
         ballLabel->setGeometry(6, height()/2+3, width()-12, height()/3);
     }
-    setMask(QRegion(rect(), QRegion::Ellipse));
+    updateBallMask();
+    if (m_hoverLabel) m_hoverLabel->reposition(geometry());
     updateOrbitLayout();
 }
 
 void FloatingBall::moveEvent(QMoveEvent *event)
 {
     QWidget::moveEvent(event);
+    if (m_actionIndex < 0 && !m_adaptingScreen) {
+        if (QScreen *display = QGuiApplication::screenAt(geometry().center())) {
+            if (m_currentScreen != display) {
+                m_currentScreen = display;
+                // A cross-monitor drag already placed the ball on its new screen.
+                m_screenBounds = display->availableGeometry();
+                scheduleScreenAdaptation();
+            }
+        }
+    }
     // Update in the input event itself: dragging never queues another tween.
+    if (m_hoverLabel) m_hoverLabel->reposition(geometry());
     updateOrbitLayout();
 }
 
 void FloatingBall::paintEvent(QPaintEvent *)
 {
-    QPainter p(this);
+    // Assemble each circular face before fading once. Action icons keep their
+    // size and center while a separate translucent bubble displays hover text.
+    QPixmap face(QSize(qRound(width() * devicePixelRatioF()),
+                       qRound(height() * devicePixelRatioF())));
+    face.setDevicePixelRatio(devicePixelRatioF());
+    face.fill(Qt::transparent);
+    QPainter p(&face);
     p.setRenderHint(QPainter::Antialiasing);
-    const QRectF circle = QRectF(rect()).adjusted(5, 5, -5, -5);
+    const QRectF surfaceRect = QRectF(rect()).adjusted(4, 4, -4, -4);
     p.setPen(Qt::NoPen);
-    for (int i = 4; i > 0; --i) {
-        p.setBrush(QColor(44, 35, 65, 5 + (4-i)*2));
-        p.drawEllipse(circle.adjusted(-i, -i+2, i, i+2));
+    p.setBrush(QColor(0, 0, 0, 35));
+    p.drawEllipse(surfaceRect.translated(0, 1.5));
+    QLinearGradient surface(surfaceRect.topLeft(), surfaceRect.bottomRight());
+    const QColor top(m_ballColor.red() / 5 + 8, m_ballColor.green() / 5 + 8,
+                     m_ballColor.blue() / 5 + 8, 225);
+    QColor bottom = top.darker(165);
+    bottom.setAlpha(235);
+    surface.setColorAt(0, top);
+    surface.setColorAt(1, bottom);
+    p.setBrush(surface);
+    p.setPen(QPen(QColor(255, 255, 255, 38), 0.8));
+    p.drawEllipse(surfaceRect);
+
+    if (m_actionIndex < 0) {
+        const QPointF center = QRectF(rect()).center();
+        const qreal outerRadius = width() * 0.31;
+        p.setPen(QPen(QColor(255, 255, 255, 110), width() * 0.038));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(center, outerRadius, outerRadius);
+        p.setPen(QPen(QColor(255, 255, 255, 180), width() * 0.045));
+        p.drawEllipse(center, width() * 0.245, width() * 0.245);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, 245));
+        p.drawEllipse(center, width() * 0.18, width() * 0.18);
+    } else {
+        const FloatingIcons::Icon icons[] = {FloatingIcons::Screenshot, FloatingIcons::Terminal,
+            FloatingIcons::Browser, FloatingIcons::Folder, FloatingIcons::Copy, FloatingIcons::Paste};
+        const qreal iconSize = width() * 0.42;
+        const QRectF iconRect((width() - iconSize) / 2, (height() - iconSize) / 2,
+                             iconSize, iconSize);
+        const QColor ink(m_actionIndex == 0 ? "#e3ddff" : "#f7f7fb");
+        FloatingIcons::draw(p, icons[m_actionIndex], iconRect, ink);
     }
-    QLinearGradient surface(circle.topLeft(), circle.bottomRight());
-    surface.setColorAt(0, m_ballColor.lighter(103));
-    surface.setColorAt(1, m_ballColor.darker(103));
-    p.setBrush(surface); p.setPen(QPen(QColor(255, 255, 255, 210), 1));
-    p.drawEllipse(circle);
-    const FloatingIcons::Icon icons[] = {FloatingIcons::Screenshot, FloatingIcons::Terminal,
-        FloatingIcons::Browser, FloatingIcons::Folder, FloatingIcons::Copy, FloatingIcons::Paste};
-    const qreal iconSize = width() * (m_actionIndex < 0 ? 0.42 : 0.29);
-    QRectF iconRect((width()-iconSize)/2, m_actionIndex < 0 ? (height()-iconSize)/2 : height()*0.21, iconSize, iconSize);
-    FloatingIcons::draw(p, m_actionIndex < 0 ? FloatingIcons::Orb : icons[m_actionIndex], iconRect,
-        QColor(m_actionIndex <= 0 ? "#7c67bc" : "#625a70"));
+    p.end();
+    QPainter windowPainter(this);
+    windowPainter.setOpacity(m_ballOpacity * m_revealOpacity);
+    windowPainter.drawPixmap(0, 0, face);
 }

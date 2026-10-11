@@ -6,7 +6,7 @@
 #include <QPixmap>
 
 namespace FloatingIcons {
-enum Icon { Orb, Screenshot, Terminal, Browser, Folder, Copy, Paste, Pin, Close, Pen, Undo, Save, Import, Path };
+enum Icon { Orb, Screenshot, Terminal, Browser, Folder, Copy, Paste, Pin, Close, Pen, Undo, Save, Import, Path, Capture };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color) {
     p.save();
@@ -17,6 +17,13 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
     p.setBrush(Qt::NoBrush);
     QPainterPath path;
     switch (icon) {
+    case Capture:
+        path.moveTo(3,9);path.lineTo(3,3);path.lineTo(9,3);
+        path.moveTo(15,3);path.lineTo(21,3);path.lineTo(21,9);
+        path.moveTo(21,15);path.lineTo(21,21);path.lineTo(15,21);
+        path.moveTo(9,21);path.lineTo(3,21);path.lineTo(3,15);
+        path.moveTo(8,12);path.lineTo(16,12);path.moveTo(12,8);path.lineTo(12,16);
+        break;
     case Orb:
         p.setPen(Qt::NoPen); p.setBrush(color);
         p.drawEllipse(QPointF(7, 7), 2.4, 2.4);

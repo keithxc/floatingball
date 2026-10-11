@@ -12,8 +12,12 @@
 #include <QVariantAnimation>
 #include <QUrl>
 #include <QColor>
+#include <QPointer>
 #include <functional>
 class ScreenshotPanel;
+class QTimer;
+class HoverLabelBubble;
+class QScreen;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -29,6 +33,7 @@ public:
     FloatingBall(QWidget *parent = nullptr, const QString &screenshotDirectory = QString());
     ~FloatingBall();
     void showScreenshots();
+    void captureRegion();
 
 protected:
     bool event(QEvent *event) override;
@@ -53,8 +58,13 @@ protected:
 private:
     Ui::FloatingBall *ui;
     QLabel *ballLabel = nullptr;
+    HoverLabelBubble *m_hoverLabel = nullptr;
 
     void updateBallStyle(const QString &colorName);
+    void updateBallMask();
+    void updateHoverLabel();
+    void refreshBallOpacity();
+    void animateBallOpacity(qreal target, int duration);
     void updateBallGeometry(const QSizeF &size, const QPointF &anchorGlobalPos,
                            bool keepAnchor = false, bool animate = false);
     bool handleTouchEvent(QTouchEvent *event);
@@ -63,6 +73,10 @@ private:
     void initQuickActions();
     void toggleOrbit();
     void updateOrbitLayout();
+    void watchScreen(QScreen *screen);
+    void scheduleScreenAdaptation();
+    void adaptToScreen();
+    void fitToScreen(const QRect &bounds, const QSize &screenSize = QSize());
     ScreenshotPanel *m_screenshotPanel = nullptr;
     QString m_screenshotDirectory;
     std::function<void()> m_clickAction;
@@ -92,7 +106,6 @@ private:
     QList<QuickAction> m_quickActions;
     QList<KeyboardShortcutAction> m_shortcutActions;
     QList<QShortcut *> m_shortcutObjects;
-    QSizeF m_hoverBaseSize;
 
     int m_dragTouchId = -1;
     QPointF m_dragOffset;
@@ -105,10 +118,21 @@ private:
     bool m_orbitAnimating = false;
     QPropertyAnimation *m_geometryAnimation = nullptr;
     QVariantAnimation *m_orbitAnimation = nullptr;
+    QVariantAnimation *m_opacityAnimation = nullptr;
+    QTimer *m_idleTimer = nullptr;
+    qreal m_ballOpacity = 0.30;
+    qreal m_revealOpacity = 1.0;
+    bool m_pointerInside = false;
+    bool m_menuOpen = false;
     qreal m_orbitProgress = 0.0;
-    bool m_hoverScaled = false;
     QColor m_ballColor = QColor("#faf9fc");
     int m_actionIndex = -1;
+    QPointer<QScreen> m_currentScreen;
+    QRect m_screenBounds;
+    qreal m_screenScale = 1.0;
+    qreal m_preferredDiameter = 64.0;
+    bool m_screenAdaptationPending = false;
+    bool m_adaptingScreen = false;
 
     static constexpr int kMinDiameter = 48;
     static constexpr int kMaxDiameter = 196;
