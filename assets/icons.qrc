@@ -1,0 +1,11 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file>floatingball-16.png</file>
+    <file>floatingball-32.png</file>
+    <file>floatingball-48.png</file>
+    <file>floatingball-64.png</file>
+    <file>floatingball-128.png</file>
+    <file>floatingball-256.png</file>
+    <file>floatingball-512.png</file>
+  </qresource>
+</RCC>

@@ -5,6 +5,26 @@
 See [TODO.md](TODO.md) for the fooView-inspired feature roadmap, implementation
 priorities and platform acceptance criteria.
 
+## Application icon
+
+The icon shares the floating ball's charcoal sphere, two translucent rings and
+white center. Portable PNG/ICO/ICNS assets retain alpha around the circular shape.
+Windows embeds the ICO in the executable; Linux installs the desktop entry and
+hicolor icons and uses the matching Wayland application ID.
+
+On macOS, Xcode 26+ compiles the layered `assets/AppIcon.icon` into `Assets.car`
+for Apple's Default, Dark and Clear appearances. Cocoa uses the bundle icon
+directly so Qt does not replace its native materials with a flat pixmap.
+Older Xcode or `-DFLOATINGBALL_NATIVE_APP_ICON=OFF` uses the transparent ICNS
+fallback. The system controls whether the native icon uses a rounded-square
+glass background. See [Apple's Icon Composer documentation](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer).
+
+To refresh the portable assets after changing `assets/floatingball.svg`, run
+`scripts/generate-icons.py --output /absolute/build/path/icons` with ImageMagick
+and Pillow, review the staged images, then copy the PNG/ICO/ICNS files into
+`assets/`. The layered icon's SVG files use the same 1024-pixel geometry and are
+editable in Icon Composer.
+
 ## 当前 macOS 版行为
 
 - 单击：展开或收起动作子球

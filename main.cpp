@@ -5,10 +5,21 @@
 #include <QTimer>
 #include <QLocale>
 #include <QTranslator>
+#include <QIcon>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+#ifndef Q_OS_MACOS
+    // Cocoa reads the layered bundle icon; a Qt pixmap would flatten its variants.
+    QIcon appIcon;
+    for (int size : {16, 32, 48, 64, 128, 256, 512})
+        appIcon.addFile(QStringLiteral(":/icons/floatingball-%1.png").arg(size), QSize(size, size));
+    a.setWindowIcon(appIcon);
+#endif
+#ifdef Q_OS_LINUX
+    QGuiApplication::setDesktopFileName(QStringLiteral("floatingball"));
+#endif
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();

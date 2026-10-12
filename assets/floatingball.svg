@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>FloatingBall</title>
+  <defs>
+    <linearGradient id="shell" x1="0.15" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#444349" stop-opacity=".90"/>
+      <stop offset="1" stop-color="#1d1c21" stop-opacity=".94"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".36"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity=".10"/>
+    </linearGradient>
+  </defs>
+  <circle cx="512" cy="524" r="440" fill="#08070d" opacity=".12"/>
+  <circle cx="512" cy="512" r="440" fill="url(#shell)" stroke="url(#rim)" stroke-width="4"/>
+  <circle cx="512" cy="512" r="317" fill="none" stroke="#f5f4fb" stroke-opacity=".43" stroke-width="39"/>
+  <circle cx="512" cy="512" r="251" fill="none" stroke="#faf9ff" stroke-opacity=".70" stroke-width="46"/>
+  <circle cx="512" cy="512" r="184" fill="#fcfbff" fill-opacity=".97"/>
+</svg>

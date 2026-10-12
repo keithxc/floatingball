@@ -61,6 +61,7 @@ set_target_properties(FloatingBall PROPERTIES
 )
 
 include(GNUInstallDirs)
+include(cmake/AppIcon.cmake)
 install(TARGETS FloatingBall
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
