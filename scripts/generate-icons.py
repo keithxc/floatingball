@@ -4,12 +4,14 @@
 Requires ImageMagick and Pillow. Copy reviewed results into assets/ after rendering.
 Apple's layered .icon document is maintained separately, using the same geometry.
 """
+import sys
+sys.dont_write_bytecode = True
 import argparse
 from pathlib import Path
 import shutil
 import subprocess
 
-from PIL import Image
+from build_output_paths import BuildPaths
 
 
 def main():
@@ -17,7 +19,10 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     source = Path(__file__).resolve().parent.parent / "assets" / "floatingball.svg"
-    output = args.output.resolve()
+    paths = BuildPaths("icons")
+    output = paths.validate(args.output)
+    paths.prepare(output)
+    from PIL import Image
     if output == source.parent.parent or source.parent.parent in output.parents:
         parser.error("stage generated icons outside the source checkout")
     output.mkdir(parents=True, exist_ok=True)
