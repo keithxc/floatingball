@@ -12,6 +12,7 @@
 #include <QAbstractAnimation>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
@@ -46,6 +47,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QWindow>
 #include <QtMath>
 #include <cmath>
 
@@ -1737,22 +1739,16 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
         for (QScreen *display : QGuiApplication::screens()) watchScreen(display);
         connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *display) {
             watchScreen(display);
-            syncScreenReplicas();
-            scheduleScreenAdaptation();
+            QTimer::singleShot(80, this, [this] { recoverVisibleAfterOutputChange(); });
         });
         connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen *removed) {
             if (m_assignedScreen == removed) {
-                m_assignedScreen = QGuiApplication::primaryScreen();
-                if (m_assignedScreen)
-                    setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
-                loadScreenPlacement();
+                m_assignedScreen = nullptr;
             }
-            syncScreenReplicas();
-            scheduleScreenAdaptation();
+            QTimer::singleShot(100, this, [this] { recoverVisibleAfterOutputChange(); });
         });
         connect(qApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen *) {
-            syncScreenReplicas();
-            scheduleScreenAdaptation();
+            QTimer::singleShot(80, this, [this] { recoverVisibleAfterOutputChange(); });
         });
 
         initTray();
@@ -3118,6 +3114,57 @@ void FloatingBall::adaptToScreen()
     fitToScreen(display->availableGeometry(), display->geometry().size());
 }
 
+void FloatingBall::recoverVisibleAfterOutputChange()
+{
+    if (!isPrimaryBall()) return;
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    if (screens.isEmpty()) return;
+
+    const bool assignedMissing = !m_assignedScreen || !screens.contains(m_assignedScreen);
+    if (assignedMissing) {
+        m_assignedScreen = QGuiApplication::primaryScreen();
+        if (!m_assignedScreen) m_assignedScreen = screens.first();
+        setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
+        loadScreenPlacement();
+    }
+
+    adaptToScreen();
+
+    if (!m_userHiddenAll && !m_hiddenOnThisScreen && m_assignedScreen) {
+        const bool isWayland = QGuiApplication::platformName().startsWith(QStringLiteral("wayland"));
+        const bool needsRemap = !isVisible() ||
+            (isWayland && windowHandle() && windowHandle()->screen() != m_assignedScreen);
+        if (needsRemap) {
+            closeFan(true);
+            if (isVisible()) hide();
+            if (windowHandle()) windowHandle()->setScreen(m_assignedScreen);
+            show();
+            raise();
+            adaptToScreen();
+            refreshBallOpacity();
+        }
+    }
+
+    syncScreenReplicas();
+    for (FloatingBall *rep : replicaBalls()) {
+        if (!rep) continue;
+        if (!m_userHiddenAll && !rep->m_hiddenOnThisScreen && rep->m_assignedScreen &&
+            screens.contains(rep->m_assignedScreen)) {
+            const bool isWayland = QGuiApplication::platformName().startsWith(QStringLiteral("wayland"));
+            if (!rep->isVisible() ||
+                (isWayland && rep->windowHandle() && rep->windowHandle()->screen() != rep->m_assignedScreen)) {
+                rep->closeFan(true);
+                if (rep->isVisible()) rep->hide();
+                if (rep->windowHandle()) rep->windowHandle()->setScreen(rep->m_assignedScreen);
+                rep->show();
+                rep->raise();
+                rep->adaptToScreen();
+                rep->refreshBallOpacity();
+            }
+        }
+    }
+}
+
 void FloatingBall::fitToScreen(const QRect &bounds, const QSize &screenSize)
 {
     if (bounds.isEmpty()) return;
@@ -3364,6 +3411,23 @@ void FloatingBall::showEvent(QShowEvent *event)
                 rep->show();
         }
     }
+}
+
+void FloatingBall::closeEvent(QCloseEvent *event)
+{
+    // On Wayland, KWin sends zwlr_layer_surface_v1.closed whenever a display
+    // output is disabled/hot-unplugged (e.g. lid close or DeskPort disconnect).
+    // Never let an output-closed event permanently hide or terminate FloatingBall!
+    if (QCoreApplication::closingDown()) {
+        QWidget::closeEvent(event);
+        return;
+    }
+    event->ignore();
+    FloatingBall *primary = m_primaryPeer ? m_primaryPeer.data() : this;
+    QPointer<FloatingBall> pPtr(primary);
+    QTimer::singleShot(140, primary, [pPtr] {
+        if (pPtr) pPtr->recoverVisibleAfterOutputChange();
+    });
 }
 
 // ============================================================================

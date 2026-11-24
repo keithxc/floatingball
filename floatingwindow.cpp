@@ -41,8 +41,10 @@ protected:
 #ifdef FLOATINGBALL_LAYER_SHELL
 #include <LayerShellQt/Window>
 #include <QEvent>
+#include <QPointer>
 #include <QScreen>
 #include <QScopedValueRollback>
+#include <QTimer>
 #include <QWindow>
 #include <climits>
 
@@ -98,6 +100,7 @@ private:
         const QSize currentSize = widget->size();
         if (!force && screen == lastScreen && offset == lastOffset && currentSize == lastSize)
             return;
+        const bool outputChanged = (lastScreen != nullptr && lastScreen != screen);
         lastScreen = screen;
         lastOffset = offset;
         lastSize = currentSize;
@@ -106,6 +109,21 @@ private:
             widget->windowHandle()->setScreen(screen);
         surface->setDesiredSize(currentSize);
         surface->setMargins(QMargins(offset.x(), offset.y(), 0, 0));
+        if (outputChanged && widget->isVisible() && !remapping) {
+            // zwlr_layer_surface_v1 binds wl_output immutably at map time; remap onto new output.
+            remapping = true;
+            QPointer<QWidget> wPtr(widget);
+            QPointer<QScreen> sPtr(screen);
+            QTimer::singleShot(0, widget, [this, wPtr, sPtr] {
+                remapping = false;
+                if (!wPtr || !sPtr || !QGuiApplication::screens().contains(sPtr)) return;
+                if (!wPtr->isVisible()) return;
+                wPtr->hide();
+                if (wPtr->windowHandle()) wPtr->windowHandle()->setScreen(sPtr);
+                wPtr->show();
+            });
+            return;
+        }
         if (widget->isVisible() && widget->windowHandle()) {
             widget->update();
             widget->windowHandle()->requestUpdate();
@@ -113,11 +131,12 @@ private:
     }
     QWidget *widget;
     LayerShellQt::Window *surface;
-    QScreen *lastScreen = nullptr;
+    QPointer<QScreen> lastScreen;
     QPoint lastOffset{INT_MIN, INT_MIN};
     QSize lastSize;
     bool activateOnShow = false;
     bool syncing = false;
+    bool remapping = false;
 };
 } // namespace
 #endif

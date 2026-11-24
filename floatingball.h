@@ -256,6 +256,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void moveEvent(QMoveEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
@@ -290,6 +291,7 @@ private:
     void watchScreen(QScreen *screen);
     void scheduleScreenAdaptation();
     void adaptToScreen();
+    void recoverVisibleAfterOutputChange();
     void fitToScreen(const QRect &bounds, const QSize &screenSize = QSize());
     void showContextMenu(const QPoint &globalPos);
     void loadPreferences();

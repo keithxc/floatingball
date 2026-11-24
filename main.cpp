@@ -13,6 +13,7 @@
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    a.setQuitOnLastWindowClosed(false);
 #ifndef Q_OS_MACOS
     // Cocoa reads the layered bundle icon; a Qt pixmap would flatten its variants.
     QIcon appIcon;
