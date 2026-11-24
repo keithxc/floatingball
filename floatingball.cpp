@@ -663,39 +663,43 @@ void RadialFanOverlay::recomputeFanLayout()
         }
 
         if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-            // True concentric rings ("一圈一圈的") tightly surrounding the focused hub orb,
-            // while all other background rings dim down behind a soft focus halo!
+            // Single clean concentric ring around the focused hub orb (up to 12 items
+            // evenly spaced in one circle with short radial spokes — no double-stacked balls!).
             const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
             const qreal hubRadius = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5;
-            const qreal branchDiam = qBound(38.0, actionRing2Diameter - 2.0, 44.0);
+            const int totalBranch = branchQueue.size();
+            const qreal branchDiam = qBound(36.0, (totalBranch >= 9 ? 40.0 : 42.0) * scale, 43.0);
             const qreal branchHalf = branchDiam * 0.5;
             const qreal branchEdgePad = branchHalf + 5.0;
             const QRectF branchSafeBounds = QRectF(bounds).adjusted(branchEdgePad, branchEdgePad, -branchEdgePad, -branchEdgePad);
 
             const double outDeg = qRadiansToDegrees(qAtan2(hubCenter.y() - m_ballCenterGlobal.y(),
                                                            hubCenter.x() - m_ballCenterGlobal.x()));
-            const qreal subR1 = hubRadius + branchHalf + 11.0 * scale;
-            const qreal subR2 = subR1 + branchDiam * 0.92 + 5.5 * scale;
-            const qreal subR3 = subR2 + branchDiam * 0.92 + 5.5 * scale;
-            const qreal subRadii[3]{subR1, subR2, subR3};
+            const qreal minSingleR = hubRadius + branchHalf + 11.0 * scale;
+            const int firstRingTarget = qMin(totalBranch, 12);
+            const qreal idealSingleR = (firstRingTarget >= 3)
+                ? ((branchDiam + 5.5 * scale) / (2.0 * qSin(M_PI / firstRingTarget)))
+                : minSingleR;
+            const qreal subR1 = qMax(minSingleR, idealSingleR);
+            const qreal subR2 = subR1 + branchDiam * 0.94 + 6.0 * scale;
+            const qreal subRadii[2]{subR1, subR2};
 
             QList<QPointF> branchPlacedCenters;
             auto fitsBranchSelf = [&](const QPointF &cand) {
                 if (QLineF(cand, hubCenter).length() < hubRadius + branchHalf + 5.0) return false;
                 for (const QPointF &p : branchPlacedCenters) {
-                    if (QLineF(cand, p).length() < branchDiam + 4.5) return false;
+                    if (QLineF(cand, p).length() < branchDiam + 4.0) return false;
                 }
                 return true;
             };
 
             int bCursor = 0;
-            for (int br = 0; br < 3 && bCursor < branchQueue.size(); ++br) {
+            for (int br = 0; br < 2 && bCursor < branchQueue.size(); ++br) {
                 const qreal radius = subRadii[br];
                 const int remaining = branchQueue.size() - bCursor;
                 const double chordRatio = qMin(0.95, (branchDiam + 5.0 * scale) / (2.0 * radius));
                 const double minAngleStep = qMax(8.0, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
 
-                // Check whether a full 360-deg concentric ring fits inside screen bounds
                 bool fullCircleFits = true;
                 for (int deg = 0; deg < 360; deg += 10) {
                     const double rad = qDegreesToRadians(double(deg));
@@ -711,12 +715,12 @@ void RadialFanOverlay::recomputeFanLayout()
 
                 if (fullCircleFits) {
                     const int maxFullCap = qMax(1, static_cast<int>(qFloor(360.0 / minAngleStep)));
-                    // Ring 1 = snug 6-orb full circle; Ring 2+ = staggered concentric ring!
-                    const int targetCount = qMin(remaining, (br == 0) ? qMin(6, maxFullCap) : maxFullCap);
-                    const double stepDeg = (targetCount == maxFullCap || (br == 0 && targetCount >= 5))
+                    // Put up to 12 items cleanly into the single primary ring around hubCenter!
+                    const int targetCount = qMin(remaining, (br == 0) ? qMin(12, maxFullCap) : maxFullCap);
+                    const double stepDeg = (targetCount >= 4)
                         ? (360.0 / targetCount)
-                        : qMin(360.0 / qMax(1, targetCount), minAngleStep * 1.08);
-                    const bool useFullWrap = (targetCount >= 5 && br == 0) || (targetCount * stepDeg >= 320.0);
+                        : qMin(360.0 / qMax(1, targetCount), minAngleStep * 1.15);
+                    const bool useFullWrap = (targetCount >= 4);
                     const double stagger = (br % 2 == 1) ? (stepDeg * 0.5) : 0.0;
                     const double dir = reverseSweep ? -1.0 : 1.0;
 
@@ -743,7 +747,6 @@ void RadialFanOverlay::recomputeFanLayout()
                         ++placed;
                     }
                 } else {
-                    // Screen-edge clipped: find widest continuous arc centered around outDeg
                     const double halfSweep = 175.0;
                     double bestStart = 0.0, bestEnd = 0.0, curStart = 0.0;
                     bool bestContainsOut = false;
