@@ -428,6 +428,7 @@ void RadialFanOverlay::recomputeFanLayout()
     QList<RadialSlotItem> fallbackActions;
 
     for (int r = 1; r <= outerRingsRequested; ++r) {
+        if (m_activeBranch != BranchNone && r >= 2) break;
         const bool isSecondActionRing = (r == 1);
         const qreal itemDiameter = isSecondActionRing ? actionRing2Diameter : outerDiameter;
         const qreal halfItem = itemDiameter * 0.5;
@@ -662,73 +663,95 @@ void RadialFanOverlay::recomputeFanLayout()
             addSys(QStringLiteral("sys_settings"), QStringLiteral("KDE 系统设置"), false, QColor("#9aa8ff"));
         }
 
-        const qreal branchDiam = qBound(40.0, outerDiameter - 2.0, 48.0);
-        const qreal branchHalf = branchDiam * 0.5;
-        const qreal branchEdgePad = branchHalf + 6.0;
-        const QRectF branchSafeBounds = QRectF(bounds).adjusted(branchEdgePad, branchEdgePad, -branchEdgePad, -branchEdgePad);
-        const qreal baseRadius = m_ringRadii.isEmpty() ? (m_fanRadius + firstRingGap) : m_ringRadii.last();
-        const qreal branchStep = qMax(branchDiam + 7.0, ringStep);
+        if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
+            // Compact hub-centered satellite cluster: tightly wraps around the active hub orb
+            // so a thumb on a touchscreen only moves ~50px along short straight spokes!
+            const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
+            const qreal hubRadius = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5;
+            const qreal branchDiam = qBound(38.0, actionRing2Diameter - 2.0, 44.0);
+            const qreal branchHalf = branchDiam * 0.5;
+            const qreal branchEdgePad = branchHalf + 5.0;
+            const QRectF branchSafeBounds = QRectF(bounds).adjusted(branchEdgePad, branchEdgePad, -branchEdgePad, -branchEdgePad);
 
-        int bCursor = 0;
-        for (int br = 0; br < 2 && bCursor < branchQueue.size(); ++br) {
-            const qreal radius = baseRadius + branchStep * (br + 1);
-            double bestStart = 0.0, bestEnd = 0.0, curStart = 0.0;
-            bool inRun = false;
-            const int steps = qRound(halfScanSweep * 2.0);
-            for (int s = 0; s <= steps; ++s) {
-                const double offset = -halfScanSweep + s;
-                const double rad = qDegreesToRadians(centerDeg + offset);
-                const QPointF pt = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
-                const bool ok = branchSafeBounds.contains(pt);
-                if (ok && !inRun) { curStart = offset; inRun = true; }
-                else if (!ok && inRun) {
-                    if ((offset - 1.0 - curStart) > (bestEnd - bestStart)) {
-                        bestStart = curStart; bestEnd = offset - 1.0;
+            const double outDeg = qRadiansToDegrees(qAtan2(hubCenter.y() - m_ballCenterGlobal.y(),
+                                                           hubCenter.x() - m_ballCenterGlobal.x()));
+            const qreal subR1 = hubRadius + branchHalf + 11.0 * scale;
+            const qreal subR2 = subR1 + branchDiam * 0.90 + 6.0 * scale;
+            const qreal subRadii[2]{subR1, subR2};
+
+            int bCursor = 0;
+            for (int br = 0; br < 2 && bCursor < branchQueue.size(); ++br) {
+                const qreal radius = subRadii[br];
+                // Find the longest continuous valid non-overlapping arc around hubCenter
+                // centered outward from the main ball (up to +/-150 deg around outDeg).
+                const double halfSweep = (br == 0) ? 148.0 : 126.0;
+                double bestStart = 0.0, bestEnd = 0.0, curStart = 0.0;
+                bool bestContainsOut = false;
+                bool inRun = false;
+                const int steps = qRound(halfSweep * 2.0);
+                auto finishRun = [&](double runEnd) {
+                    const bool containsOut = (curStart <= 0.0 && runEnd >= 0.0);
+                    const double span = runEnd - curStart;
+                    const double bestSpan = bestEnd - bestStart;
+                    if ((containsOut && !bestContainsOut && span >= 20.0) ||
+                        (containsOut == bestContainsOut && span > bestSpan)) {
+                        bestStart = curStart;
+                        bestEnd = runEnd;
+                        bestContainsOut = containsOut;
                     }
-                    inRun = false;
+                };
+                for (int s = 0; s <= steps; ++s) {
+                    const double offset = -halfSweep + s;
+                    const double rad = qDegreesToRadians(outDeg + offset);
+                    const QPointF pt = hubCenter + QPointF(qCos(rad), qSin(rad)) * radius;
+                    const bool ok = branchSafeBounds.contains(pt) && fitsWithoutOverlap(pt, branchDiam);
+                    if (ok && !inRun) { curStart = offset; inRun = true; }
+                    else if (!ok && inRun) { finishRun(offset - 1.0); inRun = false; }
                 }
-            }
-            if (inRun && (halfScanSweep - curStart) > (bestEnd - bestStart)) {
-                bestStart = curStart; bestEnd = halfScanSweep;
-            }
-            const double arcSpanDeg = bestEnd - bestStart;
-            if (arcSpanDeg < 10.0) break;
+                if (inRun) finishRun(halfSweep);
 
-            const double chordRatio = qMin(0.95, (branchDiam + 6.0 * scale) / (2.0 * radius));
-            const double minAngleStep = qMax(5.5, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
-            const int maxCap = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
-            const int remaining = branchQueue.size() - bCursor;
-            const int count = qMin(maxCap, remaining);
+                const double arcSpanDeg = bestEnd - bestStart;
+                if (arcSpanDeg < 6.0) continue;
 
-            const double arcMid = centerDeg + (bestStart + bestEnd) * 0.5;
-            const double desiredStep = qMax(minAngleStep, minAngleStep * 1.12);
-            const double effectiveSpan = (count > 1) ? qMin(arcSpanDeg, (count - 1) * desiredStep) : 0.0;
-            const double stepDeg = (count > 1) ? (effectiveSpan / (count - 1)) : 0.0;
-            const double startDeg = reverseSweep ? (arcMid + effectiveSpan * 0.5) : (arcMid - effectiveSpan * 0.5);
-            const double dir = reverseSweep ? -1.0 : 1.0;
+                const double chordRatio = qMin(0.95, (branchDiam + 5.0 * scale) / (2.0 * radius));
+                const double minAngleStep = qMax(8.0, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
+                const int maxCap = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
+                const int remaining = branchQueue.size() - bCursor;
+                // Keep 1st satellite ring snug (up to 6-7 items) and stagger overflow into 2nd ring
+                const int count = qMin(maxCap, remaining);
 
-            const int ringIdx = m_ringRadii.size();
-            int placed = 0;
-            for (int i = 0; i < count && bCursor < branchQueue.size(); ++i) {
-                const double deg = startDeg + dir * stepDeg * i;
-                const double rad = qDegreesToRadians(deg);
-                const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
-                if (!branchSafeBounds.contains(finalCenter)) continue;
-                if (!fitsWithoutOverlap(finalCenter, branchDiam)) continue;
+                const double arcMid = outDeg + (bestStart + bestEnd) * 0.5;
+                const double desiredStep = qMax(minAngleStep, minAngleStep * 1.04);
+                const double effectiveSpan = (count > 1) ? qMin(arcSpanDeg, (count - 1) * desiredStep) : 0.0;
+                const double stepDeg = (count > 1) ? (effectiveSpan / (count - 1)) : 0.0;
+                const double startDeg = reverseSweep ? (arcMid + effectiveSpan * 0.5) : (arcMid - effectiveSpan * 0.5);
+                const double dir = reverseSweep ? -1.0 : 1.0;
 
-                RadialSlotItem item = branchQueue[bCursor++];
-                item.ringIndex = ringIdx;
-                item.centerGlobal = finalCenter;
-                item.rectGlobal = QRectF(finalCenter.x() - branchHalf, finalCenter.y() - branchHalf, branchDiam, branchDiam);
-                m_slots.append(item);
-                finalCentersPlaced.append(finalCenter);
-                finalDiametersPlaced.append(branchDiam);
-                ++placed;
-            }
-            if (placed > 0) {
-                m_ringRadii.append(radius);
-                m_outermostRadius = qMax(m_outermostRadius, radius + branchHalf);
-                m_activeRingCount = m_ringRadii.size();
+                const int ringIdx = m_ringRadii.size();
+                int placed = 0;
+                qreal maxDistFromBall = m_outermostRadius;
+                for (int i = 0; i < count && bCursor < branchQueue.size(); ++i) {
+                    const double deg = startDeg + dir * stepDeg * i;
+                    const double rad = qDegreesToRadians(deg);
+                    const QPointF finalCenter = hubCenter + QPointF(qCos(rad), qSin(rad)) * radius;
+                    if (!branchSafeBounds.contains(finalCenter)) continue;
+                    if (!fitsWithoutOverlap(finalCenter, branchDiam)) continue;
+
+                    RadialSlotItem item = branchQueue[bCursor++];
+                    item.ringIndex = ringIdx;
+                    item.centerGlobal = finalCenter;
+                    item.rectGlobal = QRectF(finalCenter.x() - branchHalf, finalCenter.y() - branchHalf, branchDiam, branchDiam);
+                    m_slots.append(item);
+                    finalCentersPlaced.append(finalCenter);
+                    finalDiametersPlaced.append(branchDiam);
+                    maxDistFromBall = qMax(maxDistFromBall, QLineF(m_ballCenterGlobal, finalCenter).length() + branchHalf);
+                    ++placed;
+                }
+                if (placed > 0) {
+                    m_ringRadii.append(QLineF(m_ballCenterGlobal, hubCenter).length() + radius);
+                    m_outermostRadius = qMax(m_outermostRadius, maxDistFromBall);
+                    m_activeRingCount = m_ringRadii.size();
+                }
             }
         }
     }
@@ -856,7 +879,27 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     if (directBest >= 0) return directBest;
     if (!magneticSector) return -1;
 
-    // 2. Multi-ring magnetic sector hit in FlickFanMode:
+    // 2. Compact hub-centered magnetic hit when a branch satellite cluster is active!
+    if (m_activeBranch != BranchNone && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
+        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
+        const qreal hubDist = QLineF(hubCenter, globalPt).length();
+        const qreal ballToHub = QLineF(m_ballCenterGlobal, hubCenter).length();
+        if (ray.length() >= ballToHub - 10.0 && hubDist <= 145.0) {
+            int bestBranch = -1;
+            qreal bestBranchDist = 52.0;
+            for (int i = 0; i < m_slots.size(); ++i) {
+                if (!m_slots[i].isBranchItem) continue;
+                const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
+                if (d < bestBranchDist) {
+                    bestBranchDist = d;
+                    bestBranch = i;
+                }
+            }
+            if (bestBranch >= 0) return bestBranch;
+        }
+    }
+
+    // 3. Multi-ring magnetic sector hit in FlickFanMode:
     // match the concentric ring closest to finger's radial distance, then closest angle!
     const qreal dist = ray.length();
     if (dist > m_outermostRadius + 40.0) return -1;
@@ -1233,28 +1276,59 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
 
     // Clean glowing tether line to the currently selected slot in FlickFanMode
     if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
-        const QPointF slotLocal = m_slots[m_highlightedSlot].centerGlobal - origin;
+        const RadialSlotItem &hi = m_slots[m_highlightedSlot];
+        const QPointF slotLocal = hi.centerGlobal - origin;
         p.save();
-        p.setPen(QPen(QColor(102, 188, 255, 165), 2.6, Qt::SolidLine, Qt::RoundCap));
-        p.drawLine(localBallCenter, slotLocal);
+        p.setPen(QPen(QColor(102, 188, 255, 170), 2.4, Qt::SolidLine, Qt::RoundCap));
+        if (hi.isBranchItem && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
+            const QPointF hubLocal = m_slots[m_branchHubSlotIndex].centerGlobal - origin;
+            p.drawLine(localBallCenter, hubLocal);
+            p.drawLine(hubLocal, slotLocal);
+        } else {
+            p.drawLine(localBallCenter, slotLocal);
+        }
         p.restore();
     }
 
-    // Subtle luminous branch connector from active hub orb -> branched outer sub-ring
+    // Compact short straight spokes radiating from the active hub orb -> its satellite cluster
     if (m_activeBranch != BranchNone && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
         const QPointF hubLocal = m_slots[m_branchHubSlotIndex].centerGlobal - origin;
-        const QColor branchAccent = (m_activeBranch == BranchTray) ? QColor(102, 217, 255, 118)
-                                                                   : QColor(154, 168, 255, 118);
+        const qreal hubR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5;
+        const QColor branchAccent = (m_activeBranch == BranchTray) ? QColor(102, 217, 255, 165)
+                                                                   : QColor(154, 168, 255, 165);
+        int firstBranchRing = -1;
+        for (const RadialSlotItem &s : m_slots) {
+            if (s.isBranchItem) { firstBranchRing = s.ringIndex; break; }
+        }
+        auto drawShortEdgeLine = [&](const QPointF &a, qreal rA, const QPointF &b, qreal rB) {
+            const QPointF delta = b - a;
+            const qreal dist = std::hypot(delta.x(), delta.y());
+            if (dist <= rA + rB + 1.0) return;
+            const QPointF u = delta / dist;
+            p.drawLine(a + u * (rA - 0.5), b - u * (rB - 0.5));
+        };
         p.save();
         p.setPen(QPen(branchAccent, 2.0, Qt::SolidLine, Qt::RoundCap));
         for (const RadialSlotItem &s : m_slots) {
             if (!s.isBranchItem) continue;
             const QPointF targetLocal = s.centerGlobal - origin;
-            const QPointF mid = (hubLocal + targetLocal) * 0.5;
-            QPainterPath curve;
-            curve.moveTo(hubLocal);
-            curve.quadTo(mid + (mid - localBallCenter) * 0.08, targetLocal);
-            p.drawPath(curve);
+            const qreal targetR = s.rectGlobal.width() * 0.5;
+            if (s.ringIndex == firstBranchRing) {
+                drawShortEdgeLine(hubLocal, hubR, targetLocal, targetR);
+            } else {
+                // 2nd-tier satellite orb: short straight link to its closest 1st-tier neighbor
+                const RadialSlotItem *nearest = nullptr;
+                qreal bestD = 1e9;
+                for (const RadialSlotItem &n : m_slots) {
+                    if (!n.isBranchItem || n.ringIndex != firstBranchRing) continue;
+                    const qreal d = QLineF(n.centerGlobal, s.centerGlobal).length();
+                    if (d < bestD) { bestD = d; nearest = &n; }
+                }
+                if (nearest) {
+                    drawShortEdgeLine(nearest->centerGlobal - origin, nearest->rectGlobal.width() * 0.5,
+                                      targetLocal, targetR);
+                }
+            }
         }
         p.restore();
     }
