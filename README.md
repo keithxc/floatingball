@@ -1,247 +1,76 @@
 # FloatingBall
 
-基于 Qt 的悬浮球小工具，优先适配触控操作与桌面快捷操作。
+Touch-first desktop floating ball for touchscreen laptops and desktops (**macOS**, **Linux KDE Wayland / X11**, and **Windows**).
 
-See [TODO.md](TODO.md) for the fooView-inspired feature roadmap, implementation
-priorities and platform acceptance criteria.
+Combines **Xiaomi Mi 5 (MIUI Quick Ball)** single-stroke radial ergonomics with **Android fooView** live crosshair selection, instant local OCR, floating reference pins, touch clipboard, and window-chrome rescue controls.
 
-## Application icon
+See [FOOVIEW_STUDY.md](FOOVIEW_STUDY.md) for the reference workflow study and [TODO.md](TODO.md) for platform milestones.
 
-The icon shares the floating ball's charcoal sphere, two translucent rings and
-white center. Portable PNG/ICO/ICNS assets retain alpha around the circular shape.
-Windows embeds the ICO in the executable; Linux installs the desktop entry and
-hicolor icons and uses the matching Wayland application ID.
+---
 
-On macOS, Xcode 26+ compiles the layered `assets/AppIcon.icon` into `Assets.car`
-for Apple's Default, Dark and Clear appearances. Cocoa uses the bundle icon
-directly so Qt does not replace its native materials with a flat pixmap.
-Older Xcode or `-DFLOATINGBALL_NATIVE_APP_ICON=OFF` uses the transparent ICNS
-fallback. The system controls whether the native icon uses a rounded-square
-glass background. See [Apple's Icon Composer documentation](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer).
+## Core Touch-PC Interaction Grammar
 
-To refresh the portable assets after changing `assets/floatingball.svg`, run
-`scripts/generate-icons.py --output /absolute/build/path/icons` with ImageMagick
-and Pillow, review the staged images, then copy the PNG/ICO/ICNS files into
-`assets/`. The layered icon's SVG files use the same 1024-pixel geometry and are
-editable in Icon Composer.
+Designed from the ground up so touching the screen on a **Touchscreen MacBook (macOS)** or **Touchscreen Linux Desktop (KDE Plasma Wayland)** feels effortless, immediate, and conflict-free:
 
-## 当前 macOS 版行为
+1. **Idle Edge Half-Ring (Xiaomi Mi 5 / MIUI Style)**
+   - Docks cleanly to the left or right screen bezel.
+   - After 2.2 seconds idle, smoothly tucks halfway into the screen edge as a subtle glowing double-ring crescent (`~38%` opacity) — stays out of your content while remaining effortless to catch with a thumb or finger sliding from the bezel.
+2. **Short Tap (`Tap`)**
+   - Blooms a **5-slot inward semicircle fan** rendered on a unified single-window canvas (zero multi-window compositor thrashing, zero hover geometry jitter). Tap any slot to run, or tap empty desktop space without losing clicks.
+3. **Press & Immediate Pull (`Press-Slide-Release` in 0.2s)**
+   - Pull inward from the ball without waiting: all 5 radial slots appear immediately. Slide onto a slot (magnetized angular snap + luminous selection ring) and lift your finger to execute in a single stroke. Slide back onto the center `×` to cancel.
+4. **Pull Past Fan -> Seamless fooView Crosshair (`🎯`)**
+   - Keep pulling your finger past the radial fan ring onto the desktop: the fan smoothly gives way to the **fooView Crosshair Reticle (`🎯`)**!
+   - **Dwell ~0.3s steady** to arm a live selection box right at your finger, drag across any text or graphic, and lift your finger: **ActionResultHud** springs open right beside your selection with **automatic local OCR** (`Apple Vision` on macOS, `Tesseract` on Linux) and 44pt+ 1-tap pills (`复制图` / `抠字` / `贴桌面` / `标注` / `保存`).
+   - Touching a second finger or pressing `Esc` / right-click cancels at any point.
+5. **Stationary Hold (`~0.38s`) & Drag**
+   - Hold still on the ball for `0.38s` to pick it up, drag freely across displays, and drop to snap cleanly to the nearest left or right screen edge (preserving relative vertical height across resolution changes). Desktop mouse users can also `Alt/Cmd/Ctrl + Drag` or middle-drag immediately.
 
-- 单击：展开或收起动作子球
-- 左键拖动：移动悬浮球
-- 滚轮：缩放悬浮球（带小幅过渡动画）
-- 双指缩放：缩放悬浮球（macOS/触控屏）
-- 悬停：平滑调整透明度，尺寸和位置保持不变
-- 右键 / 长按：打开快捷菜单
-- 双击：也可展开或收起动作子球
+---
 
-## 快捷动作（macOS）
+## Five Default Touch-PC Radial Slots (Customizable)
 
-- 切换输入法（Ctrl + Space）
-- 切换输入法（Command + Space）
-- 复制（Command + C）
-- 粘贴（Command + V）
-- 打开终端
-- 打开浏览器
-- 打开主目录
+| Slot | Default Action | Why It Shines on a Touchscreen PC |
+| --- | --- | --- |
+| **1 (Top)** | **全局返回 (`Back`)** | Sends `⌘[` (macOS) or `Alt+Left` (Linux) to the active app without stealing focus — effortless one-finger back in browsers, Finder/Dolphin, IDEs, and PDF viewers. |
+| **2 (Upper)** | **多任务全览 (`Overview`)** | Opens macOS **Mission Control** or KDE Wayland **KWin Overview** for big-card touch window switching. |
+| **3 (Center C-Slot)** | **准星圈选 (`Crosshair`)** | Launches region capture, or pull straight through into live fooView Crosshair dwell-and-crop -> instant OCR / Pin / Annotate HUD. |
+| **4 (Lower)** | **触控剪贴板 (`Clipboard`)** | Non-activating floating Clipboard Bubble: 1-tap **Paste to Active Window**, pinned snippets (`★`), quick scratchpad notes, and bounded text/image history. |
+| **5 (Bottom)** | **触控甲板 (`Quick Deck`)** | Giant `58pt` touch tiles rescuing you from tiny `12pt` window buttons: **Close Tab/Window (`✕`)**, **Minimize (`−`)**, **Fullscreen (`⤢`)**, **Next Tab (`⇥`)**, **Back/Forward**, **Copy/Paste**, **Volume Touch Slider**, **Input Method Switch**, **Screenshot Workbench**, and **Screen Recording**. |
 
-快捷键动作会通过系统脚本触发对应按键，再执行你设置的系统行为（比如切换输入法），用于“远程场景里有时键盘事件丢失”时快速补齐操作。
+---
 
-## Screenshot Bubble
+## Non-Activating Native Architecture
 
-Click the main ball, then the screenshot satellite (截图). The other satellites
-open Terminal, the browser and the home directory, or trigger copy/paste.
-The screenshot panel is also available from the right-click / long-press menu.
+- **macOS**: Configured as non-activating `NSPanel` (`NSWindowStyleMaskNonactivatingPanel`, `NSFloatingWindowLevel`, `CanJoinAllSpaces | FullScreenAuxiliary`) with native `NSVisualEffectView` dark vibrancy backdrop, `CGEvent` HID chord injection, `TISSelectInputSource` IME switching, and `Apple Vision` local OCR.
+- **Linux (NixOS / KDE Plasma Wayland)**: Uses `LayerShellQt` (`LayerOverlay`, `KeyboardInteractivityNone` on touch surfaces so active Wayland apps retain focus), `org.kde.kglobalaccel` DBus shortcuts for KWin Overview / Window Close / Minimize / Maximize, KWin 6 virtual desktop & live open-window bridge, `spectacle` / `xdg-desktop-portal` capture, PipeWire recording, `wpctl` audio, `wtype` key injection, and `Tesseract` (`chi_sim+chi_tra+eng`) local OCR.
+- **Windows (Phase 2 target)**: Preserves Win32 `CF_DIBV5 + PNG` lossless clipboard, `FOLDERID_Screenshots`, and topmost window groundwork.
 
-- Floating preview of all readable PNG/JPEG/WebP images in the selected directory,
-  newest first, with horizontally scrollable thumbnails.
-- Circular, AssistiveTouch-inspired charcoal ball with a white center. Its painted
-  opacity is 30% while idle, 85% during hover/menu use and 94% while dragging.
-  Leaving it idle for 1.2 seconds starts a smooth fade; an expanded orbit stays clear.
-  Action satellites use the same circular charcoal surface and stay at 85%
-  opacity while expanded, matching the main ball. Pressing an action uses 94%
-  opacity for feedback. Their icons keep the same size and stay centered on hover.
-  Hovering or leaving any circle preserves every circle's size and position;
-  only explicit resizing, dragging, screen adaptation and orbit transitions
-  update their geometry.
-  A separate translucent label bubble fades/slides in alongside the hovered
-  action and passes mouse input through; leaving smoothly dismisses it.
-  Orbit return fades are painted directly for Wayland compatibility.
-  The ball and orbit adapt to available logical screen space after resolution,
-  display scaling or monitor changes. Smaller screens reduce their size; returning
-  to a larger screen restores the preferred size and keeps surfaces within bounds.
-  A single click responds immediately. Satellites shrink and fade back into the
-  ball on close, can reverse direction mid-animation, and follow mouse/touch
-  dragging synchronously during expansion, use and return.
-  The light screenshot card hides the thumbnail strip for a single image;
-  a mouse wheel or trackpad scrolls larger galleries. Drag the card header to move it.
-- Separate image clipboard and absolute original-file-path clipboard actions.
-- Pen, arrow, rectangle, highlighter, mosaic and text annotations, with color
-  and thickness controls, undo (up to 12 edits), and Save Copy as PNG.
-- Copy Image includes current annotations; Copy Path still refers to the original.
-- The ball and satellites stay visible above normal windows when another app
-  becomes active on macOS, Windows and supported Linux desktops. The screenshot panel starts pinned so it can serve
-  as a reference while working in other apps. Unpin to dismiss on focus loss;
-  Escape or Close hides it in either mode.
-- Copy and Undo also support the platform's standard keyboard shortcuts.
-- Choose a screenshot directory in the panel; the choice persists across launches.
-  macOS uses the configured system screenshot location when available, otherwise
-  the Desktop. Windows resolves the Screenshots known folder (including system
-  redirection), with a Pictures/Screenshots fallback. Linux looks for existing
-  Screenshots, 截图 or 截屏 directories under the system Pictures location, otherwise
-  uses Pictures/Screenshots. Linux tools may save elsewhere; choose that folder
-  manually. No platform screenshot settings are modified.
-- Import from Clipboard explicitly saves the current clipboard image as a unique
-  PNG in the selected directory, then shows it immediately. A missing directory
-  is created on import; browsing alone does not create it. Empty clipboard and
-  write failures show a message without replacing the current image.
-- Directory changes trigger a debounced refresh. A two-second fallback detects
-  file replacement and retries partially written images while the panel is visible
-  and outside annotation mode. Uppercase extensions are accepted.
-  It reads PNG/JPEG/WebP files from the selected directory; use a dedicated
-  screenshot folder to avoid mixing other images into the recent list.
+---
 
-### Capture and recording workbench
+## Build & Verification
 
-The workflow follows [KDE Spectacle](https://docs.kde.org/stable_kf6/en/spectacle/spectacle/using.html):
-select a capture mode, take the screenshot, then copy, annotate or save it.
-The workbench provides region, window, current-screen and all-screen capture,
-a 0–30 second delay with Cancel, and a cursor option where supported. Ctrl/Cmd+N
-starts the selected capture mode. FloatingBall surfaces hide during acquisition;
-cancellation restores them. Successful captures are unique lossless PNG files in
-the chosen folder and appear immediately. A failed write retains the pixels for
-Copy Image or Save Copy. Capture never implicitly replaces the clipboard.
+All builds and test outputs stay outside the source checkout via `tools/build-paths.py` (or `bash scripts/build.sh test` on managed hosts):
 
-Unexported annotations block changing images, importing, changing directories
-or taking another screenshot until Copy Image or Save Copy succeeds. The original
-screenshot remains unchanged; Copy Path always refers to that original file.
-
-The Recording menu records a screen, or a selected window on macOS/Windows.
-A small floating control shows elapsed time, Pause/Resume and Stop and Save.
-Videos use MP4/H.264, with WebM/VP9 as an encoder fallback, and are saved under
-`Recordings` in the chosen screenshot folder. The workbench then offers Open
-Recording and Copy Recording Path. Recording currently has no audio or GIF export.
-
-Platform details:
-
-- macOS uses the system capture service; region selection uses a frozen image
-  of the monitor containing the workbench. Native window capture uses the system
-  window picker. Screen Recording permission is required.
-- Windows captures all displays for region selection. Window screenshots select
-  a visible window rectangle, so other windows covering it remain in the image.
-- KDE Wayland uses Spectacle's native screenshot picker when available, otherwise
-  the desktop screenshot portal. Recording uses the screen-sharing portal and
-  PipeWire. KDE's chooser can provide a screen or region; window recording is
-  disabled until the Qt backend supports it. Other portal backends may expose
-  different screenshot choices. X11 window screenshots currently require region mode.
-
-Immediate CLI actions are also available:
+### macOS
 
 ```sh
-FloatingBall --capture --capture-mode region --capture-delay 3
-FloatingBall --capture --capture-mode screen --capture-cursor
-FloatingBall --record screen
+bash scripts/build.sh test
 ```
-
-`--capture-mode` accepts `region`, `window`, `screen` or `desktop`.
-`--record` accepts `screen` or `window` on supported platforms.
-
-Use `--screenshot-directory /absolute/path` to select a folder for one session
-without updating the saved folder, and `--show-screenshots` to open its preview
-on launch. Choosing a different folder in the panel still saves that explicit choice.
-
-### Build on macOS
-
-Requires Qt 6.8 or newer with Widgets, LinguistTools and Multimedia, CMake 3.16+,
-and a C++17 toolchain. Recording requires the Qt FFmpeg multimedia plugin and
-its codec libraries in the runtime package.
-From the umbrella workspace, resolve an external build directory:
-
-```sh
-python3 tools/build-paths.py --project floatingball --checkout "$PWD/floatingball" --task dev --purpose work
-cmake -S floatingball -B /absolute/resolved/work/cmake -DCMAKE_PREFIX_PATH=/path/to/qt
-cmake --build /absolute/resolved/work/cmake
-```
-
-### Integration checks
-
-Enable `-DFLOATINGBALL_BUILD_TESTS=ON` when configuring the external CMake build,
-then run `ctest --test-dir /absolute/resolved/work/cmake --output-on-failure`.
-The checks use the offscreen Qt platform, isolated settings and owned temporary
-fixtures beneath that build directory. They cover folder reads, clipboard import,
-failed writes, case-insensitive extensions, partial captures, directory updates,
-annotation/undo, original-file preservation, and the screenshot satellite action.
-They also cover transparent clipboard images, hover events during orbit expansion,
-scaled region crops, reverse drags, delayed capture cancellation, unique PNGs,
-failed-save recovery and protection of unexported annotations.
-Offscreen tests do not verify native window placement, compositor stacking or
-system clipboard interoperability. macOS has been compiled and tested locally;
-the Cocoa plugin checks also cover clipboard image/path, annotation/undo,
-directory updates, compact gallery layout, wheel scrolling, and the satellite action
-with isolated settings and clipboard restoration. Native Cocoa checks also verify
-elevated window levels, front-to-back ordering above a normal window, and continued
-visibility when a separate test application becomes active. The owned focus fixture
-exits after verification. Native mouse input and switching Spaces/fullscreen remain
-separate acceptance checks.
-Windows x86_64 was compiled with Qt 6.8.3 and MinGW 13.1, and passed
-both offscreen and native Windows plugin checks. SSH-driven mouse input in the
-active Windows desktop also verified the satellite action, folder picker, clipboard,
-annotation/save/undo, folder updates, pinning above another window, focus dismissal,
-and Escape with the compact layout at 150% display scaling. Actual mouse dragging
-kept all satellites within one pixel of their expected positions across eight samples;
-closing frames also verified shrink/fade before the satellites disappear. Decoded
-clipboard and saved annotation pixels matched exactly.
-Linux x86_64 was built and tested on NixOS with Qt 6.11.2 and KDE/KWin 6.7.5.
-Native Wayland checks cover orbit motion and the screenshot actions. KWin inspection
-verified that the ball and pinned panel remain above a separate active application,
-and that modal folder dialogs appear above their temporarily lowered parent. A
-separate Wayland clipboard client received both the PNG image and original file path.
-Multiple monitors, other Linux compositors and other display scales need separate checks.
-
-Capture/recording acceptance on 2026-10-11: macOS, Windows 125 and pk4's KDE
-Wayland each passed both CTest suites and acquired a real desktop PNG containing
-known fixture pixels. Each produced an H.264 video that decoded completely.
-macOS also passed selected-window recording and decoded all 212 screen-recording
-frames through AVFoundation; native button input
-verified recording start, pause with a stopped timer, resume, stop/save and return
-to the workbench. A 34.2-second saved video excluded the pause interval. The
-packaged Windows app and Nix wrapper also acquired fresh desktop captures.
-Mixed-DPI cross-monitor regions, every interactive window picker, audio recording
-and other Wayland compositors remain separate acceptance work.
-
-### Windows build
-
-With Qt 6 for MinGW and its matching compiler on the process PATH, configure an
-external output directory and enable the integration checks:
-
-```powershell
-cmake -S . -B C:/path/to/build/floatingball/work/cmake -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH=C:/path/to/Qt/6.8.3/mingw_64 -DFLOATINGBALL_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build C:/path/to/build/floatingball/work/cmake --parallel 2
-ctest --test-dir C:/path/to/build/floatingball/work/cmake --output-on-failure
-```
-
-The Windows default directory uses `FOLDERID_Screenshots`, including system
-folder redirection. The compiled application links Shell32, Ole32 and UUID.
-Use `windeployqt` to collect runtime DLLs and platform/image-format plugins for
-an independent test package.
-
 
 ### Linux / NixOS
 
-The Nix flake includes Qt's Wayland, image-format and multimedia plugins,
-PipeWire runtime lookup and LayerShellQt.
-Build to an external result link, or run directly without changing system configuration:
-
 ```sh
-nix build --out-link /absolute/path/to/build/floatingball/dist/nix-package
-nix run . -- --screenshot-directory /absolute/path/to/screenshots --show-screenshots
+eval "$(python3 ~/mygit/tools/build-paths.py --project floatingball --checkout ~/mygit/floatingball --task dev --shell)"
+nix build ~/mygit/floatingball --out-link "$MYGIT_DIST_DIR/nix-package"
 ```
 
-For a development build, enter `nix develop`, then use the same external CMake
-output-directory commands as above. On Wayland, FloatingBall uses LayerShellQt
-6.6 or newer to position each ball and keep the screenshot card in the compositor's
-overlay layer. Modal dialogs temporarily lower blocked floating surfaces; closing
-the dialog restores the overlay layer. The compositor must support layer-shell;
-KDE Plasma is the verified desktop. X11 uses Qt's normal topmost window hints.
-Without LayerShellQt, a plain CMake build can run on X11; native Wayland placement
-and persistent stacking are not supported by ordinary Qt window hints alone.
+### CLI Options
+
+```sh
+FloatingBall --show-deck
+FloatingBall --show-clipboard
+FloatingBall --show-screenshots
+FloatingBall --capture --capture-mode region --capture-delay 0
+FloatingBall --record screen
+```
