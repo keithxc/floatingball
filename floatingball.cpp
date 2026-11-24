@@ -7,6 +7,7 @@
 #include "panelbackdrop.h"
 #include "quickdeck.h"
 #include "screenshotpanel.h"
+#include "systempopover.h"
 #include "uiicons.h"
 
 #include <QAbstractAnimation>
@@ -15,6 +16,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEasingCurve>
@@ -45,6 +47,7 @@
 #include <QSystemTrayIcon>
 #include <QTabWidget>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWindow>
@@ -80,6 +83,7 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("launcher")) return FloatingIcons::Launcher;
     if (id == QLatin1String("sys_wifi")) return FloatingIcons::Wifi;
     if (id == QLatin1String("sys_bluetooth")) return FloatingIcons::Bluetooth;
+    if (id == QLatin1String("sys_mihomo")) return FloatingIcons::Proxy;
     if (id == QLatin1String("sys_dnd")) return FloatingIcons::Bell;
     if (id == QLatin1String("sys_nightlight")) return FloatingIcons::Moon;
     if (id == QLatin1String("sys_power")) return FloatingIcons::Bolt;
@@ -303,14 +307,18 @@ void RadialFanOverlay::recomputeFanLayout()
                 children.append(item);
             };
             const QString wifiLabel = st.networkConnected
-                ? (st.networkText.isEmpty() ? QStringLiteral("网络 · 已连接") : QStringLiteral("网络 · ") + st.networkText)
-                : QStringLiteral("网络 · 未连接");
+                ? (st.networkText.isEmpty() ? QStringLiteral("Wi-Fi · 已连接") : QStringLiteral("Wi-Fi · ") + st.networkText)
+                : QStringLiteral("Wi-Fi · 未连接");
             addSys(QStringLiteral("sys_wifi"), wifiLabel, st.networkConnected ? QStringLiteral("Wi-Fi") : QStringLiteral("无网"),
                    st.networkConnected, QColor("#38bdf8"));
             addSys(QStringLiteral("sys_bluetooth"),
-                   st.bluetoothPowered ? QStringLiteral("蓝牙 · 已开启") : QStringLiteral("蓝牙 · 已关闭"),
-                   st.bluetoothPowered ? QStringLiteral("蓝牙开") : QStringLiteral("蓝牙"),
+                   st.bluetoothPowered ? QStringLiteral("蓝牙 · 设备与电量") : QStringLiteral("蓝牙 · 已关闭"),
+                   st.bluetoothPowered ? QStringLiteral("蓝牙") : QStringLiteral("蓝牙关"),
                    st.bluetoothPowered, QColor("#3b82f6"));
+            addSys(QStringLiteral("sys_mihomo"),
+                   QStringLiteral("Mihomo · 代理模式与节点"),
+                   QStringLiteral("Mihomo"),
+                   true, QColor("#34d399"));
             addSys(QStringLiteral("sys_dnd"),
                    st.dndEnabled ? QStringLiteral("勿扰模式 · 已开启") : QStringLiteral("勿扰模式 · 已关闭"),
                    st.dndEnabled ? QStringLiteral("勿扰开") : QStringLiteral("勿扰"),
@@ -936,9 +944,12 @@ QString RadialFanOverlay::activeLabelText() const
         } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
             text = item.trayItem.title + QStringLiteral(" › ") + item.label;
         } else if (item.kind == RadialSlotItem::SystemSlot) {
-            if (item.id == QLatin1String("sys_wifi") || item.id == QLatin1String("sys_bluetooth") ||
-                item.id == QLatin1String("sys_dnd") || item.id == QLatin1String("sys_power") ||
-                item.id == QLatin1String("sys_audio"))
+            if (item.id == QLatin1String("sys_wifi") || item.id == QLatin1String("sys_bluetooth"))
+                text += QStringLiteral(" · 松手开小窗 / 右键进 KDE 设置");
+            else if (item.id == QLatin1String("sys_mihomo"))
+                text += QStringLiteral(" · 松手开小窗 / 右键开 Web UI");
+            else if (item.id == QLatin1String("sys_dnd") || item.id == QLatin1String("sys_power") ||
+                     item.id == QLatin1String("sys_audio"))
                 text += QStringLiteral(" · 右键更多设置");
         } else if (item.isBranchHub) {
             text += QStringLiteral(" · 划入或点按进入");
@@ -2131,9 +2142,11 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
             m_fanOverlay->drillInto(item.drillKey, title.trimmed(), item.accentColor, item.centerGlobal);
             return;
         }
-        // Live system toggles update in-place without closing the control ring!
+        // Safe reversible toggles update in-place without closing the control ring.
+        // Wi-Fi / Bluetooth / Mihomo open the dedicated SystemPopover instead so
+        // swiping never accidentally drops active radios or peripherals.
         if (item.kind == RadialSlotItem::SystemSlot &&
-            (item.id == QLatin1String("sys_bluetooth") || item.id == QLatin1String("sys_dnd") ||
+            (item.id == QLatin1String("sys_dnd") ||
              item.id == QLatin1String("sys_nightlight") || item.id == QLatin1String("sys_power"))) {
             executeSlotItem(item);
             m_fanOverlay->refreshLiveLayout();
@@ -2252,6 +2265,7 @@ FloatingBall::~FloatingBall()
         delete m_actionHud;
         delete m_clipboardBubble;
         delete m_quickDeck;
+        delete m_systemPopover;
         delete m_screenshotPanel;
     }
     delete ui;
@@ -2785,6 +2799,23 @@ QuickDeck *FloatingBall::quickDeck()
     return m_quickDeck;
 }
 
+SystemPopover *FloatingBall::systemPopover()
+{
+    if (m_primaryPeer) return m_primaryPeer->systemPopover();
+    if (!m_systemPopover) {
+        m_systemPopover = new SystemPopover(statusMonitor(), nullptr);
+    }
+    return m_systemPopover;
+}
+
+void FloatingBall::openSystemPopover(int tab)
+{
+    if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
+    if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
+    const int clamped = qBound(0, tab, 2);
+    systemPopover()->revealTab(static_cast<SystemPopover::Tab>(clamped), anchorCenterGlobal().toPoint());
+}
+
 void FloatingBall::executeSlotItem(const RadialSlotItem &item)
 {
     const QPoint anchor = anchorCenterGlobal().toPoint();
@@ -2808,9 +2839,11 @@ void FloatingBall::executeSlotItem(const RadialSlotItem &item)
     if (item.kind == RadialSlotItem::SystemSlot) {
         auto *mon = statusMonitor();
         if (item.id == QLatin1String("sys_wifi")) {
-            mon->openKdeModule(QStringLiteral("kcm_networkmanagement"));
+            openSystemPopover(SystemPopover::TabWifi);
         } else if (item.id == QLatin1String("sys_bluetooth")) {
-            DesktopActions::showToast(mon->toggleBluetooth(), anchor);
+            openSystemPopover(SystemPopover::TabBluetooth);
+        } else if (item.id == QLatin1String("sys_mihomo")) {
+            openSystemPopover(SystemPopover::TabMihomo);
         } else if (item.id == QLatin1String("sys_dnd")) {
             DesktopActions::showToast(mon->toggleDoNotDisturb(), anchor);
         } else if (item.id == QLatin1String("sys_nightlight")) {
@@ -2850,9 +2883,14 @@ void FloatingBall::showSlotContextMenu(int slotIndex, const QPoint &globalPos)
         auto *mon = statusMonitor();
         closeFan(true);
         if (item.id == QLatin1String("sys_wifi")) {
-            DesktopActions::showToast(mon->toggleWifi(), anchorCenterGlobal().toPoint());
+            mon->openKdeModule(QStringLiteral("kcm_networkmanagement"));
         } else if (item.id == QLatin1String("sys_bluetooth")) {
             mon->openKdeModule(QStringLiteral("kcm_bluetooth"));
+        } else if (item.id == QLatin1String("sys_mihomo")) {
+            QSettings s;
+            QString base = s.value(QStringLiteral("mihomo/url"), QStringLiteral("http://127.0.0.1:9090")).toString().trimmed();
+            while (base.endsWith(QLatin1Char('/'))) base.chop(1);
+            QDesktopServices::openUrl(QUrl(base + QStringLiteral("/ui/")));
         } else if (item.id == QLatin1String("sys_dnd")) {
             mon->openKdeModule(QStringLiteral("kcm_notifications"));
         } else if (item.id == QLatin1String("sys_power")) {
@@ -2996,12 +3034,14 @@ void FloatingBall::recordScreen(bool window)
 void FloatingBall::toggleClipboardBubble()
 {
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
+    if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
     clipboardBubble()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 
 void FloatingBall::toggleQuickDeck()
 {
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
+    if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
     quickDeck()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 

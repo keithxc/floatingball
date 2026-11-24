@@ -54,7 +54,8 @@ enum Icon {
     Moon,
     Bolt,
     Lock,
-    Power
+    Power,
+    Proxy
 };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color)
@@ -416,6 +417,20 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         p.drawArc(QRectF(5.0, 5.5, 14.0, 14.0), 128 * 16, 284 * 16);
         path.moveTo(12.0, 3.5); path.lineTo(12.0, 11.5);
         break;
+    }
+    case Proxy: {
+        // Minimalist proxy routing diamond with dual traffic arcs/nodes
+        path.moveTo(12.0, 3.2); path.lineTo(20.6, 12.0);
+        path.lineTo(12.0, 20.8); path.lineTo(3.4, 12.0);
+        path.closeSubpath();
+        path.moveTo(7.4, 12.0); path.lineTo(16.6, 12.0);
+        path.moveTo(12.0, 7.6); path.lineTo(12.0, 16.4);
+        p.drawPath(path);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(QPointF(12.0, 12.0), 2.3, 2.3);
+        p.restore();
+        return;
     }
     }
 

@@ -1,6 +1,7 @@
 #include "actionhud.h"
 #include "clipboardbubble.h"
 #include "floatingball.h"
+#include "systempopover.h"
 #include "quickdeck.h"
 #include "screenshotpanel.h"
 #include "screentext.h"
@@ -636,8 +637,16 @@ int main(int argc, char **argv)
         ball.fanOverlay()->drillInto(QStringLiteral("control"), QStringLiteral("控制"),
                                      QColor("#9aa8ff"), QPointF(bounds.center()));
         app.processEvents();
-        check(ball.fanOverlay()->isDrilled() && ball.fanOverlay()->slotsData().size() >= 10,
+        check(ball.fanOverlay()->isDrilled() && ball.fanOverlay()->slotsData().size() >= 11,
               "drilling into Control hub opens clean single ring with ← backtrack orb");
+        bool hasWifi = false, hasBt = false, hasMihomo = false;
+        for (const RadialSlotItem &s : ball.fanOverlay()->slotsData()) {
+            if (s.id == QLatin1String("sys_wifi")) hasWifi = true;
+            else if (s.id == QLatin1String("sys_bluetooth")) hasBt = true;
+            else if (s.id == QLatin1String("sys_mihomo")) hasMihomo = true;
+        }
+        check(hasWifi && hasBt && hasMihomo,
+              "Control ring exposes Wi-Fi, Bluetooth, and Mihomo popover entries");
         // Wait past anti-bounce cooldown then drag finger onto ← backtrack orb to pop back!
         waitMs(230);
         QPointF backCenter;
@@ -649,6 +658,16 @@ int main(int argc, char **argv)
         check(!ball.fanOverlay()->isDrilled(),
               "sliding continuously onto ← backtrack orb returns cleanly to root level without releasing");
         ball.closeFan(true);
+
+        // Verify SystemPopover opens cleanly on Wi-Fi / Bluetooth / Mihomo tabs and hides on re-tap
+        ball.openSystemPopover(2);
+        app.processEvents();
+        check(ball.systemPopover() != nullptr && ball.systemPopover()->isVisible(),
+              "SystemPopover reveals cleanly on Mihomo tab");
+        ball.openSystemPopover(2);
+        app.processEvents();
+        check(!ball.systemPopover()->isVisible(),
+              "re-tapping active SystemPopover tab toggles it closed");
     }
 
     // Restore original clipboard

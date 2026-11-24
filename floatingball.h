@@ -26,6 +26,7 @@ class ActionResultHud;
 class ClipboardBubble;
 class QuickDeck;
 class ScreenshotPanel;
+class SystemPopover;
 class QScreen;
 class QSystemTrayIcon;
 class QTimer;
@@ -214,12 +215,14 @@ public:
     void recordScreen(bool window = false);
     void toggleClipboardBubble();
     void toggleQuickDeck();
+    void openSystemPopover(int tab);
     void showSettings();
 
     ScreenshotPanel *resultPanel();
     ActionResultHud *actionHud();
     ClipboardBubble *clipboardBubble();
     QuickDeck *quickDeck();
+    SystemPopover *systemPopover();
     AppDockModel *dockModel();
     RadialFanOverlay *fanOverlay() const { return m_fanOverlay; }
 
@@ -335,6 +338,7 @@ private:
     ActionResultHud *m_actionHud = nullptr;
     ClipboardBubble *m_clipboardBubble = nullptr;
     QuickDeck *m_quickDeck = nullptr;
+    SystemPopover *m_systemPopover = nullptr;
     ScreenshotCapture *m_directCapture = nullptr;
     QList<QPointer<QWidget>> m_hiddenForDirectCapture;
     QPoint m_directCaptureAnchor;

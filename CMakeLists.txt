@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools Multimedia)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools Multimedia Network)
 
 if(APPLE AND NOT IOS)
     enable_language(OBJCXX)
@@ -27,6 +27,8 @@ set(FLOATINGBALL_CORE_SOURCES
     clipboardbubble.h
     quickdeck.cpp
     quickdeck.h
+    systempopover.cpp
+    systempopover.h
     screenshotpanel.cpp
     screenshotpanel.h
     screenshotstore.cpp
@@ -49,7 +51,7 @@ qt_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES})
 
 function(floatingball_configure_common target)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(${target} PRIVATE Qt6::Widgets Qt6::Multimedia)
+    target_link_libraries(${target} PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::Network)
     target_sources(${target} PRIVATE appdock.cpp appdock.h systemstatus.cpp systemstatus.h desktopactions.cpp desktopactions.h screentext.cpp screentext.h panelbackdrop.cpp panelbackdrop.h)
 
     if(APPLE AND NOT IOS)
