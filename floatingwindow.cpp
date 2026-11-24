@@ -84,7 +84,14 @@ private:
     {
         if (syncing) return;
         QScopedValueRollback<bool> guard(syncing, true);
-        QScreen *screen = QGuiApplication::screenAt(widget->geometry().center());
+        QScreen *screen = nullptr;
+        const QVariant pinnedVar = widget->property("floatingballAssignedScreen");
+        if (pinnedVar.isValid()) {
+            auto *pinned = qvariant_cast<QScreen *>(pinnedVar);
+            if (pinned && QGuiApplication::screens().contains(pinned))
+                screen = pinned;
+        }
+        if (!screen) screen = QGuiApplication::screenAt(widget->geometry().center());
         if (!screen) screen = widget->screen();
         if (!screen) return;
         const QPoint offset = widget->pos() - screen->geometry().topLeft();

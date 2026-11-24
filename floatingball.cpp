@@ -85,6 +85,23 @@ double angularDistanceDeg(double a, double b)
     return qAbs(normalizeAngleDeg(a - b));
 }
 
+QString screenStorageKey(QScreen *screen)
+{
+    if (!screen) return QStringLiteral("default");
+    QString raw = screen->name().trimmed();
+    if (raw.isEmpty()) raw = screen->model().trimmed();
+    if (raw.isEmpty()) return QStringLiteral("default");
+    QString out;
+    out.reserve(raw.size());
+    for (QChar ch : raw) {
+        if (ch.isLetterOrNumber() || ch == QLatin1Char('-') || ch == QLatin1Char('_'))
+            out.append(ch);
+        else
+            out.append(QLatin1Char('_'));
+    }
+    return out.isEmpty() ? QStringLiteral("default") : out;
+}
+
 } // namespace
 
 // ============================================================================
@@ -131,9 +148,12 @@ void RadialFanOverlay::recomputeFanLayout()
     if (!m_owner) return;
 
     m_ballCenterGlobal = m_owner->anchorCenterGlobal();
-    QScreen *screen = QGuiApplication::screenAt(m_ballCenterGlobal.toPoint());
+    QScreen *screen = m_owner->assignedScreen();
+    if (!screen || !QGuiApplication::screens().contains(screen))
+        screen = QGuiApplication::screenAt(m_ballCenterGlobal.toPoint());
     if (!screen) screen = QGuiApplication::primaryScreen();
     if (!screen) return;
+    setProperty("floatingballAssignedScreen", QVariant::fromValue(screen));
 
     const QRect screenGeo = screen->geometry();
     const QRect bounds = screen->availableGeometry();
@@ -1192,14 +1212,20 @@ QStringList FloatingBall::defaultOrbitActions()
 #endif
 }
 
-FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
+FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
+                           QScreen *assignedScreen, FloatingBall *primaryPeer)
     : QWidget(parent),
       ui(new Ui::FloatingBall),
-      m_screenshotDirectory(screenshotDirectory)
+      m_screenshotDirectory(screenshotDirectory),
+      m_assignedScreen(assignedScreen),
+      m_primaryPeer(primaryPeer)
 {
     ui->setupUi(this);
-    setObjectName(QStringLiteral("floatingBallMain"));
+    setObjectName(m_primaryPeer ? QStringLiteral("floatingBallReplica") : QStringLiteral("floatingBallMain"));
     setProperty("floatingballSurface", true);
+    if (!m_assignedScreen) m_assignedScreen = QGuiApplication::primaryScreen();
+    if (m_assignedScreen)
+        setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
 
     setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
                    Qt::Tool | Qt::WindowDoesNotAcceptFocus);
@@ -1280,12 +1306,14 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
         }
     });
 
-    // Live system mute/volume badge synchronization on the ball itself
-    m_audioPollTimer = new QTimer(this);
-    m_audioPollTimer->setInterval(6000);
-    connect(m_audioPollTimer, &QTimer::timeout, this, [this] {
-        if (isVisible()) refreshSystemAudioState();
-    });
+    // Live system mute/volume badge synchronization on the ball itself (primary only)
+    if (isPrimaryBall()) {
+        m_audioPollTimer = new QTimer(this);
+        m_audioPollTimer->setInterval(6000);
+        connect(m_audioPollTimer, &QTimer::timeout, this, [this] {
+            if (isVisible()) refreshSystemAudioState();
+        });
+    }
 
     m_fanOverlay = new RadialFanOverlay(this);
     connect(m_fanOverlay, &RadialFanOverlay::slotTapped, this, [this](int slot) {
@@ -1319,7 +1347,13 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
         }
     });
 
-    loadPreferences();
+    if (m_primaryPeer) {
+        syncSharedPreferencesFrom(m_primaryPeer);
+        loadScreenPlacement();
+    } else {
+        loadPreferences();
+        loadScreenPlacement();
+    }
     // Size the sphere cleanly before FloatingWindow::prepare, then let adaptToScreen()
     // place it directly on its configured dock edge (never snap against the 400x400 .ui stub!).
     const int initDiam = qBound(kMinDiameter, qRound(m_preferredDiameter), kMaxDiameter);
@@ -1329,32 +1363,71 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory)
     grabGesture(Qt::PinchGesture);
     FloatingWindow::prepare(this, false);
 
-    m_currentScreen = screen();
-    for (QScreen *display : QGuiApplication::screens()) watchScreen(display);
-    connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *display) {
-        watchScreen(display);
-        scheduleScreenAdaptation();
-    });
-    connect(qApp, &QGuiApplication::screenRemoved, this, [this] { scheduleScreenAdaptation(); });
+    m_currentScreen = m_assignedScreen ? m_assignedScreen.data() : screen();
+    if (isPrimaryBall()) {
+        for (QScreen *display : QGuiApplication::screens()) watchScreen(display);
+        connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *display) {
+            watchScreen(display);
+            syncScreenReplicas();
+            scheduleScreenAdaptation();
+        });
+        connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen *removed) {
+            if (m_assignedScreen == removed) {
+                m_assignedScreen = QGuiApplication::primaryScreen();
+                if (m_assignedScreen)
+                    setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
+                loadScreenPlacement();
+            }
+            syncScreenReplicas();
+            scheduleScreenAdaptation();
+        });
+        connect(qApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen *) {
+            syncScreenReplicas();
+            scheduleScreenAdaptation();
+        });
 
-    initTray();
-    adaptToScreen();
-    refreshBallOpacity();
+        initTray();
+        adaptToScreen();
+        refreshBallOpacity();
 
-    statusMonitor()->setEnabled(m_statusOrbMode);
-    if (m_dockModeEnabled) dockModel();
-    if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
-        refreshSystemAudioState();
-        m_audioPollTimer->start();
+        statusMonitor()->setEnabled(m_statusOrbMode);
+        if (m_dockModeEnabled) dockModel();
+        if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+            refreshSystemAudioState();
+            if (m_audioPollTimer) m_audioPollTimer->start();
+        }
+        syncScreenReplicas();
+    } else {
+        if (m_assignedScreen) watchScreen(m_assignedScreen);
+        if (SystemStatusMonitor *mon = statusMonitor()) {
+            connect(mon, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &) {
+                update();
+                if (m_orbitVisible && m_fanOverlay) m_fanOverlay->update();
+            });
+        }
+        if (AppDockModel *dock = dockModel()) {
+            connect(dock, &AppDockModel::appsChanged, this, [this] {
+                if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+            });
+        }
+        adaptToScreen();
+        refreshBallOpacity();
     }
 }
 
 FloatingBall::~FloatingBall()
 {
+    if (isPrimaryBall()) {
+        const auto replicas = m_screenReplicas.values();
+        m_screenReplicas.clear();
+        for (const auto &rep : replicas) {
+            if (rep) delete rep.data();
+        }
+    }
     removeOutsideDismissMonitor();
     m_idleTimer->stop();
     m_holdTimer->stop();
-    m_audioPollTimer->stop();
+    if (m_audioPollTimer) m_audioPollTimer->stop();
     m_dwellAnimation->stop();
     m_opacityAnimation->stop();
     if (m_orbitAnimation) m_orbitAnimation->stop();
@@ -1362,10 +1435,12 @@ FloatingBall::~FloatingBall()
         m_geometryAnimation->stop();
 
     delete m_fanOverlay;
-    delete m_actionHud;
-    delete m_clipboardBubble;
-    delete m_quickDeck;
-    delete m_screenshotPanel;
+    if (isPrimaryBall()) {
+        delete m_actionHud;
+        delete m_clipboardBubble;
+        delete m_quickDeck;
+        delete m_screenshotPanel;
+    }
     delete ui;
 }
 
@@ -1453,6 +1528,7 @@ void FloatingBall::loadPreferences()
     const bool defaultStatusOrb = false;
 #endif
     m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
+    m_multiScreenEnabled = s.value("ball/multiScreenEnabled", true).toBool();
     m_preferredDiameter = qBound(qreal(kMinDiameter), s.value("ball/diameter", m_statusOrbMode ? 60.0 : 56.0).toReal(), qreal(kMaxDiameter));
     m_idleOpacity = qBound(0.15, s.value("ball/idleOpacity", 0.38).toReal(), 1.0);
     m_activeOpacity = qBound(m_idleOpacity, s.value("ball/activeOpacity", 0.88).toReal(), 1.0);
@@ -1469,12 +1545,17 @@ void FloatingBall::loadPreferences()
 
 void FloatingBall::savePreferences()
 {
+    if (m_primaryPeer) {
+        saveScreenPlacement();
+        return;
+    }
     QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
     s.setValue("ball/quickFanActions", m_orbitActions);
     s.setValue("ball/ringCount", m_ringCount);
     s.setValue("ball/ringLayoutVersion", 2);
     s.setValue("ball/dockModeEnabled", m_dockModeEnabled);
     s.setValue("ball/statusOrbMode", m_statusOrbMode);
+    s.setValue("ball/multiScreenEnabled", m_multiScreenEnabled);
     s.setValue("ball/diameter", m_preferredDiameter);
     s.setValue("ball/idleOpacity", m_idleOpacity);
     s.setValue("ball/activeOpacity", m_activeOpacity);
@@ -1483,10 +1564,190 @@ void FloatingBall::savePreferences()
     s.setValue("ball/crosshairPull", m_crosshairPullEnabled);
     s.setValue("ball/dockSide", m_dockSide);
     s.setValue("ball/verticalFraction", m_verticalFraction);
+    saveScreenPlacement();
+}
+
+void FloatingBall::loadScreenPlacement()
+{
+    QScreen *scr = m_assignedScreen ? m_assignedScreen.data() : QGuiApplication::primaryScreen();
+    const QString key = screenStorageKey(scr);
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    const QString prefix = QStringLiteral("screens/") + key + QLatin1Char('/');
+    if (s.contains(prefix + QStringLiteral("dockSide"))) {
+        int side = s.value(prefix + QStringLiteral("dockSide"), m_dockSide).toInt();
+        if (side == DockFree || side == DockLeft || side == DockRight || side == DockTop || side == DockBottom)
+            m_dockSide = side;
+    }
+    if (s.contains(prefix + QStringLiteral("verticalFraction"))) {
+        m_verticalFraction = qBound(0.02, s.value(prefix + QStringLiteral("verticalFraction"), m_verticalFraction).toReal(), 0.98);
+    }
+    if (s.contains(prefix + QStringLiteral("diameter"))) {
+        m_preferredDiameter = qBound(qreal(kMinDiameter), s.value(prefix + QStringLiteral("diameter"), m_preferredDiameter).toReal(), qreal(kMaxDiameter));
+    }
+    m_hiddenOnThisScreen = s.value(prefix + QStringLiteral("hidden"), false).toBool();
+}
+
+void FloatingBall::saveScreenPlacement() const
+{
+    QScreen *scr = m_assignedScreen ? m_assignedScreen.data() : m_currentScreen.data();
+    if (!scr) scr = QGuiApplication::primaryScreen();
+    const QString key = screenStorageKey(scr);
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    const QString prefix = QStringLiteral("screens/") + key + QLatin1Char('/');
+    s.setValue(prefix + QStringLiteral("dockSide"), m_dockSide);
+    s.setValue(prefix + QStringLiteral("verticalFraction"), m_verticalFraction);
+    s.setValue(prefix + QStringLiteral("diameter"), m_preferredDiameter);
+    s.setValue(prefix + QStringLiteral("hidden"), m_hiddenOnThisScreen);
+}
+
+void FloatingBall::syncSharedPreferencesFrom(const FloatingBall *source)
+{
+    if (!source || source == this) return;
+    m_orbitActions = source->m_orbitActions;
+    m_ringCount = source->m_ringCount;
+    m_dockModeEnabled = source->m_dockModeEnabled;
+    m_statusOrbMode = source->m_statusOrbMode;
+    m_multiScreenEnabled = source->m_multiScreenEnabled;
+    m_idleOpacity = source->m_idleOpacity;
+    m_activeOpacity = source->m_activeOpacity;
+    m_snapEnabled = source->m_snapEnabled;
+    m_autoHideEnabled = source->m_autoHideEnabled;
+    m_crosshairPullEnabled = source->m_crosshairPullEnabled;
+    m_systemMuted = source->m_systemMuted;
+    m_systemVolume = source->m_systemVolume;
+    if (m_statusOrbMode) expandFromEdge();
+    if (!m_snapEnabled) m_dockSide = DockFree;
+    else if (m_dockSide == DockFree) m_dockSide = DockRight;
+    update();
+    refreshBallOpacity();
+    if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+}
+
+void FloatingBall::broadcastSharedPreferences()
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->broadcastSharedPreferences();
+        return;
+    }
+    for (auto it = m_screenReplicas.begin(); it != m_screenReplicas.end(); ++it) {
+        if (it.value()) it.value()->syncSharedPreferencesFrom(this);
+    }
+}
+
+QList<FloatingBall *> FloatingBall::replicaBalls() const
+{
+    QList<FloatingBall *> list;
+    for (auto it = m_screenReplicas.constBegin(); it != m_screenReplicas.constEnd(); ++it) {
+        if (it.value()) list.append(it.value().data());
+    }
+    return list;
+}
+
+void FloatingBall::syncScreenReplicas()
+{
+    if (!isPrimaryBall()) return;
+
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    if (!m_assignedScreen || !screens.contains(m_assignedScreen)) {
+        m_assignedScreen = QGuiApplication::primaryScreen();
+        if (m_assignedScreen)
+            setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
+    }
+
+    QSet<QString> keepKeys;
+    if (m_multiScreenEnabled && screens.size() > 1) {
+        for (QScreen *scr : screens) {
+            if (!scr || scr == m_assignedScreen) continue;
+            const QString key = screenStorageKey(scr);
+            keepKeys.insert(key);
+            QPointer<FloatingBall> existing = m_screenReplicas.value(key);
+            if (!existing) {
+                auto *replica = new FloatingBall(nullptr, m_screenshotDirectory, scr, this);
+                m_screenReplicas.insert(key, replica);
+                if (!m_userHiddenAll && !replica->m_hiddenOnThisScreen && isVisible()) {
+                    replica->show();
+                }
+            } else {
+                existing->syncSharedPreferencesFrom(this);
+                if (existing->m_assignedScreen != scr) {
+                    existing->m_assignedScreen = scr;
+                    existing->setProperty("floatingballAssignedScreen", QVariant::fromValue(scr));
+                    existing->adaptToScreen();
+                }
+                if (!m_userHiddenAll && !existing->m_hiddenOnThisScreen && isVisible() && !existing->isVisible()) {
+                    existing->show();
+                }
+            }
+        }
+    }
+
+    const QStringList keys = m_screenReplicas.keys();
+    for (const QString &key : keys) {
+        if (!keepKeys.contains(key)) {
+            QPointer<FloatingBall> rep = m_screenReplicas.take(key);
+            if (rep) delete rep.data();
+        }
+    }
+}
+
+void FloatingBall::closeOtherFans(FloatingBall *except)
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->closeOtherFans(except);
+        return;
+    }
+    if (this != except && m_orbitVisible) closeFan(true);
+    for (auto it = m_screenReplicas.begin(); it != m_screenReplicas.end(); ++it) {
+        if (it.value() && it.value().data() != except && it.value()->isOrbitVisible())
+            it.value()->closeFan(true);
+    }
+}
+
+void FloatingBall::setMultiScreenEnabled(bool enabled)
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->setMultiScreenEnabled(enabled);
+        return;
+    }
+    if (m_multiScreenEnabled == enabled) return;
+    m_multiScreenEnabled = enabled;
+    savePreferences();
+    syncScreenReplicas();
+    broadcastSharedPreferences();
+}
+
+void FloatingBall::setHiddenOnThisScreen(bool hidden)
+{
+    m_hiddenOnThisScreen = hidden;
+    saveScreenPlacement();
+    if (hidden) {
+        closeFan(true);
+        hide();
+    } else if (!m_userHiddenAll) {
+        expandFromEdge();
+        show();
+        raise();
+        refreshBallOpacity();
+    }
+}
+
+void FloatingBall::restoreAllScreenBalls()
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->restoreAllScreenBalls();
+        return;
+    }
+    m_userHiddenAll = false;
+    setHiddenOnThisScreen(false);
+    syncScreenReplicas();
+    for (auto it = m_screenReplicas.begin(); it != m_screenReplicas.end(); ++it) {
+        if (it.value()) it.value()->setHiddenOnThisScreen(false);
+    }
 }
 
 bool FloatingBall::setOrbitActions(const QStringList &actions)
 {
+    if (m_primaryPeer) return m_primaryPeer->setOrbitActions(actions);
     if (actions.size() != kOrbitSlotCount ||
         QSet<QString>(actions.begin(), actions.end()).size() != kOrbitSlotCount)
         return false;
@@ -1497,16 +1758,22 @@ bool FloatingBall::setOrbitActions(const QStringList &actions)
     closeFan(true);
     m_orbitActions = actions;
     savePreferences();
+    broadcastSharedPreferences();
     if (wasOpen) openTapFan();
     return true;
 }
 
 void FloatingBall::setRingCount(int rings)
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->setRingCount(rings);
+        return;
+    }
     const int clamped = qBound(kMinRingCount, rings, kMaxRingCount);
     if (m_ringCount == clamped) return;
     m_ringCount = clamped;
     savePreferences();
+    broadcastSharedPreferences();
     if (m_orbitVisible && m_fanOverlay) {
         m_fanOverlay->refreshLiveLayout();
     }
@@ -1514,9 +1781,14 @@ void FloatingBall::setRingCount(int rings)
 
 void FloatingBall::setDockModeEnabled(bool enabled)
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->setDockModeEnabled(enabled);
+        return;
+    }
     if (m_dockModeEnabled == enabled) return;
     m_dockModeEnabled = enabled;
     savePreferences();
+    broadcastSharedPreferences();
     if (m_orbitVisible && m_fanOverlay) {
         m_fanOverlay->refreshLiveLayout();
     }
@@ -1524,17 +1796,23 @@ void FloatingBall::setDockModeEnabled(bool enabled)
 
 void FloatingBall::setStatusOrbMode(bool enabled)
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->setStatusOrbMode(enabled);
+        return;
+    }
     if (m_statusOrbMode == enabled) return;
     m_statusOrbMode = enabled;
     if (m_statusOrbMode) expandFromEdge();
     statusMonitor()->setEnabled(m_statusOrbMode);
     savePreferences();
+    broadcastSharedPreferences();
     update();
     if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
 }
 
 SystemStatusMonitor *FloatingBall::statusMonitor()
 {
+    if (m_primaryPeer) return m_primaryPeer->statusMonitor();
     if (!m_statusMonitor) {
         m_statusMonitor = new SystemStatusMonitor(this);
         connect(m_statusMonitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &st) {
@@ -1550,7 +1828,11 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
                 if (st.cameraActive) tips.append(tr("摄像头：%1").arg(st.cameraUsers.join(QStringLiteral("、"))));
                 if (st.hasNotificationDot())
                     tips.append(st.lastNotificationSummary.isEmpty() ? tr("有未读通知") : st.lastNotificationSummary);
-                if (!tips.isEmpty()) setToolTip(tips.join(QStringLiteral(" · ")));
+                if (!tips.isEmpty()) {
+                    const QString tipStr = tips.join(QStringLiteral(" · "));
+                    setToolTip(tipStr);
+                    for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
+                }
             }
             update();
             if (m_orbitVisible && m_fanOverlay) m_fanOverlay->update();
@@ -1561,12 +1843,21 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
 
 void FloatingBall::clearNotificationDot()
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->clearNotificationDot();
+        return;
+    }
     if (m_statusMonitor) m_statusMonitor->clearNotifications();
     update();
+    for (FloatingBall *rep : replicaBalls()) rep->update();
 }
 
 void FloatingBall::setSystemAudioState(int percent, bool muted)
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->setSystemAudioState(percent, muted);
+        return;
+    }
     const int clamped = qBound(0, percent, 100);
     if (m_statusMonitor) m_statusMonitor->updateAudio(clamped, muted, true);
     if (m_systemVolume == clamped && m_systemMuted == muted) return;
@@ -1578,10 +1869,19 @@ void FloatingBall::setSystemAudioState(int percent, bool muted)
             : tr("短按展开多层扇形（含悬浮 Dock）· 按住内拉一划即选 / 拉出外环变准星 · 原地长按移位"));
     }
     update();
+    for (FloatingBall *rep : replicaBalls()) {
+        rep->m_systemVolume = clamped;
+        rep->m_systemMuted = muted;
+        rep->update();
+    }
 }
 
 void FloatingBall::refreshSystemAudioState()
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->refreshSystemAudioState();
+        return;
+    }
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) return;
     QPointer<FloatingBall> self(this);
     DesktopActions::queryVolume([self](int vol, bool muted, bool supported) {
@@ -1592,6 +1892,7 @@ void FloatingBall::refreshSystemAudioState()
 
 AppDockModel *FloatingBall::dockModel()
 {
+    if (m_primaryPeer) return m_primaryPeer->dockModel();
     if (!m_dockModel) {
         m_dockModel = new AppDockModel(this);
         connect(m_dockModel, &AppDockModel::appsChanged, this, [this] {
@@ -1603,6 +1904,7 @@ AppDockModel *FloatingBall::dockModel()
 
 ScreenshotPanel *FloatingBall::resultPanel()
 {
+    if (m_primaryPeer) return m_primaryPeer->resultPanel();
     if (!m_screenshotPanel)
         m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
     return m_screenshotPanel;
@@ -1610,6 +1912,7 @@ ScreenshotPanel *FloatingBall::resultPanel()
 
 ActionResultHud *FloatingBall::actionHud()
 {
+    if (m_primaryPeer) return m_primaryPeer->actionHud();
     if (!m_actionHud) {
         m_actionHud = new ActionResultHud(nullptr);
         connect(m_actionHud, &ActionResultHud::pinRequested, this,
@@ -1629,6 +1932,7 @@ ActionResultHud *FloatingBall::actionHud()
 
 ClipboardBubble *FloatingBall::clipboardBubble()
 {
+    if (m_primaryPeer) return m_primaryPeer->clipboardBubble();
     if (!m_clipboardBubble)
         m_clipboardBubble = new ClipboardBubble(nullptr);
     return m_clipboardBubble;
@@ -1636,6 +1940,7 @@ ClipboardBubble *FloatingBall::clipboardBubble()
 
 QuickDeck *FloatingBall::quickDeck()
 {
+    if (m_primaryPeer) return m_primaryPeer->quickDeck();
     if (!m_quickDeck) {
         m_quickDeck = new QuickDeck(nullptr);
         connect(m_quickDeck, &QuickDeck::captureRequested, this, &FloatingBall::captureRegion);
@@ -1887,6 +2192,7 @@ void FloatingBall::openTapFan()
         closeFan(false);
         return;
     }
+    closeOtherFans(this);
     m_fanOpenedTimer.restart();
     m_fanOverlay->openTapFan();
     animateFanTo(true);
@@ -1961,6 +2267,7 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
     if (m_gestureMode == GesturePressed) {
         if (QLineF(globalPos, m_pressGlobalPos).length() >= 10.0) {
             m_holdTimer->stop();
+            closeOtherFans(this);
             m_gestureMode = GestureFlickFan;
             m_orbitVisible = true;
             m_orbitProgress = 1.0;
@@ -1973,7 +2280,12 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
     }
 
     if (m_gestureMode == GestureMoveBall) {
-        const QPoint target = (globalPos - m_dragOffset).toPoint();
+        QPoint target = (globalPos - m_dragOffset).toPoint();
+        if (m_multiScreenEnabled && m_assignedScreen && QGuiApplication::screens().size() > 1) {
+            const QRect b = m_assignedScreen->availableGeometry();
+            target.setX(qBound(b.left(), target.x(), qMax(b.left(), b.right() - width() + 1)));
+            target.setY(qBound(b.top(), target.y(), qMax(b.top(), b.bottom() - height() + 1)));
+        }
         move(target);
         return;
     }
@@ -2318,11 +2630,14 @@ void FloatingBall::scheduleScreenAdaptation()
 
 void FloatingBall::adaptToScreen()
 {
-    QScreen *display = m_currentScreen;
+    QScreen *display = (m_multiScreenEnabled && m_assignedScreen && QGuiApplication::screens().contains(m_assignedScreen))
+        ? m_assignedScreen.data()
+        : m_currentScreen.data();
     if (!display || !QGuiApplication::screens().contains(display))
         display = QGuiApplication::primaryScreen();
     if (!display) return;
     m_currentScreen = display;
+    if (m_multiScreenEnabled && !m_assignedScreen) m_assignedScreen = display;
     fitToScreen(display->availableGeometry(), display->geometry().size());
 }
 
@@ -2411,7 +2726,10 @@ void FloatingBall::snapToEdge(bool animate)
         if (!m_snapEnabled) m_dockSide = DockFree;
         return;
     }
-    QScreen *display = QGuiApplication::screenAt(geometry().center());
+    QScreen *display = (m_multiScreenEnabled && m_assignedScreen && QGuiApplication::screens().size() > 1 &&
+                        QGuiApplication::screens().contains(m_assignedScreen))
+        ? m_assignedScreen.data()
+        : QGuiApplication::screenAt(geometry().center());
     if (!display) display = screen();
     if (!display) return;
     const QRect bounds = display->availableGeometry();
@@ -2547,14 +2865,28 @@ void FloatingBall::moveEvent(QMoveEvent *event)
 {
     QWidget::moveEvent(event);
     if (!m_adaptingScreen && !m_edgeTucked) {
-        if (QScreen *display = QGuiApplication::screenAt(geometry().center())) {
-            if (m_currentScreen != display) {
-                m_currentScreen = display;
-                m_screenBounds = display->availableGeometry();
+        if (!(m_multiScreenEnabled && m_assignedScreen && QGuiApplication::screens().size() > 1)) {
+            if (QScreen *display = QGuiApplication::screenAt(geometry().center())) {
+                if (m_currentScreen != display) {
+                    m_currentScreen = display;
+                    m_screenBounds = display->availableGeometry();
+                }
             }
         }
     }
     if (m_orbitVisible && m_fanOverlay) m_fanOverlay->syncProgress(m_orbitProgress);
+}
+
+void FloatingBall::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (isPrimaryBall() && m_multiScreenEnabled && !m_userHiddenAll) {
+        syncScreenReplicas();
+        for (FloatingBall *rep : replicaBalls()) {
+            if (!rep->m_hiddenOnThisScreen && !rep->isVisible())
+                rep->show();
+        }
+    }
 }
 
 // ============================================================================
@@ -2781,6 +3113,15 @@ void FloatingBall::initTray()
     }
 
     menu->addSeparator();
+    auto *multiScreenAct = menu->addAction(tr("多显示器每屏独立显示悬浮球"));
+    multiScreenAct->setCheckable(true);
+    multiScreenAct->setChecked(m_multiScreenEnabled);
+    connect(multiScreenAct, &QAction::toggled, this, &FloatingBall::setMultiScreenEnabled);
+    connect(menu, &QMenu::aboutToShow, this, [this, multiScreenAct] {
+        const QSignalBlocker b(multiScreenAct);
+        multiScreenAct->setChecked(m_multiScreenEnabled);
+    });
+    menu->addAction(tr("恢复全部屏幕悬浮球"), this, &FloatingBall::restoreAllScreenBalls);
     menu->addAction(tr("从系统 Dock 同步常驻应用"), this, [this] {
         const int count = dockModel()->importFromSystemDock();
         DesktopActions::showToast(tr("✓ 已同步 %1 个系统 Dock 应用").arg(count), anchorCenterGlobal().toPoint());
@@ -2797,15 +3138,35 @@ void FloatingBall::initTray()
 
 void FloatingBall::setBallVisible(bool visible)
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->setBallVisible(visible);
+        return;
+    }
+    m_userHiddenAll = !visible;
     if (visible) {
-        expandFromEdge();
-        show();
-        raise();
+        if (!m_hiddenOnThisScreen) {
+            expandFromEdge();
+            show();
+            raise();
+            refreshBallOpacity();
+        }
+        syncScreenReplicas();
+        for (FloatingBall *rep : replicaBalls()) {
+            if (!rep->m_hiddenOnThisScreen) {
+                rep->expandFromEdge();
+                rep->show();
+                rep->raise();
+                rep->refreshBallOpacity();
+            }
+        }
         refreshSystemAudioState();
-        refreshBallOpacity();
     } else {
         closeFan(true);
         hide();
+        for (FloatingBall *rep : replicaBalls()) {
+            rep->closeFan(true);
+            rep->hide();
+        }
     }
 }
 
@@ -2845,8 +3206,13 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
         menu.addAction(tr("清除未读通知小点"), this, &FloatingBall::clearNotificationDot);
     }
     menu.addSeparator();
+    if (QGuiApplication::screens().size() > 1) {
+        menu.addAction(tr("在此屏幕隐藏悬浮球"), this, [this] { setHiddenOnThisScreen(true); });
+        menu.addAction(tr("恢复全部屏幕悬浮球"), this, &FloatingBall::restoreAllScreenBalls);
+    }
     menu.addAction(tr("设置…"), this, &FloatingBall::showSettings);
-    if (m_trayIcon) menu.addAction(tr("隐藏悬浮球"), this, [this] { setBallVisible(false); });
+    if (m_trayIcon || (m_primaryPeer && m_primaryPeer->m_trayIcon))
+        menu.addAction(tr("隐藏悬浮球"), this, [this] { setBallVisible(false); });
     menu.addSeparator();
     menu.addAction(tr("退出悬浮球"), qApp, &QApplication::quit);
     menu.exec(globalPos);
@@ -2856,6 +3222,10 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
 
 void FloatingBall::showSettings()
 {
+    if (m_primaryPeer) {
+        m_primaryPeer->showSettings();
+        return;
+    }
     if (m_settingsOpen) return;
     const QScopedValueRollback<bool> guard(m_settingsOpen, true);
     expandFromEdge();
@@ -2886,6 +3256,10 @@ void FloatingBall::showSettings()
     auto *statusOrbCheck = new QCheckBox(tr("Duo 组合状态仪主球（显示亮度/音量/电量/网络/输入法/隐私/通知小点，适合隐藏状态栏）"), appearance);
     statusOrbCheck->setObjectName(QStringLiteral("statusOrbCheck"));
     statusOrbCheck->setChecked(m_statusOrbMode);
+
+    auto *multiScreenCheck = new QCheckBox(tr("多显示器每屏独立显示悬浮球（点开内容一致，各屏位置与展开方向独立）"), appearance);
+    multiScreenCheck->setObjectName(QStringLiteral("multiScreenCheck"));
+    multiScreenCheck->setChecked(m_multiScreenEnabled);
 
     auto *diameter = new QSpinBox(appearance);
     diameter->setObjectName(QStringLiteral("ballDiameter"));
@@ -2926,6 +3300,7 @@ void FloatingBall::showSettings()
     appForm->addRow(tr("外围悬浮层数"), ringSpin);
     appForm->addRow(dockCheck);
     appForm->addRow(statusOrbCheck);
+    appForm->addRow(multiScreenCheck);
     appForm->addRow(tr("悬浮球尺寸"), diameter);
     appForm->addRow(tr("闲置透明度"), idle);
     appForm->addRow(tr("激活透明度"), active);
@@ -3058,6 +3433,7 @@ void FloatingBall::showSettings()
             slotCombos[i]->setCurrentIndex(slotCombos[i]->findData(defs[i]));
         ringSpin->setValue(kDefaultRingCount);
         dockCheck->setChecked(true);
+        multiScreenCheck->setChecked(true);
         diameter->setValue(56);
         idle->setValue(38);
         active->setValue(88);
@@ -3082,6 +3458,7 @@ void FloatingBall::showSettings()
         m_ringCount = qBound(kMinRingCount, ringSpin->value(), kMaxRingCount);
         m_dockModeEnabled = dockCheck->isChecked();
         setStatusOrbMode(statusOrbCheck->isChecked());
+        m_multiScreenEnabled = multiScreenCheck->isChecked();
         m_snapEnabled = snap->isChecked();
         m_autoHideEnabled = autoHide->isChecked();
         m_crosshairPullEnabled = crosshairPull->isChecked();
@@ -3101,6 +3478,8 @@ void FloatingBall::showSettings()
         if (!m_snapEnabled) m_dockSide = 0;
         else snapToEdge(false);
         savePreferences();
+        syncScreenReplicas();
+        broadcastSharedPreferences();
         dialog.accept();
     });
 

@@ -577,6 +577,49 @@ int main(int argc, char **argv)
               "clearing unread notifications extinguishes notification dot");
     }
 
+    // ------------------------------------------------------------------------
+    // 9. Multi-Screen Scheme A: Per-Screen Replica Shares Content, Keeps Own Edge
+    // ------------------------------------------------------------------------
+    {
+        FloatingBall replica(nullptr, temp.path() + "/shots", screen, &ball);
+        replica.show();
+        app.processEvents();
+        check(!replica.isPrimaryBall() &&
+                  replica.statusMonitor() == ball.statusMonitor() &&
+                  replica.dockModel() == ball.dockModel() &&
+                  replica.quickDeck() == ball.quickDeck() &&
+                  replica.clipboardBubble() == ball.clipboardBubble(),
+              "replica screen orb shares single SystemStatusMonitor, AppDockModel, QuickDeck, and ClipboardBubble");
+
+        // Changing ringCount from replica propagates back to primary
+        replica.setRingCount(4);
+        check(ball.ringCount() == 4, "changing ring count on a screen replica updates primary shared state");
+
+        // Dragging replica to a different edge keeps its own independent dockSide
+        const QPointF rStartLocal(replica.rect().center());
+        const QPointF rStartGlobal = replica.mapToGlobal(rStartLocal.toPoint());
+        QMouseEvent rDown(QEvent::MouseButtonPress, rStartLocal, rStartGlobal,
+                          Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+        app.sendEvent(&replica, &rDown);
+        const QPointF rTarget(bounds.left() + 14, bounds.center().y());
+        QMouseEvent rDrag(QEvent::MouseMove, rTarget - QPointF(replica.pos()), rTarget,
+                          Qt::NoButton, Qt::LeftButton, Qt::AltModifier);
+        app.sendEvent(&replica, &rDrag);
+        QMouseEvent rDrop(QEvent::MouseButtonRelease, rTarget - QPointF(replica.pos()), rTarget,
+                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        app.sendEvent(&replica, &rDrop);
+        waitMs(200);
+        check(replica.dockSide() == FloatingBall::DockLeft && ball.dockSide() != FloatingBall::DockLeft,
+              "replica screen orb maintains its own independent edge placement without moving primary");
+
+        // Opening fan on replica closes primary's open fan exclusively
+        ball.fanOverlay()->openTapFan();
+        ball.fanOverlay()->syncProgress(1.0);
+        app.processEvents();
+        replica.closeOtherFans(&replica);
+        check(!ball.isOrbitVisible(), "opening a screen orb fan exclusively closes other screens' open fans");
+    }
+
     // Restore original clipboard
     if (savedClip) app.clipboard()->setMimeData(savedClip);
     else app.clipboard()->clear();

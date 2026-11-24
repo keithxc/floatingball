@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QElapsedTimer>
 #include <QGestureEvent>
+#include <QHash>
 #include <QList>
 #include <QPoint>
 #include <QPointF>
@@ -11,6 +12,7 @@
 #include <QPropertyAnimation>
 #include <QRect>
 #include <QRectF>
+#include <QScreen>
 #include <QString>
 #include <QStringList>
 #include <QTouchEvent>
@@ -156,7 +158,10 @@ public:
         GestureCrosshairRect
     };
 
-    explicit FloatingBall(QWidget *parent = nullptr, const QString &screenshotDirectory = QString());
+    explicit FloatingBall(QWidget *parent = nullptr,
+                          const QString &screenshotDirectory = QString(),
+                          QScreen *assignedScreen = nullptr,
+                          FloatingBall *primaryPeer = nullptr);
     ~FloatingBall() override;
 
     // Actions & panels
@@ -191,6 +196,14 @@ public:
     void setDockModeEnabled(bool enabled);
     bool statusOrbMode() const { return m_statusOrbMode; }
     void setStatusOrbMode(bool enabled);
+    bool multiScreenEnabled() const { return m_multiScreenEnabled; }
+    void setMultiScreenEnabled(bool enabled);
+    QScreen *assignedScreen() const { return m_assignedScreen; }
+    bool isPrimaryBall() const { return m_primaryPeer == nullptr; }
+    QList<FloatingBall *> replicaBalls() const;
+    void syncScreenReplicas();
+    void closeOtherFans(FloatingBall *except);
+    void restoreAllScreenBalls();
     SystemStatusMonitor *statusMonitor();
     void clearNotificationDot();
 
@@ -224,6 +237,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void moveEvent(QMoveEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
@@ -262,6 +276,11 @@ private:
     void showContextMenu(const QPoint &globalPos);
     void loadPreferences();
     void savePreferences();
+    void loadScreenPlacement();
+    void saveScreenPlacement() const;
+    void syncSharedPreferencesFrom(const FloatingBall *source);
+    void broadcastSharedPreferences();
+    void setHiddenOnThisScreen(bool hidden);
     void initTray();
     void setBallVisible(bool visible);
 
@@ -313,6 +332,9 @@ private:
     int m_ringCount = kDefaultRingCount; // 1..30 concentric rings (default 3)
     bool m_dockModeEnabled = true;       // outer rings act as live Dock replacement
     bool m_statusOrbMode = false;        // Duo combined status orb (default ON on Linux, OFF on macOS)
+    bool m_multiScreenEnabled = true;    // Scheme A: independent docked orb per screen, shared content
+    bool m_hiddenOnThisScreen = false;
+    bool m_userHiddenAll = false;
     bool m_systemMuted = false;
     int m_systemVolume = 60;
 
@@ -329,7 +351,10 @@ private:
     bool m_adaptingScreen = false;
 
     QRect m_expandedDockGeometry;
+    QPointer<QScreen> m_assignedScreen;
     QPointer<QScreen> m_currentScreen;
+    QPointer<FloatingBall> m_primaryPeer;
+    QHash<QString, QPointer<FloatingBall>> m_screenReplicas;
     QRect m_screenBounds;
     void *m_outsideClickMonitor = nullptr;
     QElapsedTimer m_fanOpenedTimer;
