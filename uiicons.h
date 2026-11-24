@@ -42,7 +42,17 @@ enum Icon {
     Search,
     Desktop,
     Downloads,
-    Trash
+    Trash,
+    TrayHub,
+    SystemHub,
+    Launcher,
+    Wifi,
+    Bluetooth,
+    Bell,
+    Moon,
+    Bolt,
+    Lock,
+    Power
 };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color)
@@ -294,6 +304,90 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         path.moveTo(6.5, 6.8); path.lineTo(7.5, 19.5); path.lineTo(16.5, 19.5); path.lineTo(17.5, 6.8);
         path.moveTo(10.2, 10.5); path.lineTo(10.5, 16.2);
         path.moveTo(13.8, 10.5); path.lineTo(13.5, 16.2);
+        break;
+    }
+    case TrayHub: {
+        // Tray tray/drawer with 3 app dots inside
+        p.drawRoundedRect(QRectF(3.5, 5.0, 17.0, 14.0), 3.0, 3.0);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(QPointF(8.0, 12.0), 1.6, 1.6);
+        p.drawEllipse(QPointF(12.0, 12.0), 1.6, 1.6);
+        p.drawEllipse(QPointF(16.0, 12.0), 1.6, 1.6);
+        p.restore();
+        return;
+    }
+    case SystemHub: {
+        // Control center dual toggles (iOS/KDE control center style)
+        p.drawRoundedRect(QRectF(3.5, 5.2, 17.0, 5.6), 2.8, 2.8);
+        p.drawRoundedRect(QRectF(3.5, 13.2, 17.0, 5.6), 2.8, 2.8);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(QPointF(17.5, 8.0), 1.8, 1.8);
+        p.drawEllipse(QPointF(6.5, 16.0), 1.8, 1.8);
+        p.restore();
+        return;
+    }
+    case Launcher: {
+        // Classic 3x3 app-grid start menu icon
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                p.drawRoundedRect(QRectF(4.2 + col * 5.8, 4.2 + row * 5.8, 4.0, 4.0), 1.1, 1.1);
+            }
+        }
+        p.restore();
+        return;
+    }
+    case Wifi: {
+        p.drawArc(QRectF(3.0, 5.0, 18.0, 18.0), 45 * 16, 90 * 16);
+        p.drawArc(QRectF(6.5, 8.5, 11.0, 11.0), 45 * 16, 90 * 16);
+        p.drawArc(QRectF(9.5, 11.5, 5.0, 5.0), 45 * 16, 90 * 16);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(QPointF(12.0, 18.2), 1.5, 1.5);
+        p.restore();
+        return;
+    }
+    case Bluetooth: {
+        path.moveTo(7.5, 7.5); path.lineTo(16.5, 16.0); path.lineTo(12.0, 20.0);
+        path.lineTo(12.0, 4.0); path.lineTo(16.5, 8.0); path.lineTo(7.5, 16.5);
+        break;
+    }
+    case Bell: {
+        path.moveTo(6.0, 15.5);
+        path.cubicTo(6.0, 10.5, 7.2, 5.5, 12.0, 5.5);
+        path.cubicTo(16.8, 5.5, 18.0, 10.5, 18.0, 15.5);
+        path.lineTo(19.5, 17.2); path.lineTo(4.5, 17.2); path.closeSubpath();
+        path.moveTo(10.0, 19.5); path.quadTo(12.0, 21.0, 14.0, 19.5);
+        break;
+    }
+    case Moon: {
+        path.moveTo(18.5, 14.5);
+        path.cubicTo(16.0, 15.2, 13.0, 14.2, 11.5, 12.0);
+        path.cubicTo(10.0, 9.8, 10.2, 6.8, 12.0, 4.5);
+        path.cubicTo(7.5, 4.8, 4.5, 8.6, 5.0, 13.2);
+        path.cubicTo(5.6, 17.8, 9.8, 20.5, 14.5, 19.5);
+        path.cubicTo(16.4, 19.1, 17.8, 17.0, 18.5, 14.5);
+        break;
+    }
+    case Bolt: {
+        path.moveTo(13.5, 3.5); path.lineTo(6.2, 13.0); path.lineTo(11.8, 13.0);
+        path.lineTo(10.5, 20.5); path.lineTo(17.8, 11.0); path.lineTo(12.2, 11.0);
+        path.closeSubpath();
+        break;
+    }
+    case Lock: {
+        p.drawRoundedRect(QRectF(5.5, 10.8, 13.0, 9.2), 2.2, 2.2);
+        p.drawArc(QRectF(8.2, 4.5, 7.6, 9.0), 0, 180 * 16);
+        path.moveTo(8.2, 9.0); path.lineTo(8.2, 10.8);
+        path.moveTo(15.8, 9.0); path.lineTo(15.8, 10.8);
+        break;
+    }
+    case Power: {
+        p.drawArc(QRectF(5.0, 5.5, 14.0, 14.0), 128 * 16, 284 * 16);
+        path.moveTo(12.0, 3.5); path.lineTo(12.0, 11.5);
         break;
     }
     }

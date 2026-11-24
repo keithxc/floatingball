@@ -1,16 +1,23 @@
 #include "systemstatus.h"
 #include "desktopactions.h"
+#include "uiicons.h"
 
+#include <QAction>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QImage>
+#include <QMenu>
+#include <QPixmap>
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QWidget>
 
 #ifdef Q_OS_LINUX
 #include <QDBusArgument>
@@ -56,7 +63,12 @@ bool snapshotsEqual(const SystemStatusSnapshot &a, const SystemStatusSnapshot &b
            a.unreadNotifications == b.unreadNotifications &&
            a.trayNeedsAttention == b.trayNeedsAttention &&
            a.lastNotificationSummary == b.lastNotificationSummary &&
-           a.virtualDesktops == b.virtualDesktops;
+           a.virtualDesktops == b.virtualDesktops &&
+           a.bluetoothAvailable == b.bluetoothAvailable &&
+           a.bluetoothPowered == b.bluetoothPowered &&
+           a.dndEnabled == b.dndEnabled &&
+           a.nightLightEnabled == b.nightLightEnabled &&
+           a.powerProfile == b.powerProfile;
 }
 
 #ifdef Q_OS_LINUX
@@ -107,6 +119,221 @@ QList<VirtualDesktopInfo> parseKWinDesktopsVariant(const QVariant &v, const QStr
     }
     arg.endArray();
     return result;
+}
+
+QIcon decodeSniPixmapVariant(const QVariant &v)
+{
+    if (!v.isValid() || !v.canConvert<QDBusArgument>()) return {};
+    const QDBusArgument arg = v.value<QDBusArgument>();
+    QImage bestImg;
+    int bestWidth = 0;
+    arg.beginArray();
+    while (!arg.atEnd()) {
+        int w = 0, h = 0;
+        QByteArray bytes;
+        arg.beginStructure();
+        arg >> w >> h >> bytes;
+        arg.endStructure();
+        if (w <= 0 || h <= 0 || bytes.size() < w * h * 4) continue;
+        if (w > bestWidth && w <= 256) {
+            QImage img(w, h, QImage::Format_ARGB32);
+            const auto *src = reinterpret_cast<const uchar *>(bytes.constData());
+            for (int y = 0; y < h; ++y) {
+                auto *dst = reinterpret_cast<QRgb *>(img.scanLine(y));
+                for (int x = 0; x < w; ++x) {
+                    const int off = (y * w + x) * 4;
+                    dst[x] = qRgba(src[off + 1], src[off + 2], src[off + 3], src[off]);
+                }
+            }
+            bestImg = img;
+            bestWidth = w;
+        }
+    }
+    arg.endArray();
+    if (bestImg.isNull()) return {};
+    return QIcon(QPixmap::fromImage(bestImg));
+}
+
+QString parseSniToolTipTitle(const QVariant &v)
+{
+    if (!v.isValid() || !v.canConvert<QDBusArgument>()) return {};
+    const QDBusArgument arg = v.value<QDBusArgument>();
+    QString iconName;
+    QString title;
+    QString subtitle;
+    arg.beginStructure();
+    arg >> iconName;
+    // Skip pixmap array a(iiay)
+    arg.beginArray();
+    while (!arg.atEnd()) {
+        int w = 0, h = 0;
+        QByteArray bytes;
+        arg.beginStructure();
+        arg >> w >> h >> bytes;
+        arg.endStructure();
+    }
+    arg.endArray();
+    arg >> title >> subtitle;
+    arg.endStructure();
+    return title.trimmed();
+}
+
+QIcon resolveSniIcon(const QString &iconName, const QString &iconThemePath, const QVariant &pixmapVar)
+{
+    auto tryPathFile = [](const QString &basePath, const QString &name) -> QIcon {
+        if (basePath.isEmpty() || name.isEmpty()) return {};
+        static const QStringList exts{QStringLiteral(".svg"), QStringLiteral(".png"), QStringLiteral(".xpm"), QStringLiteral("")};
+        for (const QString &ext : exts) {
+            const QString cand = basePath + QLatin1Char('/') + name + ext;
+            if (QFileInfo::exists(cand)) {
+                QIcon ico(cand);
+                if (!ico.isNull()) return ico;
+            }
+        }
+        return {};
+    };
+
+    if (!iconThemePath.isEmpty() && !iconName.isEmpty()) {
+        QIcon ico = tryPathFile(iconThemePath, iconName);
+        if (!ico.isNull()) return ico;
+        for (const QString &sub : {QStringLiteral("/hicolor/scalable/apps"), QStringLiteral("/hicolor/48x48/apps"),
+                                   QStringLiteral("/hicolor/32x32/apps"), QStringLiteral("/hicolor/24x24/apps"),
+                                   QStringLiteral("/hicolor/22x22/apps")}) {
+            ico = tryPathFile(iconThemePath + sub, iconName);
+            if (!ico.isNull()) return ico;
+        }
+    }
+
+    if (!iconName.isEmpty()) {
+        if (QFileInfo::exists(iconName)) {
+            QIcon ico(iconName);
+            if (!ico.isNull()) return ico;
+        }
+        QIcon themed = QIcon::fromTheme(iconName);
+        if (!themed.isNull()) return themed;
+        if (iconName.endsWith(QLatin1String("-symbolic"))) {
+            const QString stripped = iconName.left(iconName.size() - 9);
+            themed = QIcon::fromTheme(stripped);
+            if (!themed.isNull()) return themed;
+        }
+        // Scan NixOS/Breeze/hicolor paths directly for status & app icons
+        const QString user = qEnvironmentVariable("USER");
+        const QStringList roots{
+            QDir::homePath() + QStringLiteral("/.local/share/icons"),
+            QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/icons"),
+            QStringLiteral("/run/current-system/sw/share/icons"),
+            QStringLiteral("/run/current-system/sw/share/pixmaps"),
+            QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/pixmaps")
+        };
+        static const QStringList subpaths{
+            QStringLiteral(""),
+            QStringLiteral("/hicolor/scalable/apps"),
+            QStringLiteral("/hicolor/48x48/apps"),
+            QStringLiteral("/hicolor/64x64/apps"),
+            QStringLiteral("/hicolor/128x128/apps"),
+            QStringLiteral("/hicolor/256x256/apps"),
+            QStringLiteral("/hicolor/512x512/apps"),
+            QStringLiteral("/breeze-dark/status/22"),
+            QStringLiteral("/breeze-dark/status/24"),
+            QStringLiteral("/breeze-dark/apps/48"),
+            QStringLiteral("/breeze-dark/apps/32"),
+            QStringLiteral("/breeze-dark/apps/22"),
+            QStringLiteral("/breeze/status/22"),
+            QStringLiteral("/breeze/apps/48"),
+            QStringLiteral("/breeze/apps/32")
+        };
+        const QStringList namesToTry = iconName.endsWith(QLatin1String("-symbolic"))
+            ? QStringList{iconName, iconName.left(iconName.size() - 9)}
+            : QStringList{iconName};
+        for (const QString &nm : namesToTry) {
+            for (const QString &root : roots) {
+                for (const QString &sub : subpaths) {
+                    QIcon ico = tryPathFile(root + sub, nm);
+                    if (!ico.isNull()) return ico;
+                }
+            }
+        }
+    }
+
+    QIcon pixIco = decodeSniPixmapVariant(pixmapVar);
+    if (!pixIco.isNull()) return pixIco;
+    return FloatingIcons::make(FloatingIcons::TrayHub, QColor("#dce8f8"), 28);
+}
+
+void sendDBusMenuEvent(const QString &service, const QString &menuPath, int itemId)
+{
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        service, menuPath, QStringLiteral("com.canonical.dbusmenu"), QStringLiteral("Event"));
+    msg.setArguments({itemId, QStringLiteral("clicked"),
+                      QVariant::fromValue(QDBusVariant(0)),
+                      static_cast<uint>(QDateTime::currentSecsSinceEpoch())});
+    bus.asyncCall(msg, 400);
+}
+
+void parseDBusMenuNode(const QDBusArgument &arg, QMenu *parentMenu,
+                       const QString &service, const QString &menuPath, bool isRoot)
+{
+    int id = 0;
+    QVariantMap props;
+    QList<QDBusVariant> children;
+    arg.beginStructure();
+    arg >> id >> props;
+    arg.beginArray();
+    while (!arg.atEnd()) {
+        QDBusVariant childVar;
+        arg >> childVar;
+        children.append(childVar);
+    }
+    arg.endArray();
+    arg.endStructure();
+
+    const bool visible = props.value(QStringLiteral("visible"), true).toBool();
+    if (!isRoot && !visible) return;
+
+    if (!isRoot) {
+        const QString type = props.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("separator")) {
+            parentMenu->addSeparator();
+            return;
+        }
+        QString label = props.value(QStringLiteral("label")).toString();
+        // Clean GTK/DBusMenu mnemonic underscores ("_Quit" -> "Quit", "__" -> "_")
+        label.replace(QStringLiteral("__"), QStringLiteral("\x01"));
+        label.remove(QLatin1Char('_'));
+        label.replace(QStringLiteral("\x01"), QStringLiteral("_"));
+        if (label.isEmpty() && children.isEmpty()) return;
+
+        const bool enabled = props.value(QStringLiteral("enabled"), true).toBool();
+        const QString iconName = props.value(QStringLiteral("icon-name")).toString();
+        const QIcon itemIcon = iconName.isEmpty() ? QIcon() : QIcon::fromTheme(iconName);
+
+        if (!children.isEmpty() || props.value(QStringLiteral("children-display")).toString() == QLatin1String("submenu")) {
+            QMenu *sub = parentMenu->addMenu(itemIcon, label);
+            sub->setEnabled(enabled);
+            for (const QDBusVariant &cv : children) {
+                if (cv.variant().canConvert<QDBusArgument>())
+                    parseDBusMenuNode(cv.variant().value<QDBusArgument>(), sub, service, menuPath, false);
+            }
+        } else {
+            QAction *act = parentMenu->addAction(itemIcon, label);
+            act->setEnabled(enabled);
+            const QString toggleType = props.value(QStringLiteral("toggle-type")).toString();
+            if (toggleType == QLatin1String("checkmark") || toggleType == QLatin1String("radio")) {
+                act->setCheckable(true);
+                act->setChecked(props.value(QStringLiteral("toggle-state")).toInt() == 1);
+            }
+            QObject::connect(act, &QAction::triggered, parentMenu, [service, menuPath, id] {
+                sendDBusMenuEvent(service, menuPath, id);
+            });
+        }
+        return;
+    }
+
+    for (const QDBusVariant &cv : children) {
+        if (cv.variant().canConvert<QDBusArgument>())
+            parseDBusMenuNode(cv.variant().value<QDBusArgument>(), parentMenu, service, menuPath, false);
+    }
 }
 #endif
 
@@ -189,6 +416,12 @@ void SystemStatusMonitor::setSnapshotForTest(const SystemStatusSnapshot &snapsho
     emitIfChanged(snapshot);
 }
 
+void SystemStatusMonitor::setTrayItemsForTest(const QList<TrayItemInfo> &items)
+{
+    m_trayItems = items;
+    emit trayItemsChanged();
+}
+
 void SystemStatusMonitor::emitIfChanged(const SystemStatusSnapshot &next)
 {
     if (snapshotsEqual(m_snapshot, next)) return;
@@ -267,7 +500,11 @@ void SystemStatusMonitor::pollSlowMetrics()
     refreshLinuxCamera();
     refreshLinuxMic();
     refreshLinuxVirtualDesktops();
-    refreshLinuxSniAttention();
+    refreshLinuxSniTray();
+    refreshLinuxNightLight();
+    refreshLinuxDnd();
+    refreshLinuxPowerProfile();
+    refreshLinuxBluetooth();
 #elif defined(Q_OS_MACOS)
     SystemStatusSnapshot next = m_snapshot;
     SystemStatusMac::populateSnapshot(&next);
@@ -301,7 +538,7 @@ void SystemStatusMonitor::initLinuxDBus()
         QStringLiteral("PropertiesChanged"),
         this, SLOT(refreshLinuxCamera()));
 
-    // 3. KWin VirtualDesktopManager signals (instant highlight update on desktop switch!)
+    // 3. KWin VirtualDesktopManager + NightLight signals
     session.connect(
         QStringLiteral("org.kde.KWin"),
         QStringLiteral("/VirtualDesktopManager"),
@@ -314,6 +551,34 @@ void SystemStatusMonitor::initLinuxDBus()
         QStringLiteral("org.kde.KWin.VirtualDesktopManager"),
         QStringLiteral("desktopDataChanged"),
         this, SLOT(refreshLinuxVirtualDesktops()));
+    session.connect(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/org/kde/KWin/NightLight"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("PropertiesChanged"),
+        this, SLOT(refreshLinuxNightLight()));
+
+    // 3b. StatusNotifierWatcher register/unregister signals (live tray sync!)
+    session.connect(
+        QStringLiteral("org.kde.StatusNotifierWatcher"),
+        QStringLiteral("/StatusNotifierWatcher"),
+        QStringLiteral("org.kde.StatusNotifierWatcher"),
+        QStringLiteral("StatusNotifierItemRegistered"),
+        this, SLOT(refreshLinuxSniTray()));
+    session.connect(
+        QStringLiteral("org.kde.StatusNotifierWatcher"),
+        QStringLiteral("/StatusNotifierWatcher"),
+        QStringLiteral("org.kde.StatusNotifierWatcher"),
+        QStringLiteral("StatusNotifierItemUnregistered"),
+        this, SLOT(refreshLinuxSniTray()));
+
+    // 3c. PowerProfiles signal
+    system.connect(
+        QStringLiteral("org.freedesktop.UPower.PowerProfiles"),
+        QStringLiteral("/org/freedesktop/UPower/PowerProfiles"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("PropertiesChanged"),
+        this, SLOT(refreshLinuxPowerProfile()));
 
     // 4. UPower battery signal
     system.connect(
@@ -648,7 +913,7 @@ void SystemStatusMonitor::refreshLinuxMic()
     proc->start(pactl, {QStringLiteral("list"), QStringLiteral("source-outputs")});
 }
 
-void SystemStatusMonitor::refreshLinuxSniAttention()
+void SystemStatusMonitor::refreshLinuxSniTray()
 {
     auto session = QDBusConnection::sessionBus();
     auto msg = QDBusMessage::createMethodCall(
@@ -658,7 +923,7 @@ void SystemStatusMonitor::refreshLinuxSniAttention()
         QStringLiteral("Get"));
     msg.setArguments({QStringLiteral("org.kde.StatusNotifierWatcher"),
                       QStringLiteral("RegisteredStatusNotifierItems")});
-    auto *w = new QDBusPendingCallWatcher(session.asyncCall(msg, 500), this);
+    auto *w = new QDBusPendingCallWatcher(session.asyncCall(msg, 600), this);
     QPointer<SystemStatusMonitor> self(this);
     connect(w, &QDBusPendingCallWatcher::finished, this, [self, w] {
         const QDBusMessage reply = w->reply();
@@ -667,44 +932,196 @@ void SystemStatusMonitor::refreshLinuxSniAttention()
 
         const QDBusVariant dv = reply.arguments().first().value<QDBusVariant>();
         const QStringList items = dv.variant().toStringList();
-        if (items.isEmpty()) return;
+        if (items.isEmpty()) {
+            if (!self->m_trayItems.isEmpty()) {
+                self->m_trayItems.clear();
+                emit self->trayItemsChanged();
+            }
+            SystemStatusSnapshot next = self->m_snapshot;
+            next.trayNeedsAttention = false;
+            self->emitIfChanged(next);
+            return;
+        }
 
         struct SniGather {
             int pending = 0;
             bool attention = false;
+            QVector<TrayItemInfo> collected;
+            QVector<bool> valid;
         };
         auto gather = std::make_shared<SniGather>();
         gather->pending = items.size();
+        gather->collected.resize(items.size());
+        gather->valid.fill(false, items.size());
 
         auto finishOne = [self, gather]() {
             if (--gather->pending > 0 || !self) return;
+            QList<TrayItemInfo> result;
+            for (int i = 0; i < gather->collected.size(); ++i) {
+                if (gather->valid[i]) result.append(gather->collected[i]);
+            }
+            self->m_trayItems = result;
+            emit self->trayItemsChanged();
+
             SystemStatusSnapshot next = self->m_snapshot;
             next.trayNeedsAttention = gather->attention;
             self->emitIfChanged(next);
         };
 
         auto bus = QDBusConnection::sessionBus();
-        for (const QString &entry : items) {
+        for (int idx = 0; idx < items.size(); ++idx) {
+            const QString &entry = items[idx];
             const int slash = entry.indexOf(QLatin1Char('/'));
             if (slash <= 0) { finishOne(); continue; }
+            const QString svc = entry.left(slash);
+            const QString path = entry.mid(slash);
+
             auto sMsg = QDBusMessage::createMethodCall(
-                entry.left(slash), entry.mid(slash),
+                svc, path,
                 QStringLiteral("org.freedesktop.DBus.Properties"),
-                QStringLiteral("Get"));
-            sMsg.setArguments({QStringLiteral("org.kde.StatusNotifierItem"), QStringLiteral("Status")});
-            auto *sw = new QDBusPendingCallWatcher(bus.asyncCall(sMsg, 400), self);
-            connect(sw, &QDBusPendingCallWatcher::finished, self, [sw, gather, finishOne] {
-                const QDBusMessage r = sw->reply();
+                QStringLiteral("GetAll"));
+            sMsg.setArguments({QStringLiteral("org.kde.StatusNotifierItem")});
+            auto *sw = new QDBusPendingCallWatcher(bus.asyncCall(sMsg, 600), self);
+            connect(sw, &QDBusPendingCallWatcher::finished, self, [sw, gather, finishOne, idx, svc, path] {
+                const QDBusPendingReply<QVariantMap> r(*sw);
                 sw->deleteLater();
-                if (r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty()) {
-                    const QDBusVariant st = r.arguments().first().value<QDBusVariant>();
-                    if (st.variant().toString() == QLatin1String("NeedsAttention"))
-                        gather->attention = true;
+                if (!r.isError()) {
+                    const QVariantMap props = r.value();
+                    const QString id = props.value(QStringLiteral("Id")).toString();
+                    const QString rawTitle = props.value(QStringLiteral("Title")).toString();
+                    if (id.compare(QStringLiteral("FloatingBall"), Qt::CaseInsensitive) != 0 &&
+                        rawTitle.compare(QStringLiteral("FloatingBall"), Qt::CaseInsensitive) != 0) {
+                        TrayItemInfo info;
+                        info.service = svc;
+                        info.objectPath = path;
+                        info.id = id;
+                        const QString tipTitle = parseSniToolTipTitle(props.value(QStringLiteral("ToolTip")));
+                        info.title = !tipTitle.isEmpty() ? tipTitle : (!rawTitle.isEmpty() ? rawTitle : id);
+                        if (info.title.isEmpty()) info.title = QStringLiteral("托盘图标");
+                        info.status = props.value(QStringLiteral("Status"), QStringLiteral("Active")).toString();
+                        info.itemIsMenu = props.value(QStringLiteral("ItemIsMenu")).toBool();
+                        if (props.contains(QStringLiteral("Menu"))) {
+                            const QVariant mv = props.value(QStringLiteral("Menu"));
+                            if (mv.canConvert<QDBusObjectPath>())
+                                info.menuPath = mv.value<QDBusObjectPath>().path();
+                            else
+                                info.menuPath = mv.toString();
+                        }
+                        const QString iconName = props.value(QStringLiteral("IconName")).toString();
+                        const QString themePath = props.value(QStringLiteral("IconThemePath")).toString();
+                        info.icon = resolveSniIcon(iconName, themePath, props.value(QStringLiteral("IconPixmap")));
+                        if (info.status == QLatin1String("NeedsAttention"))
+                            gather->attention = true;
+                        gather->collected[idx] = info;
+                        gather->valid[idx] = true;
+                    }
                 }
                 finishOne();
             });
         }
     });
+}
+
+void SystemStatusMonitor::refreshLinuxNightLight()
+{
+    auto session = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/org/kde/KWin/NightLight"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("GetAll"));
+    msg.setArguments({QStringLiteral("org.kde.KWin.NightLight")});
+    auto *w = new QDBusPendingCallWatcher(session.asyncCall(msg, 400), this);
+    QPointer<SystemStatusMonitor> self(this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [self, w] {
+        const QDBusPendingReply<QVariantMap> r(*w);
+        w->deleteLater();
+        if (!self || r.isError()) return;
+        const QVariantMap props = r.value();
+        SystemStatusSnapshot next = self->m_snapshot;
+        next.nightLightEnabled = props.value(QStringLiteral("enabled")).toBool() ||
+                                 props.value(QStringLiteral("running")).toBool();
+        self->emitIfChanged(next);
+    });
+}
+
+void SystemStatusMonitor::refreshLinuxDnd()
+{
+    auto session = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("/org/freedesktop/Notifications"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"));
+    msg.setArguments({QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Inhibited")});
+    auto *w = new QDBusPendingCallWatcher(session.asyncCall(msg, 400), this);
+    QPointer<SystemStatusMonitor> self(this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [self, w] {
+        const QDBusMessage reply = w->reply();
+        w->deleteLater();
+        if (!self || reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) return;
+        const QDBusVariant dv = reply.arguments().first().value<QDBusVariant>();
+        SystemStatusSnapshot next = self->m_snapshot;
+        next.dndEnabled = dv.variant().toBool();
+        self->emitIfChanged(next);
+    });
+}
+
+void SystemStatusMonitor::refreshLinuxPowerProfile()
+{
+    auto system = QDBusConnection::systemBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.UPower.PowerProfiles"),
+        QStringLiteral("/org/freedesktop/UPower/PowerProfiles"),
+        QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"));
+    msg.setArguments({QStringLiteral("org.freedesktop.UPower.PowerProfiles"), QStringLiteral("ActiveProfile")});
+    auto *w = new QDBusPendingCallWatcher(system.asyncCall(msg, 400), this);
+    QPointer<SystemStatusMonitor> self(this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [self, w] {
+        const QDBusMessage reply = w->reply();
+        w->deleteLater();
+        if (!self) return;
+        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
+            const QDBusVariant dv = reply.arguments().first().value<QDBusVariant>();
+            SystemStatusSnapshot next = self->m_snapshot;
+            next.powerProfile = dv.variant().toString();
+            self->emitIfChanged(next);
+            return;
+        }
+        const QString pp = QStandardPaths::findExecutable(QStringLiteral("powerprofilesctl"));
+        if (pp.isEmpty()) return;
+        auto *proc = new SafeStatusProcess(self);
+        connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), self,
+                [self, proc](int code, QProcess::ExitStatus st) {
+            const QString out = QString::fromUtf8(proc->readAllStandardOutput()).trimmed();
+            proc->deleteLater();
+            if (!self || st != QProcess::NormalExit || code != 0 || out.isEmpty()) return;
+            SystemStatusSnapshot next = self->m_snapshot;
+            next.powerProfile = out;
+            self->emitIfChanged(next);
+        });
+        proc->start(pp, {QStringLiteral("get")});
+    });
+}
+
+void SystemStatusMonitor::refreshLinuxBluetooth()
+{
+    const QString bt = QStandardPaths::findExecutable(QStringLiteral("bluetoothctl"));
+    if (bt.isEmpty()) return;
+    auto *proc = new SafeStatusProcess(this);
+    QPointer<SystemStatusMonitor> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc](int code, QProcess::ExitStatus st) {
+        const QString out = QString::fromUtf8(proc->readAllStandardOutput());
+        proc->deleteLater();
+        if (!self || st != QProcess::NormalExit || code != 0) return;
+        SystemStatusSnapshot next = self->m_snapshot;
+        next.bluetoothAvailable = out.contains(QStringLiteral("Powered:"));
+        next.bluetoothPowered = out.contains(QStringLiteral("Powered: yes"));
+        self->emitIfChanged(next);
+    });
+    proc->start(bt, {QStringLiteral("show")});
 }
 
 void SystemStatusMonitor::startNotificationMonitor()
@@ -745,3 +1162,259 @@ void SystemStatusMonitor::stopNotificationMonitor()
 }
 
 #endif // Q_OS_LINUX
+
+void SystemStatusMonitor::activateTrayItem(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent)
+{
+#ifdef Q_OS_LINUX
+    if (item.service.isEmpty() || item.objectPath.isEmpty()) return;
+    if (item.itemIsMenu && !item.menuPath.isEmpty()) {
+        openTrayItemMenu(item, globalPos, menuParent);
+        return;
+    }
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        item.service, item.objectPath,
+        QStringLiteral("org.kde.StatusNotifierItem"),
+        QStringLiteral("Activate"));
+    msg.setArguments({globalPos.x(), globalPos.y()});
+    bus.asyncCall(msg, 500);
+#else
+    Q_UNUSED(item); Q_UNUSED(globalPos); Q_UNUSED(menuParent);
+#endif
+}
+
+void SystemStatusMonitor::openTrayItemMenu(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent)
+{
+#ifdef Q_OS_LINUX
+    if (item.service.isEmpty() || item.objectPath.isEmpty()) return;
+    auto fallbackContextMenu = [item, globalPos]() {
+        auto bus = QDBusConnection::sessionBus();
+        auto msg = QDBusMessage::createMethodCall(
+            item.service, item.objectPath,
+            QStringLiteral("org.kde.StatusNotifierItem"),
+            QStringLiteral("ContextMenu"));
+        msg.setArguments({globalPos.x(), globalPos.y()});
+        bus.asyncCall(msg, 500);
+    };
+
+    if (item.menuPath.isEmpty() || item.menuPath == QLatin1String("/NO_DBUSMENU")) {
+        fallbackContextMenu();
+        return;
+    }
+
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        item.service, item.menuPath,
+        QStringLiteral("com.canonical.dbusmenu"),
+        QStringLiteral("GetLayout"));
+    msg.setArguments({0, 3, QStringList{}});
+    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(msg, 600), this);
+    QPointer<QWidget> parentPtr(menuParent);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [w, item, globalPos, parentPtr, fallbackContextMenu] {
+        const QDBusMessage reply = w->reply();
+        w->deleteLater();
+        if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().size() < 2 ||
+            !reply.arguments().at(1).canConvert<QDBusArgument>()) {
+            fallbackContextMenu();
+            return;
+        }
+        auto *menu = new QMenu(parentPtr);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        parseDBusMenuNode(reply.arguments().at(1).value<QDBusArgument>(), menu, item.service, item.menuPath, true);
+        if (menu->isEmpty()) {
+            menu->deleteLater();
+            fallbackContextMenu();
+            return;
+        }
+        menu->popup(globalPos);
+    });
+#else
+    Q_UNUSED(item); Q_UNUSED(globalPos); Q_UNUSED(menuParent);
+#endif
+}
+
+QString SystemStatusMonitor::toggleBluetooth()
+{
+#ifdef Q_OS_LINUX
+    const QString bt = QStandardPaths::findExecutable(QStringLiteral("bluetoothctl"));
+    if (bt.isEmpty()) return QStringLiteral("未找到 bluetoothctl");
+    const bool turnOn = !m_snapshot.bluetoothPowered;
+    QProcess::startDetached(bt, {QStringLiteral("power"), turnOn ? QStringLiteral("on") : QStringLiteral("off")});
+    SystemStatusSnapshot next = m_snapshot;
+    next.bluetoothAvailable = true;
+    next.bluetoothPowered = turnOn;
+    emitIfChanged(next);
+    QTimer::singleShot(800, this, [this] { refreshLinuxBluetooth(); });
+    return turnOn ? QStringLiteral("✓ 蓝牙已开启") : QStringLiteral("✓ 蓝牙已关闭");
+#else
+    return {};
+#endif
+}
+
+QString SystemStatusMonitor::toggleDoNotDisturb()
+{
+#ifdef Q_OS_LINUX
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.kglobalaccel"),
+        QStringLiteral("/component/plasmashell"),
+        QStringLiteral("org.kde.kglobalaccel.Component"),
+        QStringLiteral("invokeShortcut"));
+    msg.setArguments({QStringLiteral("toggle do not disturb")});
+    bus.asyncCall(msg, 400);
+    SystemStatusSnapshot next = m_snapshot;
+    next.dndEnabled = !next.dndEnabled;
+    next.unreadNotifications = 0;
+    next.lastNotificationSummary.clear();
+    emitIfChanged(next);
+    QTimer::singleShot(450, this, [this] { refreshLinuxDnd(); });
+    return next.dndEnabled ? QStringLiteral("✓ 已开启勿扰模式") : QStringLiteral("✓ 已关闭勿扰模式");
+#else
+    return {};
+#endif
+}
+
+QString SystemStatusMonitor::toggleNightLight()
+{
+#ifdef Q_OS_LINUX
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.kglobalaccel"),
+        QStringLiteral("/component/kwin"),
+        QStringLiteral("org.kde.kglobalaccel.Component"),
+        QStringLiteral("invokeShortcut"));
+    msg.setArguments({QStringLiteral("Toggle Night Color")});
+    bus.asyncCall(msg, 400);
+    SystemStatusSnapshot next = m_snapshot;
+    next.nightLightEnabled = !next.nightLightEnabled;
+    emitIfChanged(next);
+    QTimer::singleShot(450, this, [this] { refreshLinuxNightLight(); });
+    return next.nightLightEnabled ? QStringLiteral("✓ 夜间护眼色已切换") : QStringLiteral("✓ 夜间护眼色已切换");
+#else
+    return {};
+#endif
+}
+
+QString SystemStatusMonitor::cyclePowerProfile()
+{
+#ifdef Q_OS_LINUX
+    const QString pp = QStandardPaths::findExecutable(QStringLiteral("powerprofilesctl"));
+    if (pp.isEmpty()) return QStringLiteral("未找到 powerprofilesctl");
+    QString target = QStringLiteral("balanced");
+    QString label = QStringLiteral("平衡模式");
+    if (m_snapshot.powerProfile == QLatin1String("power-saver")) {
+        target = QStringLiteral("balanced");
+        label = QStringLiteral("平衡模式");
+    } else if (m_snapshot.powerProfile == QLatin1String("balanced")) {
+        target = QStringLiteral("performance");
+        label = QStringLiteral("性能模式");
+    } else {
+        target = QStringLiteral("power-saver");
+        label = QStringLiteral("节能模式");
+    }
+    QProcess::startDetached(pp, {QStringLiteral("set"), target});
+    SystemStatusSnapshot next = m_snapshot;
+    next.powerProfile = target;
+    emitIfChanged(next);
+    QTimer::singleShot(450, this, [this] { refreshLinuxPowerProfile(); });
+    return QStringLiteral("✓ 电源模式：%1").arg(label);
+#else
+    return {};
+#endif
+}
+
+QString SystemStatusMonitor::toggleWifi()
+{
+#ifdef Q_OS_LINUX
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) return QStringLiteral("未找到 nmcli");
+    const bool turnOn = !m_snapshot.networkConnected;
+    QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wifi"),
+                                 turnOn ? QStringLiteral("on") : QStringLiteral("off")});
+    QTimer::singleShot(1200, this, [this] { refreshLinuxNetwork(); });
+    return turnOn ? QStringLiteral("✓ 正在开启 Wi-Fi") : QStringLiteral("✓ 已关闭 Wi-Fi");
+#else
+    return {};
+#endif
+}
+
+bool SystemStatusMonitor::openKdeModule(const QString &moduleName)
+{
+#ifdef Q_OS_LINUX
+    const QString kcm = QStandardPaths::findExecutable(QStringLiteral("kcmshell6"));
+    if (!kcm.isEmpty() && !moduleName.isEmpty())
+        return QProcess::startDetached(kcm, {moduleName});
+    const QString sys = QStandardPaths::findExecutable(QStringLiteral("systemsettings"));
+    if (!sys.isEmpty()) return QProcess::startDetached(sys, {});
+#else
+    Q_UNUSED(moduleName);
+#endif
+    return false;
+}
+
+bool SystemStatusMonitor::openAppLauncher()
+{
+#ifdef Q_OS_LINUX
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.kglobalaccel"),
+        QStringLiteral("/component/plasmashell"),
+        QStringLiteral("org.kde.kglobalaccel.Component"),
+        QStringLiteral("invokeShortcut"));
+    msg.setArguments({QStringLiteral("activate application launcher")});
+    bus.asyncCall(msg, 500);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SystemStatusMonitor::openKRunner()
+{
+#ifdef Q_OS_LINUX
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.krunner"),
+        QStringLiteral("/App"),
+        QStringLiteral("org.kde.krunner.App"),
+        QStringLiteral("display"));
+    bus.asyncCall(msg, 500);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SystemStatusMonitor::lockScreen()
+{
+#ifdef Q_OS_LINUX
+    const QString lc = QStandardPaths::findExecutable(QStringLiteral("loginctl"));
+    if (!lc.isEmpty()) return QProcess::startDetached(lc, {QStringLiteral("lock-session")});
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QStringLiteral("/ScreenSaver"),
+        QStringLiteral("org.freedesktop.ScreenSaver"),
+        QStringLiteral("Lock"));
+    bus.asyncCall(msg, 400);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SystemStatusMonitor::openPowerMenu()
+{
+#ifdef Q_OS_LINUX
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.LogoutPrompt"),
+        QStringLiteral("/LogoutPrompt"),
+        QStringLiteral("org.kde.LogoutPrompt"),
+        QStringLiteral("promptAll"));
+    bus.asyncCall(msg, 500);
+    return true;
+#else
+    return false;
+#endif
+}

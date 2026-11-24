@@ -1,12 +1,15 @@
 #pragma once
 
+#include <QIcon>
 #include <QList>
 #include <QObject>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 
 class QProcess;
 class QTimer;
+class QWidget;
 
 struct VirtualDesktopInfo {
     QString id;
@@ -17,6 +20,17 @@ struct VirtualDesktopInfo {
     {
         return id == o.id && name == o.name && current == o.current;
     }
+};
+
+struct TrayItemInfo {
+    QString service;
+    QString objectPath;
+    QString id;
+    QString title;
+    QString menuPath;
+    QString status; // "Active", "Passive", "NeedsAttention"
+    bool itemIsMenu = false;
+    QIcon icon;
 };
 
 struct SystemStatusSnapshot {
@@ -58,6 +72,13 @@ struct SystemStatusSnapshot {
     // Virtual desktops (KWin VirtualDesktopManager: e.g. 広 / 栞 / 発 / 伝)
     QList<VirtualDesktopInfo> virtualDesktops;
 
+    // Live KDE system control toggles (for branched System Control sub-ring)
+    bool bluetoothAvailable = false;
+    bool bluetoothPowered = false;
+    bool dndEnabled = false;
+    bool nightLightEnabled = false;
+    QString powerProfile; // "power-saver", "balanced", "performance"
+
     bool hasNotificationDot() const { return unreadNotifications > 0 || trayNeedsAttention; }
 };
 
@@ -81,13 +102,32 @@ public:
     // and sets *alreadyCurrent=true when the target desktop is already active.
     bool switchVirtualDesktop(int index, bool *alreadyCurrent = nullptr, QString *labelOut = nullptr);
 
+    // Live system tray items (Linux StatusNotifierItem / DBusMenu)
+    const QList<TrayItemInfo> &trayItems() const { return m_trayItems; }
+    void activateTrayItem(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent = nullptr);
+    void openTrayItemMenu(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent = nullptr);
+
+    // Branched KDE status-bar system control actions (non-blocking)
+    QString toggleBluetooth();
+    QString toggleDoNotDisturb();
+    QString toggleNightLight();
+    QString cyclePowerProfile();
+    QString toggleWifi();
+    bool openKdeModule(const QString &moduleName);
+    bool openAppLauncher();
+    bool openKRunner();
+    bool lockScreen();
+    bool openPowerMenu();
+
     // Direct overrides (for immediate QuickDeck sync and automated UI tests)
     void updateAudio(int percent, bool muted, bool available = true);
     void updateBrightness(int percent, bool available = true);
     void setSnapshotForTest(const SystemStatusSnapshot &snapshot);
+    void setTrayItemsForTest(const QList<TrayItemInfo> &items);
 
 signals:
     void statusChanged(const SystemStatusSnapshot &snapshot);
+    void trayItemsChanged();
 
 private slots:
 #ifdef Q_OS_LINUX
@@ -96,6 +136,9 @@ private slots:
     void refreshLinuxNetwork();
     void refreshLinuxCamera();
     void refreshLinuxVirtualDesktops();
+    void refreshLinuxSniTray();
+    void refreshLinuxNightLight();
+    void refreshLinuxPowerProfile();
 #endif
 
 private:
@@ -108,7 +151,8 @@ private:
     void initLinuxDBus();
     void refreshLinuxInputMethod();
     void refreshLinuxMic();
-    void refreshLinuxSniAttention();
+    void refreshLinuxDnd();
+    void refreshLinuxBluetooth();
     void startNotificationMonitor();
     void stopNotificationMonitor();
 #endif
@@ -116,6 +160,7 @@ private:
     bool m_enabled = false;
     bool m_dbusConnected = false;
     SystemStatusSnapshot m_snapshot;
+    QList<TrayItemInfo> m_trayItems;
     QTimer *m_pollTimer = nullptr;
     QProcess *m_notifMonitor = nullptr;
     int m_brightnessMax = 100;
