@@ -918,12 +918,20 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     if (ray.length() < 26.0) return -1;
 
     // 1. Direct circular hit: when a branch cluster is focused, foreground branch
-    // orbs and the active hub ALWAYS win over dimmed background orbs underneath!
-    if (m_activeBranch != BranchNone) {
+    // orbs and the active hub ALWAYS win, and dimmed background orbs underneath
+    // the branch cluster circle are strictly masked out so crossing spoke gaps
+    // never accidentally hits a dimmed background orb!
+    if (m_activeBranch != BranchNone && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
         int fgBest = -1;
         qreal fgBestDist = 1e9;
+        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
+        qreal clusterR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 14.0;
         for (int i = 0; i < m_slots.size(); ++i) {
             if (!m_slots[i].isBranchItem && i != m_branchHubSlotIndex) continue;
+            if (m_slots[i].isBranchItem) {
+                clusterR = qMax(clusterR, QLineF(hubCenter, m_slots[i].centerGlobal).length() +
+                                              m_slots[i].rectGlobal.width() * 0.5 + 14.0);
+            }
             const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 6.0;
             const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
             if (d <= hitR && d < fgBestDist) {
@@ -932,6 +940,11 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
             }
         }
         if (fgBest >= 0) return fgBest;
+        // Inside the focused branch cluster circle (e.g. crossing a spoke gap):
+        // do NOT fall through to dimmed background slots underneath!
+        if (QLineF(hubCenter, globalPt).length() <= clusterR && !magneticSector) {
+            return -1;
+        }
     }
 
     int directBest = -1;
@@ -1035,24 +1048,21 @@ void RadialFanOverlay::updateBranchForPointer(const QPointF &globalPt, int hitSl
 
     if (m_activeBranch == BranchNone) return;
 
-    // Collapse branch immediately when pointer moves near the main ball,
-    // hits a non-branch background slot, or leaves the branch cluster circle!
-    const qreal distToBall = QLineF(m_ballCenterGlobal, globalPt).length();
-    if (distToBall <= m_fanRadius * 0.85 || hitSlot >= 0) {
-        setActiveBranch(BranchNone);
-        return;
-    }
-
+    // Only collapse when pointer leaves the focused branch cluster circle OR
+    // moves right near the main ball (never while crossing spoke gaps inside the circle!).
     if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
         const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
+        const qreal hubDist = QLineF(hubCenter, globalPt).length();
         qreal clusterR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 16.0;
         for (const RadialSlotItem &s : m_slots) {
             if (s.isBranchItem) {
                 clusterR = qMax(clusterR, QLineF(hubCenter, s.centerGlobal).length() +
-                                              s.rectGlobal.width() * 0.5 + 14.0);
+                                              s.rectGlobal.width() * 0.5 + 16.0);
             }
         }
-        if (QLineF(hubCenter, globalPt).length() > clusterR) {
+        const qreal distToBall = QLineF(m_ballCenterGlobal, globalPt).length();
+        const bool nearMainBall = (distToBall <= m_fanRadius * 0.78 && hubDist > m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 12.0);
+        if (hubDist > clusterR || nearMainBall) {
             setActiveBranch(BranchNone);
         }
     }
