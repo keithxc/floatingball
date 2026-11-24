@@ -358,26 +358,29 @@ void runOneShotKWinScript(const QString &pluginName, const QString &jsBody)
         QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
         QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript"));
     unload.setArguments({pluginName});
-    bus.asyncCall(unload, 400);
-
-    auto load = QDBusMessage::createMethodCall(
-        QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
-        QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("loadScript"));
-    load.setArguments({scriptPath, pluginName});
-    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(load, 500));
-    QObject::connect(w, &QDBusPendingCallWatcher::finished, w, [w, pluginName] {
-        w->deleteLater();
+    auto *uw = new QDBusPendingCallWatcher(bus.asyncCall(unload, 400));
+    QObject::connect(uw, &QDBusPendingCallWatcher::finished, uw, [uw, scriptPath, pluginName] {
+        uw->deleteLater();
         auto b = QDBusConnection::sessionBus();
-        auto startMsg = QDBusMessage::createMethodCall(
+        auto load = QDBusMessage::createMethodCall(
             QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
-            QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("start"));
-        b.asyncCall(startMsg, 400);
-        QTimer::singleShot(350, [pluginName] {
-            auto ul = QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("loadScript"));
+        load.setArguments({scriptPath, pluginName});
+        auto *w = new QDBusPendingCallWatcher(b.asyncCall(load, 500));
+        QObject::connect(w, &QDBusPendingCallWatcher::finished, w, [w, pluginName] {
+            w->deleteLater();
+            auto b2 = QDBusConnection::sessionBus();
+            auto startMsg = QDBusMessage::createMethodCall(
                 QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
-                QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript"));
-            ul.setArguments({pluginName});
-            QDBusConnection::sessionBus().asyncCall(ul, 400);
+                QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("start"));
+            b2.asyncCall(startMsg, 400);
+            QTimer::singleShot(350, [pluginName] {
+                auto ul = QDBusMessage::createMethodCall(
+                    QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
+                    QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript"));
+                ul.setArguments({pluginName});
+                QDBusConnection::sessionBus().asyncCall(ul, 400);
+            });
         });
     });
 }
@@ -556,19 +559,22 @@ fbPublishWindows();
         QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
         QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript"));
     unload.setArguments({pluginName});
-    bus.asyncCall(unload, 400);
-
-    auto load = QDBusMessage::createMethodCall(
-        QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
-        QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("loadScript"));
-    load.setArguments({m_kwinBridgeScriptPath, pluginName});
-    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(load, 600), this);
-    connect(w, &QDBusPendingCallWatcher::finished, this, [w] {
-        w->deleteLater();
-        auto startMsg = QDBusMessage::createMethodCall(
+    auto *uw = new QDBusPendingCallWatcher(bus.asyncCall(unload, 500), this);
+    connect(uw, &QDBusPendingCallWatcher::finished, this, [this, uw, pluginName] {
+        uw->deleteLater();
+        auto b = QDBusConnection::sessionBus();
+        auto load = QDBusMessage::createMethodCall(
             QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
-            QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("start"));
-        QDBusConnection::sessionBus().asyncCall(startMsg, 400);
+            QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("loadScript"));
+        load.setArguments({m_kwinBridgeScriptPath, pluginName});
+        auto *w = new QDBusPendingCallWatcher(b.asyncCall(load, 600), this);
+        connect(w, &QDBusPendingCallWatcher::finished, this, [w] {
+            w->deleteLater();
+            auto startMsg = QDBusMessage::createMethodCall(
+                QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"),
+                QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("start"));
+            QDBusConnection::sessionBus().asyncCall(startMsg, 400);
+        });
     });
 }
 
