@@ -45,6 +45,8 @@ enum Icon {
     Trash,
     TrayHub,
     SystemHub,
+    WindowsHub,
+    ToolsHub,
     Launcher,
     Wifi,
     Bluetooth,
@@ -327,6 +329,31 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         p.drawEllipse(QPointF(6.5, 16.0), 1.8, 1.8);
         p.restore();
         return;
+    }
+    case WindowsHub: {
+        // Overlapping desktop windows stack
+        p.drawRoundedRect(QRectF(3.8, 7.2, 12.6, 11.4), 2.2, 2.2);
+        path.moveTo(8.2, 7.2); path.lineTo(8.2, 5.4);
+        path.quadTo(8.2, 4.2, 9.6, 4.2);
+        path.lineTo(18.6, 4.2);
+        path.quadTo(20.0, 4.2, 20.0, 5.6);
+        path.lineTo(20.0, 14.0);
+        path.quadTo(20.0, 15.2, 18.6, 15.2);
+        path.lineTo(16.4, 15.2);
+        break;
+    }
+    case ToolsHub: {
+        // Minimalist touch toolspark / utility cross
+        p.drawEllipse(QPointF(12, 12), 4.2, 4.2);
+        path.moveTo(12, 3.4); path.lineTo(12, 6.2);
+        path.moveTo(12, 17.8); path.lineTo(12, 20.6);
+        path.moveTo(3.4, 12); path.lineTo(6.2, 12);
+        path.moveTo(17.8, 12); path.lineTo(20.6, 12);
+        path.moveTo(6.0, 6.0); path.lineTo(7.8, 7.8);
+        path.moveTo(16.2, 16.2); path.lineTo(18.0, 18.0);
+        path.moveTo(18.0, 6.0); path.lineTo(16.2, 7.8);
+        path.moveTo(7.8, 16.2); path.lineTo(6.0, 18.0);
+        break;
     }
     case Launcher: {
         // Classic 3x3 app-grid start menu icon

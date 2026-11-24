@@ -620,6 +620,37 @@ int main(int argc, char **argv)
         check(!ball.isOrbitVisible(), "opening a screen orb fan exclusively closes other screens' open fans");
     }
 
+    // ------------------------------------------------------------------------
+    // 10. Fluid Continuous-Drag Drill-Down + Backtrack to ← Breadcrumb
+    // ------------------------------------------------------------------------
+    {
+        ball.setStatusOrbMode(true);
+        ball.setOrbitActions(FloatingBall::defaultOrbitActions());
+        ball.fanOverlay()->openTapFan();
+        ball.fanOverlay()->syncProgress(1.0);
+        app.processEvents();
+#ifdef Q_OS_LINUX
+        check(ball.orbitSlotGlobalRects().size() == 4 && ball.allOrbitSlotGlobalRects().size() == 9,
+              "Linux Duo Orb root displays clean 4 virtual desktops + 5 drill hubs (9 total)");
+#endif
+        ball.fanOverlay()->drillInto(QStringLiteral("control"), QStringLiteral("控制"),
+                                     QColor("#9aa8ff"), QPointF(bounds.center()));
+        app.processEvents();
+        check(ball.fanOverlay()->isDrilled() && ball.fanOverlay()->slotsData().size() >= 10,
+              "drilling into Control hub opens clean single ring with ← backtrack orb");
+        // Wait past anti-bounce cooldown then drag finger onto ← backtrack orb to pop back!
+        waitMs(230);
+        QPointF backCenter;
+        for (const RadialSlotItem &s : ball.fanOverlay()->slotsData()) {
+            if (s.kind == RadialSlotItem::BackSlot) { backCenter = s.centerGlobal; break; }
+        }
+        ball.fanOverlay()->handleContinuousDragAt(backCenter);
+        app.processEvents();
+        check(!ball.fanOverlay()->isDrilled(),
+              "sliding continuously onto ← backtrack orb returns cleanly to root level without releasing");
+        ball.closeFan(true);
+    }
+
     // Restore original clipboard
     if (savedClip) app.clipboard()->setMimeData(savedClip);
     else app.clipboard()->clear();

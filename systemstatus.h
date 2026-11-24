@@ -6,6 +6,7 @@
 #include <QPoint>
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 class QProcess;
 class QTimer;
@@ -31,6 +32,15 @@ struct TrayItemInfo {
     QString status; // "Active", "Passive", "NeedsAttention"
     bool itemIsMenu = false;
     QIcon icon;
+};
+
+struct TrayMenuEntry {
+    int id = 0;
+    QString label;
+    QIcon icon;
+    bool enabled = true;
+    bool checkable = false;
+    bool checked = false;
 };
 
 struct SystemStatusSnapshot {
@@ -106,6 +116,9 @@ public:
     const QList<TrayItemInfo> &trayItems() const { return m_trayItems; }
     void activateTrayItem(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent = nullptr);
     void openTrayItemMenu(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent = nullptr);
+    void fetchTrayMenuEntries(const TrayItemInfo &item,
+                              std::function<void(const QList<TrayMenuEntry> &)> callback);
+    void triggerTrayMenuEntry(const TrayItemInfo &item, int menuItemId);
 
     // Branched KDE status-bar system control actions (non-blocking)
     QString toggleBluetooth();

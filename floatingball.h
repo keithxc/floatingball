@@ -42,20 +42,36 @@ struct RadialSlotItem {
         ActionSlot,
         AppSlot,
         TraySlot,
-        SystemSlot
+        SystemSlot,
+        TrayMenuSlot,
+        BackSlot,
+        CenterSlot
     };
     Kind kind = ActionSlot;
-    int ringIndex = 0; // 0 = inner 5-slot ring, 1 = 2nd action ring, 2+ = open apps / Dock / branched sub-ring
+    int ringIndex = 0; // 0 = inner ring, 1+ = outer rings / drilled ring
     QString id;
     QString label;
+    QString shortLabel; // Compact 2-6 char label shown beneath drilled/hub orbs
+    QString drillKey;   // Non-empty for drillable hubs: "windows", "tray", "control", "tools"
     DockAppEntry app;
     TrayItemInfo trayItem;
+    TrayMenuEntry trayMenuEntry;
     bool isBranchHub = false;
     bool isBranchItem = false;
     bool toggleActive = false;
     QColor accentColor;
     QPointF centerGlobal;
     QRectF rectGlobal;
+};
+
+struct DrillFrame {
+    QString key;   // "windows" | "tray" | "control" | "tools" | "tray_menu"
+    QString title; // "窗口" | "托盘" | "控制" | "工具" | "<TrayApp>"
+    QColor accentColor;
+    QPointF centerGlobal;
+    QPointF backGlobal;
+    TrayItemInfo traySource;
+    QList<TrayMenuEntry> trayMenuItems;
 };
 
 // Single-canvas overlay that renders both the 1..10 concentric Xiaomi Mi 5 /
@@ -92,10 +108,12 @@ public:
     void dismissOverlay(bool immediate = false);
 
     Mode overlayMode() const { return m_mode; }
-    BranchMode activeBranch() const { return m_activeBranch; }
-    void setActiveBranch(BranchMode branch);
-    void toggleBranch(BranchMode branch);
-    void updateBranchForPointer(const QPointF &globalPt, int hitSlot);
+    bool isDrilled() const { return !m_drillStack.isEmpty(); }
+    void drillInto(const QString &key, const QString &title, const QColor &accent,
+                   const QPointF &hubPos, const TrayItemInfo &traySource = {});
+    void popDrill();
+    void clearDrill();
+    void handleContinuousDragAt(const QPointF &globalPt);
     int highlightedSlot() const { return m_highlightedSlot; }
     // Inner ring (ring 0, 5 classic slots) rects for backward compatibility
     QList<QRectF> slotGlobalRects() const;
@@ -131,8 +149,11 @@ private:
 
     FloatingBall *m_owner = nullptr;
     Mode m_mode = HiddenMode;
-    BranchMode m_activeBranch = BranchNone;
-    int m_branchHubSlotIndex = -1;
+    QList<DrillFrame> m_drillStack;
+    QElapsedTimer m_drillCooldown;
+    QTimer *m_trayDwellTimer = nullptr;
+    TrayItemInfo m_pendingTrayDwell;
+    QPointF m_pendingTrayPos;
     qreal m_progress = 0.0;
     int m_highlightedSlot = -1;
     int m_pressedTapSlot = -1;

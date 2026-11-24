@@ -75,6 +75,8 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("trash")) return FloatingIcons::Trash;
     if (id == QLatin1String("tray_hub")) return FloatingIcons::TrayHub;
     if (id == QLatin1String("sys_hub")) return FloatingIcons::SystemHub;
+    if (id == QLatin1String("win_hub")) return FloatingIcons::WindowsHub;
+    if (id == QLatin1String("tools_hub")) return FloatingIcons::ToolsHub;
     if (id == QLatin1String("launcher")) return FloatingIcons::Launcher;
     if (id == QLatin1String("sys_wifi")) return FloatingIcons::Wifi;
     if (id == QLatin1String("sys_bluetooth")) return FloatingIcons::Bluetooth;
@@ -137,6 +139,31 @@ RadialFanOverlay::RadialFanOverlay(FloatingBall *owner)
     setAttribute(Qt::WA_AcceptTouchEvents);
     setMouseTracking(true);
     FloatingWindow::prepare(this, false);
+
+    // 380ms dwell on a tray orb with DBusMenu drills into its native menu items in one stroke!
+    m_trayDwellTimer = new QTimer(this);
+    m_trayDwellTimer->setSingleShot(true);
+    m_trayDwellTimer->setInterval(380);
+    connect(m_trayDwellTimer, &QTimer::timeout, this, [this] {
+        if (!m_owner || (m_mode != FlickFanMode && m_mode != TapFanMode)) return;
+        if (m_pendingTrayDwell.service.isEmpty() || m_pendingTrayDwell.menuPath.isEmpty()) return;
+        if (!m_drillStack.isEmpty() && m_drillStack.last().key == QLatin1String("tray_menu")) return;
+        const TrayItemInfo targetTray = m_pendingTrayDwell;
+        const QPointF targetPos = m_pendingTrayPos;
+        QPointer<RadialFanOverlay> self(this);
+        m_owner->statusMonitor()->fetchTrayMenuEntries(targetTray, [self, targetTray, targetPos](const QList<TrayMenuEntry> &entries) {
+            if (!self || entries.isEmpty()) return;
+            if (self->m_mode != FlickFanMode && self->m_mode != TapFanMode) return;
+            if (!self->m_drillStack.isEmpty() && self->m_drillStack.last().key == QLatin1String("tray_menu")) return;
+            self->drillInto(QStringLiteral("tray_menu"), targetTray.title.left(6), QColor("#66d9ff"), targetPos, targetTray);
+            if (!self->m_drillStack.isEmpty()) {
+                self->m_drillStack.last().trayMenuItems = entries;
+                self->recomputeFanLayout();
+                self->updateHitMask();
+                self->update();
+            }
+        });
+    });
 }
 
 QList<QRectF> RadialFanOverlay::slotGlobalRects() const
@@ -178,6 +205,224 @@ void RadialFanOverlay::recomputeFanLayout()
     }
 
     const qreal scale = m_owner->screenScale();
+
+    auto trimShort = [](QString s, int maxLen = 7) {
+        s = s.trimmed();
+        const int dash = s.indexOf(QStringLiteral(" — "));
+        if (dash > 0) s = s.mid(dash + 3).trimmed();
+        if (s.size() > maxLen) s = s.left(maxLen - 1) + QStringLiteral("…");
+        return s;
+    };
+
+    // ========================================================================
+    // DRILLED SINGLE-RING LEVEL (Kando-style fluid drill-down + ← backtrack!)
+    // ========================================================================
+    if (!m_drillStack.isEmpty()) {
+        const DrillFrame &top = m_drillStack.last();
+        QList<RadialSlotItem> children;
+
+        if (top.key == QLatin1String("windows")) {
+            const QList<DockAppEntry> apps = m_owner->dockModel()->dockApps(12, false, true);
+            for (const DockAppEntry &app : apps) {
+                if (!app.running) continue;
+                RadialSlotItem item;
+                item.kind = RadialSlotItem::AppSlot;
+                item.id = QStringLiteral("app:") + (!app.windowId.isEmpty() ? app.windowId : app.id);
+                item.label = app.name;
+                item.shortLabel = trimShort(app.name, 8);
+                item.app = app;
+                item.isBranchItem = true;
+                item.accentColor = app.active ? QColor("#7cc8ff") : QColor("#38bdf8");
+                children.append(item);
+            }
+            if (children.isEmpty()) {
+                for (const DockAppEntry &app : apps) {
+                    if (children.size() >= 8) break;
+                    RadialSlotItem item;
+                    item.kind = RadialSlotItem::AppSlot;
+                    item.id = QStringLiteral("app:") + (!app.launchTarget.isEmpty() ? app.launchTarget : app.id);
+                    item.label = app.name;
+                    item.shortLabel = trimShort(app.name, 8);
+                    item.app = app;
+                    item.isBranchItem = true;
+                    item.accentColor = QColor("#38bdf8");
+                    children.append(item);
+                }
+            }
+        } else if (top.key == QLatin1String("tray")) {
+            const auto &trayItems = m_owner->statusMonitor()->trayItems();
+            for (const TrayItemInfo &ti : trayItems) {
+                if (children.size() >= 11) break;
+                RadialSlotItem item;
+                item.kind = RadialSlotItem::TraySlot;
+                item.id = QStringLiteral("tray:") + ti.service + ti.objectPath;
+                item.label = ti.title;
+                item.shortLabel = trimShort(ti.title, 7);
+                item.trayItem = ti;
+                item.isBranchItem = true;
+                item.toggleActive = (ti.status == QLatin1String("NeedsAttention"));
+                item.accentColor = item.toggleActive ? QColor("#ff5272") : QColor("#66d9ff");
+                children.append(item);
+            }
+            if (children.isEmpty()) {
+                RadialSlotItem emptyItem;
+                emptyItem.kind = RadialSlotItem::TraySlot;
+                emptyItem.id = QStringLiteral("tray:empty");
+                emptyItem.label = QStringLiteral("当前无托盘图标");
+                emptyItem.shortLabel = QStringLiteral("无托盘");
+                emptyItem.isBranchItem = true;
+                emptyItem.accentColor = QColor("#66d9ff");
+                children.append(emptyItem);
+            }
+        } else if (top.key == QLatin1String("tray_menu")) {
+            for (const TrayMenuEntry &me : top.trayMenuItems) {
+                if (children.size() >= 10) break;
+                RadialSlotItem item;
+                item.kind = RadialSlotItem::TrayMenuSlot;
+                item.id = QStringLiteral("traymenu:%1").arg(me.id);
+                item.label = me.label;
+                item.shortLabel = trimShort(me.label, 8);
+                item.trayItem = top.traySource;
+                item.trayMenuEntry = me;
+                item.isBranchItem = true;
+                item.toggleActive = me.checked;
+                item.accentColor = me.checked ? QColor("#38bdf8") : QColor("#66d9ff");
+                children.append(item);
+            }
+        } else if (top.key == QLatin1String("control")) {
+            const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
+            auto addSys = [&](const QString &id, const QString &label, const QString &shortLbl, bool active, const QColor &accent) {
+                RadialSlotItem item;
+                item.kind = RadialSlotItem::SystemSlot;
+                item.id = id;
+                item.label = label;
+                item.shortLabel = shortLbl;
+                item.isBranchItem = true;
+                item.toggleActive = active;
+                item.accentColor = accent;
+                children.append(item);
+            };
+            const QString wifiLabel = st.networkConnected
+                ? (st.networkText.isEmpty() ? QStringLiteral("网络 · 已连接") : QStringLiteral("网络 · ") + st.networkText)
+                : QStringLiteral("网络 · 未连接");
+            addSys(QStringLiteral("sys_wifi"), wifiLabel, st.networkConnected ? QStringLiteral("Wi-Fi") : QStringLiteral("无网"),
+                   st.networkConnected, QColor("#38bdf8"));
+            addSys(QStringLiteral("sys_bluetooth"),
+                   st.bluetoothPowered ? QStringLiteral("蓝牙 · 已开启") : QStringLiteral("蓝牙 · 已关闭"),
+                   st.bluetoothPowered ? QStringLiteral("蓝牙开") : QStringLiteral("蓝牙"),
+                   st.bluetoothPowered, QColor("#3b82f6"));
+            addSys(QStringLiteral("sys_dnd"),
+                   st.dndEnabled ? QStringLiteral("勿扰模式 · 已开启") : QStringLiteral("勿扰模式 · 已关闭"),
+                   st.dndEnabled ? QStringLiteral("勿扰开") : QStringLiteral("勿扰"),
+                   st.dndEnabled, QColor("#a855f7"));
+
+            QString pwrShort = QStringLiteral("平衡");
+            QColor pwrColor("#38bdf8");
+            if (st.powerProfile == QLatin1String("power-saver")) { pwrShort = QStringLiteral("节能"); pwrColor = QColor("#34d399"); }
+            else if (st.powerProfile == QLatin1String("performance")) { pwrShort = QStringLiteral("性能"); pwrColor = QColor("#fb7185"); }
+            addSys(QStringLiteral("sys_power"), QStringLiteral("电源模式 · ") + pwrShort, pwrShort,
+                   st.powerProfile == QLatin1String("performance") || st.powerProfile == QLatin1String("power-saver"), pwrColor);
+            addSys(QStringLiteral("sys_nightlight"),
+                   st.nightLightEnabled ? QStringLiteral("夜间护眼 · 已开启") : QStringLiteral("夜间护眼 · 已关闭"),
+                   st.nightLightEnabled ? QStringLiteral("护眼开") : QStringLiteral("护眼"),
+                   st.nightLightEnabled, QColor("#f59e0b"));
+            addSys(QStringLiteral("sys_audio"), QStringLiteral("声音与亮度滑条"), QStringLiteral("音/亮"), !st.volumeMuted, QColor("#5eead4"));
+            addSys(QStringLiteral("sys_display"), QStringLiteral("显示器与多屏"), QStringLiteral("多屏"), false, QColor("#60a5fa"));
+            addSys(QStringLiteral("sys_lock"), QStringLiteral("立即锁屏"), QStringLiteral("锁屏"), false, QColor("#cbd5e1"));
+            addSys(QStringLiteral("sys_sleep"), QStringLiteral("休眠 / 关机菜单"), QStringLiteral("关机"), false, QColor("#fb7185"));
+            addSys(QStringLiteral("sys_settings"), QStringLiteral("KDE 系统设置"), QStringLiteral("设置"), false, QColor("#9aa8ff"));
+        } else if (top.key == QLatin1String("tools")) {
+            struct ToolDef { const char *id; const char *shortLbl; const char *color; };
+            static const ToolDef kTools[]{
+                {"crosshair",   "准星截图", "#7cc8ff"},
+                {"clipboard",   "剪贴板",   "#e2e8f0"},
+                {"downloads",   "下载",     "#86e0b8"},
+                {"trash",       "废纸篓",   "#ff9dad"},
+                {"screenshots", "截图库",   "#93c5fd"},
+                {"record",      "录屏",     "#fb7185"},
+                {"back",        "返回",     "#cbd5e1"},
+                {"overview",    "全览",     "#a5b4fc"}
+            };
+            for (const ToolDef &td : kTools) {
+                RadialSlotItem item;
+                item.kind = RadialSlotItem::ActionSlot;
+                item.id = QString::fromLatin1(td.id);
+                item.label = m_owner->actionLabel(item.id);
+                item.shortLabel = QString::fromUtf8(td.shortLbl);
+                item.isBranchItem = true;
+                item.accentColor = QColor(QString::fromLatin1(td.color));
+                children.append(item);
+            }
+        }
+
+        const qreal itemDiam = qBound(40.0, (children.size() >= 9 ? 44.0 : 46.0) * scale, 48.0);
+        const qreal itemHalf = itemDiam * 0.5;
+        const qreal centerDiam = qBound(42.0, 46.0 * scale, 48.0);
+        const qreal backDiam = qBound(38.0, 42.0 * scale, 44.0);
+
+        // 1. Add ← Backtrack breadcrumb orb
+        {
+            RadialSlotItem back;
+            back.kind = RadialSlotItem::BackSlot;
+            back.ringIndex = 0;
+            back.id = QStringLiteral("__back__");
+            back.label = QStringLiteral("划回上一层");
+            back.shortLabel = QStringLiteral("返回");
+            back.accentColor = QColor("#fbbf24");
+            back.centerGlobal = top.backGlobal;
+            back.rectGlobal = QRectF(top.backGlobal.x() - backDiam * 0.5, top.backGlobal.y() - backDiam * 0.5, backDiam, backDiam);
+            m_slots.append(back);
+        }
+        // 2. Add Center title orb
+        {
+            RadialSlotItem center;
+            center.kind = RadialSlotItem::CenterSlot;
+            center.ringIndex = 0;
+            center.id = QStringLiteral("__center__");
+            center.label = top.title + QStringLiteral(" · 点此或划向 ← 返回");
+            center.shortLabel = top.title;
+            center.accentColor = top.accentColor;
+            center.centerGlobal = top.centerGlobal;
+            center.rectGlobal = QRectF(top.centerGlobal.x() - centerDiam * 0.5, top.centerGlobal.y() - centerDiam * 0.5, centerDiam, centerDiam);
+            m_slots.append(center);
+        }
+
+        // 3. Place ALL children in ONE clean single ring around top.centerGlobal,
+        // leaving a clear ~70-deg open backtrack corridor directly facing ← !
+        const int n = children.size();
+        const double backDeg = qRadiansToDegrees(qAtan2(top.backGlobal.y() - top.centerGlobal.y(),
+                                                        top.backGlobal.x() - top.centerGlobal.x()));
+        const double oppDeg = backDeg + 180.0;
+        const double usableSpan = (n <= 4) ? 210.0 : (n <= 6 ? 255.0 : 292.0);
+        const double stepDeg = (n > 1) ? (usableSpan / (n - 1)) : 0.0;
+        const qreal minR = centerDiam * 0.5 + itemHalf + 22.0 * scale;
+        const qreal chordR = (n > 1)
+            ? ((itemDiam + 10.0 * scale) / (2.0 * qSin(qDegreesToRadians(qMax(10.0, stepDeg * 0.5)))))
+            : minR;
+        const qreal maxFitR = qMin(
+            qMin(top.centerGlobal.x() - bounds.left(), bounds.right() - top.centerGlobal.x()),
+            qMin(top.centerGlobal.y() - bounds.top(), bounds.bottom() - top.centerGlobal.y())) - itemHalf - 16.0;
+        const qreal ringR = qMax(minR * 0.85, qMin(qMax(minR, chordR), qMax(minR, maxFitR)));
+
+        const double startDeg = oppDeg - usableSpan * 0.5;
+        qreal maxFromBall = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double deg = (n == 1) ? oppDeg : (startDeg + stepDeg * i);
+            const double rad = qDegreesToRadians(deg);
+            const QPointF pt = top.centerGlobal + QPointF(qCos(rad), qSin(rad)) * ringR;
+            RadialSlotItem item = children[i];
+            item.ringIndex = 1;
+            item.centerGlobal = pt;
+            item.rectGlobal = QRectF(pt.x() - itemHalf, pt.y() - itemHalf, itemDiam, itemDiam);
+            m_slots.append(item);
+            maxFromBall = qMax(maxFromBall, QLineF(m_ballCenterGlobal, pt).length() + itemHalf);
+        }
+        m_ringRadii.append(ringR);
+        m_outermostRadius = qMax(ringR + itemHalf, maxFromBall);
+        m_activeRingCount = 1;
+        return;
+    }
+
     const int targetRings = qBound(FloatingBall::kMinRingCount, m_owner->ringCount(), FloatingBall::kMaxRingCount);
 
     // Compact, thumb-friendly ring 0 size close to the main sphere; gently scales
@@ -246,6 +491,99 @@ void RadialFanOverlay::recomputeFanLayout()
     }
     const double startDeg0 = reverseSweep ? (centerDeg + sweepDeg * 0.5) : (centerDeg - sweepDeg * 0.5);
     const double dir0 = reverseSweep ? -1.0 : 1.0;
+
+    // ------------------------------------------------------------------------
+    // Linux Duo-Orb Root Layout: Clean 4 Virtual Desktops (Inner) + 5 Drill Hubs (Outer)
+    // Total: ONLY 9 spacious orbs! Zero clutter; press-drag into any › hub to drill!
+    // ------------------------------------------------------------------------
+#ifdef Q_OS_LINUX
+    if (m_owner->statusOrbMode() &&
+        !m_owner->orbitActions().isEmpty() &&
+        m_owner->orbitActions().first().startsWith(QLatin1String("vdesk"))) {
+        const qreal prog = qBound(0.0, m_progress, 1.0);
+        const qreal dInner = qBound(40.0, 46.0 * scale, 50.0);
+        const qreal dOuter = qBound(42.0, 48.0 * scale, 52.0);
+        const qreal rInner = qMax(ballRadius + dInner * 0.5 + 16.0 * scale, 72.0 * scale);
+        const qreal rOuter = rInner + (dInner + dOuter) * 0.5 + 18.0 * scale;
+
+        const double innerSpan = cornerQuadrant ? 84.0 : 120.0;
+        const double outerSpan = cornerQuadrant ? 96.0 : 152.0;
+        const double innerStep = innerSpan / 3.0;
+        const double outerStep = outerSpan / 4.0;
+        const double innerStart = reverseSweep ? (centerDeg + innerSpan * 0.5) : (centerDeg - innerSpan * 0.5);
+        const double outerStart = reverseSweep ? (centerDeg + outerSpan * 0.5) : (centerDeg - outerSpan * 0.5);
+        const double dir = reverseSweep ? -1.0 : 1.0;
+
+        static const char *kDeskIds[4]{"vdesk1", "vdesk2", "vdesk3", "vdesk4"};
+        const qreal d0Anim = (m_mode == FlickFanMode) ? dInner : (dInner * (0.35 + 0.65 * prog));
+        for (int i = 0; i < 4; ++i) {
+            const double deg = innerStart + dir * innerStep * i;
+            const double rad = qDegreesToRadians(deg);
+            const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * rInner;
+            RadialSlotItem item;
+            item.kind = RadialSlotItem::ActionSlot;
+            item.ringIndex = 0;
+            item.id = QString::fromLatin1(kDeskIds[i]);
+            item.label = m_owner->actionLabel(item.id);
+            item.centerGlobal = (m_mode == FlickFanMode)
+                ? finalCenter
+                : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * prog);
+            item.rectGlobal = QRectF(item.centerGlobal.x() - d0Anim * 0.5,
+                                     item.centerGlobal.y() - d0Anim * 0.5,
+                                     d0Anim, d0Anim);
+            m_slots.append(item);
+        }
+
+        struct RootHubDef {
+            const char *id;
+            const char *shortLbl;
+            const char *drillKey;
+            const char *drillTitle;
+            const char *color;
+        };
+        static const RootHubDef kRootHubs[5]{
+            {"launcher",  "开始",   "",        "",     "#7cc8ff"},
+            {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
+            {"tray_hub",  "托盘 ›", "tray",    "托盘", "#66d9ff"},
+            {"sys_hub",   "控制 ›", "control", "控制", "#9aa8ff"},
+            {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
+        };
+        const qreal outerProg = (m_mode == FlickFanMode) ? 1.0 : qBound(0.0, (prog - 0.08) / 0.92, 1.0);
+        const qreal d1Anim = (m_mode == FlickFanMode) ? dOuter : (dOuter * (0.35 + 0.65 * outerProg));
+        const QRectF safeOuter = QRectF(bounds).adjusted(dOuter * 0.5 + 4, dOuter * 0.5 + 4,
+                                                         -dOuter * 0.5 - 4, -dOuter * 0.5 - 4);
+        for (int i = 0; i < 5; ++i) {
+            const double deg = outerStart + dir * outerStep * i;
+            const double rad = qDegreesToRadians(deg);
+            QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * rOuter;
+            finalCenter.setX(qBound(safeOuter.left(), finalCenter.x(), safeOuter.right()));
+            finalCenter.setY(qBound(safeOuter.top(), finalCenter.y(), safeOuter.bottom()));
+
+            RadialSlotItem item;
+            item.kind = RadialSlotItem::ActionSlot;
+            item.ringIndex = 1;
+            item.id = QString::fromLatin1(kRootHubs[i].id);
+            item.label = m_owner->actionLabel(item.id);
+            item.shortLabel = QString::fromUtf8(kRootHubs[i].shortLbl);
+            item.drillKey = QString::fromLatin1(kRootHubs[i].drillKey);
+            item.isBranchHub = !item.drillKey.isEmpty();
+            item.accentColor = QColor(QString::fromLatin1(kRootHubs[i].color));
+            item.centerGlobal = (m_mode == FlickFanMode)
+                ? finalCenter
+                : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * outerProg);
+            item.rectGlobal = QRectF(item.centerGlobal.x() - d1Anim * 0.5,
+                                     item.centerGlobal.y() - d1Anim * 0.5,
+                                     d1Anim, d1Anim);
+            m_slots.append(item);
+        }
+
+        m_ringRadii.append(rInner);
+        m_ringRadii.append(rOuter);
+        m_outermostRadius = rOuter + dOuter * 0.5;
+        m_activeRingCount = 2;
+        return;
+    }
+#endif
 
     QRectF group0;
     QList<QPointF> rawCenters0;
@@ -579,234 +917,6 @@ void RadialFanOverlay::recomputeFanLayout()
             m_activeRingCount = r + 1;
         }
     }
-
-    // ------------------------------------------------------------------------
-    // Branched Outer Sub-Ring (悬浮球分叉新圈: Tray Icons / KDE System Controls)
-    // ------------------------------------------------------------------------
-    m_branchHubSlotIndex = -1;
-    if (m_activeBranch != BranchNone) {
-        const QString hubId = (m_activeBranch == BranchTray) ? QStringLiteral("tray_hub")
-                                                             : QStringLiteral("sys_hub");
-        for (int i = 0; i < m_slots.size(); ++i) {
-            if (m_slots[i].id == hubId) {
-                m_branchHubSlotIndex = i;
-                break;
-            }
-        }
-
-        QList<RadialSlotItem> branchQueue;
-        if (m_activeBranch == BranchTray) {
-            const auto &trayItems = m_owner->statusMonitor()->trayItems();
-            for (const TrayItemInfo &ti : trayItems) {
-                RadialSlotItem item;
-                item.kind = RadialSlotItem::TraySlot;
-                item.id = QStringLiteral("tray:") + ti.service + ti.objectPath;
-                item.label = ti.title;
-                item.trayItem = ti;
-                item.isBranchItem = true;
-                item.toggleActive = (ti.status == QLatin1String("NeedsAttention"));
-                item.accentColor = item.toggleActive ? QColor("#ff5272") : QColor("#66d9ff");
-                branchQueue.append(item);
-            }
-            if (branchQueue.isEmpty()) {
-                RadialSlotItem emptyItem;
-                emptyItem.kind = RadialSlotItem::TraySlot;
-                emptyItem.id = QStringLiteral("tray:empty");
-                emptyItem.label = QStringLiteral("当前无托盘图标");
-                emptyItem.isBranchItem = true;
-                emptyItem.accentColor = QColor("#66d9ff");
-                branchQueue.append(emptyItem);
-            }
-        } else if (m_activeBranch == BranchSystem) {
-            const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
-            auto addSys = [&](const QString &id, const QString &label, bool active, const QColor &accent) {
-                RadialSlotItem item;
-                item.kind = RadialSlotItem::SystemSlot;
-                item.id = id;
-                item.label = label;
-                item.isBranchItem = true;
-                item.toggleActive = active;
-                item.accentColor = accent;
-                branchQueue.append(item);
-            };
-            const QString wifiLabel = st.networkConnected
-                ? (st.networkText.isEmpty() ? QStringLiteral("网络 · 已连接") : QStringLiteral("网络 · ") + st.networkText)
-                : QStringLiteral("网络 · 未连接");
-            addSys(QStringLiteral("sys_wifi"), wifiLabel, st.networkConnected, QColor("#38bdf8"));
-            addSys(QStringLiteral("sys_bluetooth"),
-                   st.bluetoothPowered ? QStringLiteral("蓝牙 · 已开启（点按关闭）") : QStringLiteral("蓝牙 · 已关闭（点按开启）"),
-                   st.bluetoothPowered, QColor("#3b82f6"));
-            addSys(QStringLiteral("sys_dnd"),
-                   st.dndEnabled ? QStringLiteral("勿扰模式 · 已开启") : QStringLiteral("勿扰模式 · 已关闭"),
-                   st.dndEnabled, QColor("#a855f7"));
-
-            QString pwrText = QStringLiteral("平衡");
-            QColor pwrColor("#38bdf8");
-            if (st.powerProfile == QLatin1String("power-saver")) {
-                pwrText = QStringLiteral("节能");
-                pwrColor = QColor("#34d399");
-            } else if (st.powerProfile == QLatin1String("performance")) {
-                pwrText = QStringLiteral("性能");
-                pwrColor = QColor("#fb7185");
-            }
-            addSys(QStringLiteral("sys_power"), QStringLiteral("电源模式 · ") + pwrText + QStringLiteral("（点按切换）"),
-                   st.powerProfile == QLatin1String("performance") || st.powerProfile == QLatin1String("power-saver"),
-                   pwrColor);
-            addSys(QStringLiteral("sys_nightlight"),
-                   st.nightLightEnabled ? QStringLiteral("夜间护眼 · 已开启") : QStringLiteral("夜间护眼 · 已关闭"),
-                   st.nightLightEnabled, QColor("#f59e0b"));
-            addSys(QStringLiteral("sys_display"), QStringLiteral("显示器与多屏布局"), false, QColor("#60a5fa"));
-            addSys(QStringLiteral("sys_audio"), QStringLiteral("声音与亮度控制"), !st.volumeMuted, QColor("#5eead4"));
-            addSys(QStringLiteral("sys_lock"), QStringLiteral("立即锁屏"), false, QColor("#cbd5e1"));
-            addSys(QStringLiteral("sys_sleep"), QStringLiteral("休眠 / 关机菜单"), false, QColor("#fb7185"));
-            addSys(QStringLiteral("sys_settings"), QStringLiteral("KDE 系统设置"), false, QColor("#9aa8ff"));
-        }
-
-        if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-            // Single clean concentric ring around the focused hub orb (up to 12 items
-            // evenly spaced in one circle with short radial spokes — no double-stacked balls!).
-            const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
-            const qreal hubRadius = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5;
-            const int totalBranch = branchQueue.size();
-            const qreal branchDiam = qBound(36.0, (totalBranch >= 9 ? 40.0 : 42.0) * scale, 43.0);
-            const qreal branchHalf = branchDiam * 0.5;
-            const qreal branchEdgePad = branchHalf + 5.0;
-            const QRectF branchSafeBounds = QRectF(bounds).adjusted(branchEdgePad, branchEdgePad, -branchEdgePad, -branchEdgePad);
-
-            const double outDeg = qRadiansToDegrees(qAtan2(hubCenter.y() - m_ballCenterGlobal.y(),
-                                                           hubCenter.x() - m_ballCenterGlobal.x()));
-            const qreal minSingleR = hubRadius + branchHalf + 11.0 * scale;
-            const int firstRingTarget = qMin(totalBranch, 12);
-            const qreal idealSingleR = (firstRingTarget >= 3)
-                ? ((branchDiam + 5.5 * scale) / (2.0 * qSin(M_PI / firstRingTarget)))
-                : minSingleR;
-            const qreal subR1 = qMax(minSingleR, idealSingleR);
-            const qreal subR2 = subR1 + branchDiam * 0.94 + 6.0 * scale;
-            const qreal subRadii[2]{subR1, subR2};
-
-            QList<QPointF> branchPlacedCenters;
-            auto fitsBranchSelf = [&](const QPointF &cand) {
-                if (QLineF(cand, hubCenter).length() < hubRadius + branchHalf + 5.0) return false;
-                for (const QPointF &p : branchPlacedCenters) {
-                    if (QLineF(cand, p).length() < branchDiam + 4.0) return false;
-                }
-                return true;
-            };
-
-            int bCursor = 0;
-            for (int br = 0; br < 2 && bCursor < branchQueue.size(); ++br) {
-                const qreal radius = subRadii[br];
-                const int remaining = branchQueue.size() - bCursor;
-                const double chordRatio = qMin(0.95, (branchDiam + 5.0 * scale) / (2.0 * radius));
-                const double minAngleStep = qMax(8.0, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
-
-                bool fullCircleFits = true;
-                for (int deg = 0; deg < 360; deg += 10) {
-                    const double rad = qDegreesToRadians(double(deg));
-                    if (!branchSafeBounds.contains(hubCenter + QPointF(qCos(rad), qSin(rad)) * radius)) {
-                        fullCircleFits = false;
-                        break;
-                    }
-                }
-
-                const int ringIdx = m_ringRadii.size();
-                int placed = 0;
-                qreal maxDistFromBall = m_outermostRadius;
-
-                if (fullCircleFits) {
-                    const int maxFullCap = qMax(1, static_cast<int>(qFloor(360.0 / minAngleStep)));
-                    // Put up to 12 items cleanly into the single primary ring around hubCenter!
-                    const int targetCount = qMin(remaining, (br == 0) ? qMin(12, maxFullCap) : maxFullCap);
-                    const double stepDeg = (targetCount >= 4)
-                        ? (360.0 / targetCount)
-                        : qMin(360.0 / qMax(1, targetCount), minAngleStep * 1.15);
-                    const bool useFullWrap = (targetCount >= 4);
-                    const double stagger = (br % 2 == 1) ? (stepDeg * 0.5) : 0.0;
-                    const double dir = reverseSweep ? -1.0 : 1.0;
-
-                    for (int i = 0; i < targetCount && bCursor < branchQueue.size(); ++i) {
-                        double deg = 0.0;
-                        if (useFullWrap) {
-                            deg = outDeg + stagger + dir * stepDeg * i;
-                        } else {
-                            const double span = (targetCount - 1) * stepDeg;
-                            const double start = reverseSweep ? (outDeg + span * 0.5) : (outDeg - span * 0.5);
-                            deg = start + dir * stepDeg * i;
-                        }
-                        const double rad = qDegreesToRadians(deg);
-                        const QPointF finalCenter = hubCenter + QPointF(qCos(rad), qSin(rad)) * radius;
-                        if (!branchSafeBounds.contains(finalCenter) || !fitsBranchSelf(finalCenter)) continue;
-
-                        RadialSlotItem item = branchQueue[bCursor++];
-                        item.ringIndex = ringIdx;
-                        item.centerGlobal = finalCenter;
-                        item.rectGlobal = QRectF(finalCenter.x() - branchHalf, finalCenter.y() - branchHalf, branchDiam, branchDiam);
-                        m_slots.append(item);
-                        branchPlacedCenters.append(finalCenter);
-                        maxDistFromBall = qMax(maxDistFromBall, QLineF(m_ballCenterGlobal, finalCenter).length() + branchHalf);
-                        ++placed;
-                    }
-                } else {
-                    const double halfSweep = 175.0;
-                    double bestStart = 0.0, bestEnd = 0.0, curStart = 0.0;
-                    bool bestContainsOut = false;
-                    bool inRun = false;
-                    const int steps = qRound(halfSweep * 2.0);
-                    auto finishRun = [&](double runEnd) {
-                        const bool containsOut = (curStart <= 0.0 && runEnd >= 0.0);
-                        const double span = runEnd - curStart;
-                        const double bestSpan = bestEnd - bestStart;
-                        if ((containsOut && !bestContainsOut && span >= 20.0) ||
-                            (containsOut == bestContainsOut && span > bestSpan)) {
-                            bestStart = curStart; bestEnd = runEnd; bestContainsOut = containsOut;
-                        }
-                    };
-                    for (int s = 0; s <= steps; ++s) {
-                        const double offset = -halfSweep + s;
-                        const double rad = qDegreesToRadians(outDeg + offset);
-                        const QPointF pt = hubCenter + QPointF(qCos(rad), qSin(rad)) * radius;
-                        const bool ok = branchSafeBounds.contains(pt);
-                        if (ok && !inRun) { curStart = offset; inRun = true; }
-                        else if (!ok && inRun) { finishRun(offset - 1.0); inRun = false; }
-                    }
-                    if (inRun) finishRun(halfSweep);
-
-                    const double arcSpanDeg = bestEnd - bestStart;
-                    if (arcSpanDeg >= 10.0) {
-                        const int maxCap = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
-                        const int count = qMin(maxCap, remaining);
-                        const double arcMid = outDeg + (bestStart + bestEnd) * 0.5;
-                        const double effectiveSpan = (count > 1) ? qMin(arcSpanDeg, (count - 1) * minAngleStep * 1.06) : 0.0;
-                        const double stepDeg = (count > 1) ? (effectiveSpan / (count - 1)) : 0.0;
-                        const double startDeg = reverseSweep ? (arcMid + effectiveSpan * 0.5) : (arcMid - effectiveSpan * 0.5);
-                        const double dir = reverseSweep ? -1.0 : 1.0;
-
-                        for (int i = 0; i < count && bCursor < branchQueue.size(); ++i) {
-                            const double deg = startDeg + dir * stepDeg * i;
-                            const double rad = qDegreesToRadians(deg);
-                            const QPointF finalCenter = hubCenter + QPointF(qCos(rad), qSin(rad)) * radius;
-                            if (!branchSafeBounds.contains(finalCenter) || !fitsBranchSelf(finalCenter)) continue;
-
-                            RadialSlotItem item = branchQueue[bCursor++];
-                            item.ringIndex = ringIdx;
-                            item.centerGlobal = finalCenter;
-                            item.rectGlobal = QRectF(finalCenter.x() - branchHalf, finalCenter.y() - branchHalf, branchDiam, branchDiam);
-                            m_slots.append(item);
-                            branchPlacedCenters.append(finalCenter);
-                            maxDistFromBall = qMax(maxDistFromBall, QLineF(m_ballCenterGlobal, finalCenter).length() + branchHalf);
-                            ++placed;
-                        }
-                    }
-                }
-
-                if (placed > 0) {
-                    m_ringRadii.append(QLineF(m_ballCenterGlobal, hubCenter).length() + radius);
-                    m_outermostRadius = qMax(m_outermostRadius, maxDistFromBall);
-                    m_activeRingCount = m_ringRadii.size();
-                }
-            }
-        }
-    }
 }
 
 QString RadialFanOverlay::activeLabelText() const
@@ -817,29 +927,33 @@ QString RadialFanOverlay::activeLabelText() const
         if (item.kind == RadialSlotItem::AppSlot) {
             if (item.app.active) text += QStringLiteral(" · 当前前台");
             else if (item.app.running) text += QStringLiteral(" · 运行中");
-            else if (item.app.pinned) text += QStringLiteral(" · 固定应用");
         } else if (item.kind == RadialSlotItem::TraySlot) {
-            if (item.id != QLatin1String("tray:empty"))
-                text += QStringLiteral(" · 点按激活 / 右键菜单");
+            if (item.id != QLatin1String("tray:empty")) {
+                text += item.trayItem.menuPath.isEmpty()
+                    ? QStringLiteral(" · 松手/点按激活")
+                    : QStringLiteral(" · 松手激活 / 停顿展开菜单");
+            }
+        } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
+            text = item.trayItem.title + QStringLiteral(" › ") + item.label;
         } else if (item.kind == RadialSlotItem::SystemSlot) {
             if (item.id == QLatin1String("sys_wifi") || item.id == QLatin1String("sys_bluetooth") ||
                 item.id == QLatin1String("sys_dnd") || item.id == QLatin1String("sys_power") ||
                 item.id == QLatin1String("sys_audio"))
                 text += QStringLiteral(" · 右键更多设置");
         } else if (item.isBranchHub) {
-            text += QStringLiteral(" · 划过或点按展开分叉圈");
+            text += QStringLiteral(" · 划入或点按进入");
         } else if (item.id == QLatin1String("launcher")) {
             text += QStringLiteral(" · 右键 KRunner 搜索");
-        } else if (m_mode == FlickFanMode && item.id == QLatin1String("crosshair")) {
-            text += QStringLiteral(" · 继续外拉变准星");
-        }
-        if (m_activeRingCount > 1) {
-            text += QStringLiteral("  [L%1/%2]").arg(item.ringIndex + 1).arg(m_activeRingCount);
         }
         return text;
     }
+    if (!m_drillStack.isEmpty()) {
+        QStringList crumbs{QStringLiteral("主球")};
+        for (const DrillFrame &f : m_drillStack) crumbs.append(f.title);
+        return crumbs.join(QStringLiteral(" › ")) + QStringLiteral(" · 划回 ← 退回上层");
+    }
     if (m_mode == FlickFanMode) {
-        return QStringLiteral("松开取消 · 拉出第 %1 层外变准星").arg(m_activeRingCount);
+        return QStringLiteral("松手取消 · 划进带 › 入口可钻取，随时划回 ← 返回");
     }
     if (m_mode == TapFanMode && m_owner && m_owner->statusOrbMode()) {
         const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
@@ -914,43 +1028,58 @@ void RadialFanOverlay::updateHitMask()
 int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSector) const
 {
     if (m_slots.isEmpty()) return -1;
+
+    // Drilled single-ring level: hit-test relative to top.centerGlobal with dedicated ← corridor!
+    if (!m_drillStack.isEmpty()) {
+        const DrillFrame &top = m_drillStack.last();
+        // 1. Direct circular hit on ← backtrack orb or any child orb (or center in Tap mode)
+        int directBest = -1;
+        qreal directBestDist = 1e9;
+        for (int i = 0; i < m_slots.size(); ++i) {
+            if (magneticSector && m_slots[i].kind == RadialSlotItem::CenterSlot) continue;
+            const qreal pad = (m_slots[i].kind == RadialSlotItem::BackSlot) ? 10.0 : 8.0;
+            const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + pad;
+            const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
+            if (d <= hitR && d < directBestDist) {
+                directBestDist = d;
+                directBest = i;
+            }
+        }
+        if (directBest >= 0) return directBest;
+        if (!magneticSector) return -1;
+
+        // 2. Magnetic sector around top.centerGlobal (skipping the 64-deg backtrack corridor toward ←!)
+        const QLineF ray(top.centerGlobal, globalPt);
+        if (ray.length() < 34.0) return -1;
+        const double fingerDeg = qRadiansToDegrees(qAtan2(globalPt.y() - top.centerGlobal.y(),
+                                                          globalPt.x() - top.centerGlobal.x()));
+        const double backDeg = qRadiansToDegrees(qAtan2(top.backGlobal.y() - top.centerGlobal.y(),
+                                                        top.backGlobal.x() - top.centerGlobal.x()));
+        if (angularDistanceDeg(fingerDeg, backDeg) < 32.0) return -1;
+
+        int bestSlot = -1;
+        double bestDiff = 26.0;
+        for (int i = 0; i < m_slots.size(); ++i) {
+            if (m_slots[i].ringIndex != 1) continue;
+            const QPointF c = m_slots[i].centerGlobal;
+            const double slotDeg = qRadiansToDegrees(qAtan2(c.y() - top.centerGlobal.y(),
+                                                            c.x() - top.centerGlobal.x()));
+            const double diff = angularDistanceDeg(fingerDeg, slotDeg);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestSlot = i;
+            }
+        }
+        return bestSlot;
+    }
+
     const QLineF ray(m_ballCenterGlobal, globalPt);
     if (ray.length() < 26.0) return -1;
-
-    // 1. Direct circular hit: when a branch cluster is focused, foreground branch
-    // orbs and the active hub ALWAYS win, and dimmed background orbs underneath
-    // the branch cluster circle are strictly masked out so crossing spoke gaps
-    // never accidentally hits a dimmed background orb!
-    if (m_activeBranch != BranchNone && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-        int fgBest = -1;
-        qreal fgBestDist = 1e9;
-        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
-        qreal clusterR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 14.0;
-        for (int i = 0; i < m_slots.size(); ++i) {
-            if (!m_slots[i].isBranchItem && i != m_branchHubSlotIndex) continue;
-            if (m_slots[i].isBranchItem) {
-                clusterR = qMax(clusterR, QLineF(hubCenter, m_slots[i].centerGlobal).length() +
-                                              m_slots[i].rectGlobal.width() * 0.5 + 14.0);
-            }
-            const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 6.0;
-            const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
-            if (d <= hitR && d < fgBestDist) {
-                fgBestDist = d;
-                fgBest = i;
-            }
-        }
-        if (fgBest >= 0) return fgBest;
-        // Inside the focused branch cluster circle (e.g. crossing a spoke gap):
-        // do NOT fall through to dimmed background slots underneath!
-        if (QLineF(hubCenter, globalPt).length() <= clusterR && !magneticSector) {
-            return -1;
-        }
-    }
 
     int directBest = -1;
     qreal directBestDist = 1e9;
     for (int i = 0; i < m_slots.size(); ++i) {
-        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 6.0;
+        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 7.0;
         const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
         if (d <= hitR && d < directBestDist) {
             directBestDist = d;
@@ -960,28 +1089,7 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     if (directBest >= 0) return directBest;
     if (!magneticSector) return -1;
 
-    // 2. Compact hub-centered magnetic hit when a branch satellite cluster is active!
-    if (m_activeBranch != BranchNone && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
-        const qreal hubDist = QLineF(hubCenter, globalPt).length();
-        const qreal ballToHub = QLineF(m_ballCenterGlobal, hubCenter).length();
-        if (ray.length() >= ballToHub - 10.0 && hubDist <= 145.0) {
-            int bestBranch = -1;
-            qreal bestBranchDist = 52.0;
-            for (int i = 0; i < m_slots.size(); ++i) {
-                if (!m_slots[i].isBranchItem) continue;
-                const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
-                if (d < bestBranchDist) {
-                    bestBranchDist = d;
-                    bestBranch = i;
-                }
-            }
-            if (bestBranch >= 0) return bestBranch;
-        }
-    }
-
-    // 3. Multi-ring magnetic sector hit in FlickFanMode:
-    // match the concentric ring closest to finger's radial distance, then closest angle!
+    // Multi-ring magnetic sector hit at Root in FlickFanMode
     const qreal dist = ray.length();
     if (dist > m_outermostRadius + 40.0) return -1;
 
@@ -998,7 +1106,7 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     const double fingerDeg = qRadiansToDegrees(qAtan2(globalPt.y() - m_ballCenterGlobal.y(),
                                                       globalPt.x() - m_ballCenterGlobal.x()));
     int bestSlot = -1;
-    double bestDiff = (targetRing == 0) ? 34.0 : 24.0;
+    double bestDiff = (targetRing == 0) ? 34.0 : 26.0;
     for (int i = 0; i < m_slots.size(); ++i) {
         if (m_slots[i].ringIndex != targetRing) continue;
         const QPointF c = m_slots[i].centerGlobal;
@@ -1013,10 +1121,47 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     return bestSlot;
 }
 
-void RadialFanOverlay::setActiveBranch(BranchMode branch)
+void RadialFanOverlay::drillInto(const QString &key, const QString &title, const QColor &accent,
+                                 const QPointF &hubPos, const TrayItemInfo &traySource)
 {
-    if (m_activeBranch == branch) return;
-    m_activeBranch = branch;
+    if (!m_owner) return;
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
+    QScreen *screen = m_owner->assignedScreen();
+    if (!screen || !QGuiApplication::screens().contains(screen))
+        screen = QGuiApplication::screenAt(m_ballCenterGlobal.toPoint());
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    const QRect bounds = screen ? screen->availableGeometry() : geometry();
+
+    const QPointF prevCenter = m_drillStack.isEmpty() ? m_ballCenterGlobal : m_drillStack.last().centerGlobal;
+    // Clamp new center cleanly inside screen bounds so the full single ring fits comfortably!
+    const qreal margin = 128.0 * m_owner->screenScale();
+    const QPointF newCenter(
+        qBound(bounds.left() + margin, hubPos.x(), bounds.right() - margin),
+        qBound(bounds.top() + margin, hubPos.y(), bounds.bottom() - margin));
+
+    // Place amber ← backtrack orb a crisp ~104px back toward prevCenter (clamped in-screen)
+    QPointF backVec = prevCenter - newCenter;
+    qreal vlen = std::hypot(backVec.x(), backVec.y());
+    if (vlen < 1.0) {
+        backVec = QPointF(0.0, -1.0);
+        vlen = 1.0;
+    }
+    const qreal backDist = qBound(84.0, vlen, 108.0);
+    QPointF backPos = newCenter + (backVec / vlen) * backDist;
+    backPos.setX(qBound(bounds.left() + 34.0, backPos.x(), bounds.right() - 34.0));
+    backPos.setY(qBound(bounds.top() + 34.0, backPos.y(), bounds.bottom() - 34.0));
+
+    DrillFrame frame;
+    frame.key = key;
+    frame.title = title;
+    frame.accentColor = accent;
+    frame.centerGlobal = newCenter;
+    frame.backGlobal = backPos;
+    frame.traySource = traySource;
+    m_drillStack.append(frame);
+    m_drillCooldown.restart();
+    m_highlightedSlot = -1;
+
     if (m_mode == TapFanMode || m_mode == FlickFanMode) {
         recomputeFanLayout();
         updateHitMask();
@@ -1024,55 +1169,78 @@ void RadialFanOverlay::setActiveBranch(BranchMode branch)
     }
 }
 
-void RadialFanOverlay::toggleBranch(BranchMode branch)
+void RadialFanOverlay::popDrill()
 {
-    setActiveBranch(m_activeBranch == branch ? BranchNone : branch);
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
+    if (m_drillStack.isEmpty()) return;
+    m_drillStack.removeLast();
+    m_drillCooldown.restart();
+    m_highlightedSlot = -1;
+    if (m_mode == TapFanMode || m_mode == FlickFanMode) {
+        recomputeFanLayout();
+        updateHitMask();
+        update();
+    }
 }
 
-void RadialFanOverlay::updateBranchForPointer(const QPointF &globalPt, int hitSlot)
+void RadialFanOverlay::clearDrill()
 {
-    if (hitSlot >= 0 && hitSlot < m_slots.size()) {
-        const RadialSlotItem &hit = m_slots[hitSlot];
-        if (hit.id == QLatin1String("tray_hub")) {
-            setActiveBranch(BranchTray);
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
+    if (m_drillStack.isEmpty()) return;
+    m_drillStack.clear();
+    m_highlightedSlot = -1;
+    if (m_mode == TapFanMode || m_mode == FlickFanMode) {
+        recomputeFanLayout();
+        updateHitMask();
+        update();
+    }
+}
+
+void RadialFanOverlay::handleContinuousDragAt(const QPointF &globalPt)
+{
+    const bool cooled = !m_drillCooldown.isValid() || m_drillCooldown.elapsed() >= 210;
+
+    // 1. Instant backtrack when finger slides onto ← 返回 (without lifting!)
+    if (!m_drillStack.isEmpty() && cooled) {
+        const DrillFrame &top = m_drillStack.last();
+        if (QLineF(globalPt, top.backGlobal).length() <= 34.0) {
+            popDrill();
             return;
-        }
-        if (hit.id == QLatin1String("sys_hub")) {
-            setActiveBranch(BranchSystem);
-            return;
-        }
-        if (hit.isBranchItem) {
-            return; // Keep active branch while navigating inside its satellite rings
         }
     }
 
-    if (m_activeBranch == BranchNone) return;
-
-    // Only collapse when pointer leaves the focused branch cluster circle OR
-    // moves right near the main ball (never while crossing spoke gaps inside the circle!).
-    if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
-        const qreal hubDist = QLineF(hubCenter, globalPt).length();
-        qreal clusterR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 16.0;
-        for (const RadialSlotItem &s : m_slots) {
-            if (s.isBranchItem) {
-                clusterR = qMax(clusterR, QLineF(hubCenter, s.centerGlobal).length() +
-                                              s.rectGlobal.width() * 0.5 + 16.0);
+    const int hit = hitSlotAtGlobal(globalPt, true);
+    if (hit >= 0 && hit < m_slots.size()) {
+        const RadialSlotItem &s = m_slots[hit];
+        // 2. Instant drill-in when finger slides onto a › hub orb!
+        if (!s.drillKey.isEmpty() && cooled) {
+            QString title = s.shortLabel;
+            title.remove(QStringLiteral(" ›")).remove(QStringLiteral("›"));
+            drillInto(s.drillKey, title.trimmed(), s.accentColor, s.centerGlobal);
+            return;
+        }
+        // 3. Optional Level-3 Tray DBusMenu dwell (hold 380ms on a tray orb with menuPath)
+        if (s.kind == RadialSlotItem::TraySlot && !s.trayItem.menuPath.isEmpty() &&
+            s.trayItem.menuPath != QLatin1String("/NO_DBUSMENU") &&
+            (!m_drillStack.isEmpty() && m_drillStack.last().key == QLatin1String("tray"))) {
+            if (m_pendingTrayDwell.service != s.trayItem.service ||
+                m_pendingTrayDwell.objectPath != s.trayItem.objectPath ||
+                !m_trayDwellTimer->isActive()) {
+                m_pendingTrayDwell = s.trayItem;
+                m_pendingTrayPos = s.centerGlobal;
+                m_trayDwellTimer->start();
             }
-        }
-        const qreal distToBall = QLineF(m_ballCenterGlobal, globalPt).length();
-        const bool nearMainBall = (distToBall <= m_fanRadius * 0.78 && hubDist > m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 12.0);
-        if (hubDist > clusterR || nearMainBall) {
-            setActiveBranch(BranchNone);
+            return;
         }
     }
+    if (m_trayDwellTimer && m_trayDwellTimer->isActive()) m_trayDwellTimer->stop();
 }
 
 void RadialFanOverlay::openTapFan()
 {
     m_mode = TapFanMode;
-    m_activeBranch = BranchNone;
-    m_branchHubSlotIndex = -1;
+    m_drillStack.clear();
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
     m_highlightedSlot = -1;
     m_pressedTapSlot = -1;
     recomputeFanLayout();
@@ -1085,8 +1253,9 @@ void RadialFanOverlay::openTapFan()
 void RadialFanOverlay::openFlickFan(const QPointF &fingerGlobal)
 {
     m_mode = FlickFanMode;
-    m_activeBranch = BranchNone;
-    m_branchHubSlotIndex = -1;
+    m_drillStack.clear();
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
+    m_drillCooldown.invalidate();
     m_fingerGlobal = fingerGlobal;
     recomputeFanLayout();
     m_highlightedSlot = hitSlotAtGlobal(fingerGlobal, true);
@@ -1149,10 +1318,10 @@ void RadialFanOverlay::refreshLiveLayout()
 
 void RadialFanOverlay::dismissOverlay(bool immediate)
 {
+    if (m_trayDwellTimer) m_trayDwellTimer->stop();
     if (immediate) {
         m_mode = HiddenMode;
-        m_activeBranch = BranchNone;
-        m_branchHubSlotIndex = -1;
+        m_drillStack.clear();
         m_highlightedSlot = -1;
         m_pressedTapSlot = -1;
         m_progress = 0.0;
@@ -1182,15 +1351,21 @@ bool RadialFanOverlay::event(QEvent *ev)
                 emit dismissedByUser();
                 return true;
             }
-            if (ev->type() == QEvent::TouchBegin || ev->type() == QEvent::TouchUpdate) {
-                updateBranchForPointer(globalPt, slot);
-                const int refreshedSlot = hitSlotAtGlobal(globalPt, false);
+            if (ev->type() == QEvent::TouchBegin) {
+                m_highlightedSlot = slot;
+                updateHitMask();
+                update();
+            } else if (ev->type() == QEvent::TouchUpdate) {
+                // Continuous touch-drag even from Tap mode supports drill-in & backtrack!
+                handleContinuousDragAt(globalPt);
+                const int refreshedSlot = hitSlotAtGlobal(globalPt, true);
                 if (refreshedSlot != m_highlightedSlot) {
                     m_highlightedSlot = refreshedSlot;
                     updateHitMask();
                     update();
                 }
             } else if (ev->type() == QEvent::TouchEnd) {
+                if (m_trayDwellTimer) m_trayDwellTimer->stop();
                 const int target = slot >= 0 ? slot : m_highlightedSlot;
                 m_highlightedSlot = -1;
                 if (target >= 0) emit slotTapped(target);
@@ -1205,11 +1380,20 @@ void RadialFanOverlay::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_mode == TapFanMode) {
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
-        const int hitBefore = hitSlotAtGlobal(globalPt, false);
-        updateBranchForPointer(globalPt, hitBefore);
+        // If user is holding left button and dragging inside TapFanMode, support continuous drill & backtrack!
+        if (event->buttons() & Qt::LeftButton) {
+            handleContinuousDragAt(globalPt);
+            const int next = hitSlotAtGlobal(globalPt, true);
+            if (next != m_highlightedSlot) {
+                m_highlightedSlot = next;
+                updateHitMask();
+                update();
+            }
+            return;
+        }
+        // Pure hover (button NOT held): highlight cleanly with ZERO auto-branch flicker!
         const int next = hitSlotAtGlobal(globalPt, false);
         if (next != m_highlightedSlot) {
-            // Slot positions & diameters remain strictly invariant on hover!
             m_highlightedSlot = next;
             setCursor(next >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
             updateHitMask();
@@ -1275,15 +1459,10 @@ void RadialFanOverlay::wheelEvent(QWheelEvent *event)
 
 void RadialFanOverlay::leaveEvent(QEvent *event)
 {
-    if (m_mode == TapFanMode) {
-        if (m_activeBranch != BranchNone && !QApplication::activePopupWidget()) {
-            setActiveBranch(BranchNone);
-        }
-        if (m_highlightedSlot >= 0) {
-            m_highlightedSlot = -1;
-            updateHitMask();
-            update();
-        }
+    if (m_mode == TapFanMode && m_highlightedSlot >= 0) {
+        m_highlightedSlot = -1;
+        updateHitMask();
+        update();
     }
     QWidget::leaveEvent(event);
 }
@@ -1394,113 +1573,142 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
     if (reveal <= 0.01) return;
 
     const QPointF localBallCenter = m_ballCenterGlobal - origin;
+    const bool drilled = !m_drillStack.isEmpty();
 
-    // Clean glowing tether line to the currently selected slot in FlickFanMode
-    if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
-        const RadialSlotItem &hi = m_slots[m_highlightedSlot];
-        const QPointF slotLocal = hi.centerGlobal - origin;
-        p.save();
-        p.setPen(QPen(QColor(102, 188, 255, 170), 2.4, Qt::SolidLine, Qt::RoundCap));
-        if (hi.isBranchItem && m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
-            const QPointF hubLocal = m_slots[m_branchHubSlotIndex].centerGlobal - origin;
-            p.drawLine(localBallCenter, hubLocal);
-            p.drawLine(hubLocal, slotLocal);
-        } else {
-            p.drawLine(localBallCenter, slotLocal);
+    if (drilled) {
+        const DrillFrame &top = m_drillStack.last();
+        const QPointF centerLocal = top.centerGlobal - origin;
+        const QPointF backLocal = top.backGlobal - origin;
+        qreal maxR = 96.0;
+        for (const RadialSlotItem &s : m_slots) {
+            if (s.ringIndex == 1) {
+                maxR = qMax(maxR, QLineF(centerLocal, s.centerGlobal - origin).length() + s.rectGlobal.width() * 0.5);
+            }
         }
+        // Soft circular dark focus backdrop isolating the single drilled ring over any wallpaper
+        p.save();
+        p.setOpacity(reveal);
+        QRadialGradient backdrop(centerLocal, maxR + 34.0);
+        backdrop.setColorAt(0.0, QColor(10, 14, 24, 185));
+        backdrop.setColorAt(0.68, QColor(10, 14, 24, 140));
+        backdrop.setColorAt(0.88, QColor(10, 14, 24, 52));
+        backdrop.setColorAt(1.0, QColor(10, 14, 24, 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(backdrop);
+        p.drawEllipse(centerLocal, maxR + 34.0, maxR + 34.0);
+
+        // Luminous breadcrumb spine connecting ← Backtrack orb -> Drilled Center
+        p.setPen(QPen(top.accentColor, 2.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(backLocal, centerLocal);
+
+        // Crisp short straight radial spokes from Center -> each child orb
+        qreal centerR = 22.0;
+        for (const RadialSlotItem &s : m_slots) {
+            if (s.kind == RadialSlotItem::CenterSlot) { centerR = s.rectGlobal.width() * 0.5; break; }
+        }
+        for (int i = 0; i < m_slots.size(); ++i) {
+            const RadialSlotItem &s = m_slots[i];
+            if (s.ringIndex != 1) continue;
+            const QPointF targetLocal = s.centerGlobal - origin;
+            const QPointF delta = targetLocal - centerLocal;
+            const qreal dist = std::hypot(delta.x(), delta.y());
+            const qreal targetR = s.rectGlobal.width() * 0.5;
+            if (dist <= centerR + targetR + 2.0) continue;
+            const QPointF u = delta / dist;
+            const bool isHi = (i == m_highlightedSlot);
+            QColor spokeColor = isHi ? QColor("#7cc8ff") : top.accentColor;
+            spokeColor.setAlpha(isHi ? 225 : 105);
+            p.setPen(QPen(spokeColor, isHi ? 2.6 : 1.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(centerLocal + u * (centerR - 0.5), targetLocal - u * (targetR - 0.5));
+        }
+        p.restore();
+    } else if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
+        // Clean glowing tether line at Root in FlickFanMode
+        const QPointF slotLocal = m_slots[m_highlightedSlot].centerGlobal - origin;
+        p.save();
+        p.setPen(QPen(QColor(102, 188, 255, 175), 2.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(localBallCenter, slotLocal);
         p.restore();
     }
 
-    const bool hasBranchFocus = (m_activeBranch != BranchNone &&
-                                 m_branchHubSlotIndex >= 0 &&
-                                 m_branchHubSlotIndex < m_slots.size());
-    const int focusedRing = (m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size())
-        ? m_slots[m_highlightedSlot].ringIndex : -1;
+    // Draw all active ring slots (single clean ring when drilled, or 4+5 root!)
+    for (int i = 0; i < m_slots.size(); ++i) {
+        const RadialSlotItem &item = m_slots[i];
+        const QRectF slotRect = item.rectGlobal.translated(-origin);
+        const bool selected = (i == m_highlightedSlot);
+        const qreal ringAlphaFactor = item.ringIndex == 0 ? 1.0 : qMax(0.90, 0.98 - item.ringIndex * 0.012);
+        const qreal alpha = (selected ? 0.99 : m_owner->activeOpacity() * ringAlphaFactor) * reveal;
 
-    // Two-pass painting:
-    // Pass 0 = background fan (dimmed way down to ~22% when a branch cluster is focused!)
-    // Pass 1 = soft radial focus isolation backdrop + short straight spokes + bright foreground hub & concentric branch rings!
-    for (int pass = 0; pass < 2; ++pass) {
-        if (pass == 1) {
-            if (!hasBranchFocus) break;
-            const QPointF hubLocal = m_slots[m_branchHubSlotIndex].centerGlobal - origin;
-            const qreal hubR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5;
-            qreal maxBranchR = hubR + 64.0;
-            for (const RadialSlotItem &s : m_slots) {
-                if (s.isBranchItem) {
-                    maxBranchR = qMax(maxBranchR, QLineF(hubLocal, s.centerGlobal - origin).length() + s.rectGlobal.width() * 0.5);
-                }
-            }
-            // Soft circular dark focus halo behind the concentric branch rings so dimmed background never clashes
-            p.save();
-            p.setOpacity(reveal);
-            QRadialGradient focusBackdrop(hubLocal, maxBranchR + 28.0);
-            focusBackdrop.setColorAt(0.0, QColor(10, 14, 22, 188));
-            focusBackdrop.setColorAt(0.68, QColor(10, 14, 22, 142));
-            focusBackdrop.setColorAt(0.88, QColor(10, 14, 22, 54));
-            focusBackdrop.setColorAt(1.0, QColor(10, 14, 22, 0));
+        p.save();
+        p.setOpacity(alpha);
+
+        if (item.kind == RadialSlotItem::BackSlot) {
+            const QRectF face = slotRect.adjusted(1.5, 1.5, -1.5, -1.5);
             p.setPen(Qt::NoPen);
-            p.setBrush(focusBackdrop);
-            p.drawEllipse(hubLocal, maxBranchR + 28.0, maxBranchR + 28.0);
-
-            // Subtle concentric guide rings around hubLocal + short straight spokes
-            const QColor branchAccent = (m_activeBranch == BranchTray) ? QColor(102, 217, 255, 165)
-                                                                       : QColor(154, 168, 255, 165);
-            int firstBranchRing = -1;
-            for (const RadialSlotItem &s : m_slots) {
-                if (s.isBranchItem) { firstBranchRing = s.ringIndex; break; }
+            p.setBrush(QColor(0, 0, 0, 62));
+            p.drawEllipse(face.translated(0, 1.6));
+            QLinearGradient grad(face.topLeft(), face.bottomRight());
+            if (selected) {
+                grad.setColorAt(0.0, QColor(245, 158, 11, 245));
+                grad.setColorAt(1.0, QColor(180, 83, 9, 248));
+            } else {
+                grad.setColorAt(0.0, QColor(64, 48, 24, 236));
+                grad.setColorAt(1.0, QColor(32, 24, 14, 244));
             }
-            auto drawShortEdgeLine = [&](const QPointF &a, qreal rA, const QPointF &b, qreal rB) {
-                const QPointF delta = b - a;
-                const qreal dist = std::hypot(delta.x(), delta.y());
-                if (dist <= rA + rB + 1.0) return;
-                const QPointF u = delta / dist;
-                p.drawLine(a + u * (rA - 0.5), b - u * (rB - 0.5));
-            };
-            p.setPen(QPen(branchAccent, 2.0, Qt::SolidLine, Qt::RoundCap));
-            for (const RadialSlotItem &s : m_slots) {
-                if (!s.isBranchItem) continue;
-                const QPointF targetLocal = s.centerGlobal - origin;
-                const qreal targetR = s.rectGlobal.width() * 0.5;
-                if (s.ringIndex == firstBranchRing) {
-                    drawShortEdgeLine(hubLocal, hubR, targetLocal, targetR);
-                } else {
-                    const RadialSlotItem *nearest = nullptr;
-                    qreal bestD = 1e9;
-                    for (const RadialSlotItem &n : m_slots) {
-                        if (!n.isBranchItem || n.ringIndex != firstBranchRing) continue;
-                        const qreal d = QLineF(n.centerGlobal, s.centerGlobal).length();
-                        if (d < bestD) { bestD = d; nearest = &n; }
-                    }
-                    if (nearest) {
-                        drawShortEdgeLine(nearest->centerGlobal - origin, nearest->rectGlobal.width() * 0.5,
-                                          targetLocal, targetR);
-                    }
-                }
+            p.setBrush(grad);
+            p.setPen(QPen(QColor("#fbbf24"), selected ? 2.2 : 1.5));
+            p.drawEllipse(face);
+            const qreal iconDim = face.width() * 0.48;
+            FloatingIcons::draw(p, FloatingIcons::Back,
+                                QRectF(face.center().x() - iconDim * 0.5, face.center().y() - iconDim * 0.5, iconDim, iconDim),
+                                selected ? QColor("#ffffff") : QColor("#fcd34d"));
+        } else if (item.kind == RadialSlotItem::CenterSlot) {
+            const QRectF face = slotRect.adjusted(1.4, 1.4, -1.4, -1.4);
+            const QColor accent = item.accentColor.isValid() ? item.accentColor : QColor("#7cc8ff");
+            QLinearGradient grad(face.topLeft(), face.bottomRight());
+            QColor hi = accent; hi.setAlpha(210);
+            QColor lo = accent.darker(190); lo.setAlpha(242);
+            grad.setColorAt(0.0, hi);
+            grad.setColorAt(1.0, lo);
+            p.setBrush(grad);
+            p.setPen(QPen(accent.lighter(120), 1.9));
+            p.drawEllipse(face);
+            QFont f = font();
+            f.setPixelSize(qRound(face.width() * (item.shortLabel.size() <= 2 ? 0.34 : 0.25)));
+            f.setWeight(QFont::Bold);
+            p.setFont(f);
+            p.setPen(QColor("#ffffff"));
+            p.drawText(face, Qt::AlignCenter, item.shortLabel);
+        } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
+            const QRectF face = slotRect.adjusted(1.6, 1.6, -1.6, -1.6);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0, 0, 0, 56));
+            p.drawEllipse(face.translated(0, 1.6));
+            QLinearGradient grad(face.topLeft(), face.bottomRight());
+            if (selected || item.toggleActive) {
+                grad.setColorAt(0.0, QColor(42, 112, 186, 245));
+                grad.setColorAt(1.0, QColor(24, 62, 118, 248));
+            } else {
+                grad.setColorAt(0.0, QColor(36, 44, 58, 236));
+                grad.setColorAt(1.0, QColor(18, 23, 33, 242));
             }
-            p.restore();
-        }
-
-        for (int i = 0; i < m_slots.size(); ++i) {
-            const RadialSlotItem &item = m_slots[i];
-            const bool isForegroundBranch = hasBranchFocus && (item.isBranchItem || i == m_branchHubSlotIndex);
-            if ((pass == 0 && isForegroundBranch) || (pass == 1 && !isForegroundBranch)) continue;
-
-            const QRectF slotRect = item.rectGlobal.translated(-origin);
-            const bool selected = (i == m_highlightedSlot);
-            qreal focusDim = 1.0;
-            if (hasBranchFocus) {
-                focusDim = isForegroundBranch ? 1.0 : 0.22;
-            } else if (focusedRing >= 0 && !selected) {
-                focusDim = (item.ringIndex == focusedRing) ? 0.92 : 0.62;
+            p.setBrush(grad);
+            p.setPen(QPen(selected ? QColor("#7cc8ff") : QColor(102, 217, 255, 130), selected ? 2.0 : 1.2));
+            p.drawEllipse(face);
+            if (!item.trayMenuEntry.icon.isNull()) {
+                const qreal iconDim = face.width() * 0.56;
+                item.trayMenuEntry.icon.paint(&p, QRectF(face.center().x() - iconDim * 0.5,
+                                                         face.center().y() - iconDim * 0.5, iconDim, iconDim).toAlignedRect(),
+                                              Qt::AlignCenter);
+            } else {
+                QFont f = font();
+                f.setPixelSize(qRound(face.width() * 0.30));
+                f.setWeight(QFont::DemiBold);
+                p.setFont(f);
+                p.setPen(QColor("#f2f6fc"));
+                p.drawText(face, Qt::AlignCenter, item.shortLabel.left(2));
             }
-            const qreal ringAlphaFactor = item.ringIndex == 0 ? 1.0 : qMax(0.88, 0.98 - item.ringIndex * 0.012);
-            const qreal alpha = (selected ? 0.99 : m_owner->activeOpacity() * ringAlphaFactor * focusDim) * reveal;
-
-            p.save();
-            p.setOpacity(alpha);
-
-        if (item.kind == RadialSlotItem::TraySlot) {
+        } else if (item.kind == RadialSlotItem::TraySlot) {
             // Branched System Tray orb: frosted obsidian circular capsule + real SNI icon
             const QRectF face = slotRect.adjusted(1.6, 1.6, -1.6, -1.6);
             p.setPen(Qt::NoPen);
@@ -1668,13 +1876,11 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 grad.setColorAt(1.0, QColor(22, 25, 33, 242));
             }
             p.setBrush(grad);
-            const bool isHubActive = (i == m_branchHubSlotIndex && m_activeBranch != BranchNone);
             const QColor ringPenColor = selected ? QColor("#7cc8ff")
-                : (isHubActive ? (item.accentColor.isValid() ? item.accentColor : QColor("#66d9ff"))
-                   : (isCurrentVDesk ? vdeskColor
-                      : (item.isBranchHub ? QColor(item.accentColor.red(), item.accentColor.green(), item.accentColor.blue(), 130)
-                         : QColor(255, 255, 255, 56))));
-            p.setPen(QPen(ringPenColor, (selected || isCurrentVDesk || isHubActive) ? 2.0 : 1.1));
+                : (isCurrentVDesk ? vdeskColor
+                   : (item.isBranchHub ? QColor(item.accentColor.red(), item.accentColor.green(), item.accentColor.blue(), 145)
+                      : QColor(255, 255, 255, 56)));
+            p.setPen(QPen(ringPenColor, (selected || isCurrentVDesk) ? 2.0 : 1.2));
             p.drawEllipse(face);
 
             if (vdeskIdx >= 0 && vdeskIdx < 4) {
@@ -1695,34 +1901,40 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 const QRectF iconRect(face.center().x() - iconDim * 0.5,
                                       face.center().y() - iconDim * 0.5,
                                       iconDim, iconDim);
-                QColor ink = selected ? QColor("#ffffff") : QColor("#f2f6fc");
-                if (!selected) {
+                QColor ink = selected ? QColor("#ffffff") : (item.accentColor.isValid() ? item.accentColor : QColor("#f2f6fc"));
+                if (!selected && !item.accentColor.isValid()) {
                     if (item.id == QLatin1String("crosshair")) ink = QColor("#8ad0ff");
                     else if (item.id == QLatin1String("launcher")) ink = QColor("#7cc8ff");
-                    else if (item.id == QLatin1String("tray_hub")) ink = QColor("#66d9ff");
-                    else if (item.id == QLatin1String("sys_hub")) ink = QColor("#9aa8ff");
                     else if (item.id == QLatin1String("downloads")) ink = QColor("#86e0b8");
                     else if (item.id == QLatin1String("trash")) ink = QColor("#ff9dad");
                 }
                 FloatingIcons::draw(p, iconForAction(item.id), iconRect, ink);
 
-                // Subtle outward branch indicator dot on hub orbs + live attention dot on tray_hub
-                if (item.isBranchHub) {
-                    const QPointF dirVec = face.center() - localBallCenter;
-                    const qreal len = qMax(1.0, std::hypot(dirVec.x(), dirVec.y()));
-                    const QPointF outPt = face.center() + (dirVec / len) * (face.width() * 0.5 + 2.2);
+                if (item.id == QLatin1String("tray_hub") && m_owner->statusMonitor()->snapshot().trayNeedsAttention) {
                     p.setPen(Qt::NoPen);
-                    p.setBrush(isHubActive ? QColor("#ffffff") : ink);
-                    p.drawEllipse(outPt, isHubActive ? 2.8 : 2.0, isHubActive ? 2.8 : 2.0);
-                    if (item.id == QLatin1String("tray_hub") && m_owner->statusMonitor()->snapshot().trayNeedsAttention) {
-                        p.setBrush(QColor("#ff5272"));
-                        p.drawEllipse(QPointF(face.right() - 5.5, face.top() + 5.5), 3.3, 3.3);
-                    }
+                    p.setBrush(QColor("#ff5272"));
+                    p.drawEllipse(QPointF(face.right() - 5.5, face.top() + 5.5), 3.3, 3.3);
                 }
             }
-            }
-            p.restore();
         }
+
+        // Compact crisp micro-label directly beneath Root hubs & Drilled single-ring orbs
+        if (!item.shortLabel.isEmpty() && item.kind != RadialSlotItem::CenterSlot && reveal > 0.72) {
+            QFont mf = font();
+            mf.setPixelSize(11);
+            mf.setWeight(selected ? QFont::Bold : QFont::Medium);
+            p.setFont(mf);
+            const QFontMetrics fm(mf);
+            const int tw = fm.horizontalAdvance(item.shortLabel) + 10;
+            const int th = 16;
+            const QRectF tagRect(slotRect.center().x() - tw * 0.5, slotRect.bottom() + 2.5, tw, th);
+            p.setPen(Qt::NoPen);
+            p.setBrush(selected ? QColor(30, 88, 168, 232) : QColor(12, 16, 26, 200));
+            p.drawRoundedRect(tagRect, 8, 8);
+            p.setPen(selected ? QColor("#ffffff") : QColor("#e2e8f0"));
+            p.drawText(tagRect, Qt::AlignCenter, item.shortLabel);
+        }
+        p.restore();
     }
 
     // Floating label pill (in FlickFanMode or when hovering any slot in TapFanMode)
@@ -1772,8 +1984,10 @@ const QStringList &FloatingBall::availableActions()
         QStringLiteral("downloads"),
         QStringLiteral("trash"),
         QStringLiteral("launcher"),
+        QStringLiteral("win_hub"),
         QStringLiteral("tray_hub"),
-        QStringLiteral("sys_hub")
+        QStringLiteral("sys_hub"),
+        QStringLiteral("tools_hub")
     };
     return ids;
 }
@@ -1907,12 +2121,17 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
         const auto slotsData = m_fanOverlay->slotsData();
         if (slot < 0 || slot >= slotsData.size()) return;
         const RadialSlotItem item = slotsData[slot];
-        if (item.isBranchHub) {
-            if (item.id == QLatin1String("tray_hub")) m_fanOverlay->toggleBranch(RadialFanOverlay::BranchTray);
-            else if (item.id == QLatin1String("sys_hub")) m_fanOverlay->toggleBranch(RadialFanOverlay::BranchSystem);
+        if (item.kind == RadialSlotItem::BackSlot || item.kind == RadialSlotItem::CenterSlot) {
+            m_fanOverlay->popDrill();
             return;
         }
-        // Live system toggles update in-place without closing the control branch!
+        if (!item.drillKey.isEmpty()) {
+            QString title = item.shortLabel;
+            title.remove(QStringLiteral(" ›")).remove(QStringLiteral("›"));
+            m_fanOverlay->drillInto(item.drillKey, title.trimmed(), item.accentColor, item.centerGlobal);
+            return;
+        }
+        // Live system toggles update in-place without closing the control ring!
         if (item.kind == RadialSlotItem::SystemSlot &&
             (item.id == QLatin1String("sys_bluetooth") || item.id == QLatin1String("sys_dnd") ||
              item.id == QLatin1String("sys_nightlight") || item.id == QLatin1String("sys_power"))) {
@@ -2090,12 +2309,14 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("downloads")) return tr("下载目录");
     if (id == QLatin1String("trash")) return tr("废纸篓");
     if (id == QLatin1String("launcher")) return tr("开始菜单 · 所有应用");
+    if (id == QLatin1String("win_hub")) return tr("当前打开的窗口");
     if (id == QLatin1String("tray_hub")) {
         const int n = m_statusMonitor ? m_statusMonitor->trayItems().size()
             : (m_primaryPeer ? m_primaryPeer->statusMonitor()->trayItems().size() : 0);
         return n > 0 ? tr("托盘图标 (%1)").arg(n) : tr("托盘图标");
     }
     if (id == QLatin1String("sys_hub")) return tr("系统控制中心");
+    if (id == QLatin1String("tools_hub")) return tr("常用触控工具");
     return id;
 }
 
@@ -2439,11 +2660,10 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
             if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
         });
         connect(m_statusMonitor, &SystemStatusMonitor::trayItemsChanged, this, [this] {
-            if (m_orbitVisible && m_fanOverlay && m_fanOverlay->activeBranch() == RadialFanOverlay::BranchTray)
+            if (m_orbitVisible && m_fanOverlay && m_fanOverlay->isDrilled())
                 m_fanOverlay->refreshLiveLayout();
             for (FloatingBall *rep : replicaBalls()) {
-                if (rep->isOrbitVisible() && rep->fanOverlay() &&
-                    rep->fanOverlay()->activeBranch() == RadialFanOverlay::BranchTray)
+                if (rep->isOrbitVisible() && rep->fanOverlay() && rep->fanOverlay()->isDrilled())
                     rep->fanOverlay()->refreshLiveLayout();
             }
         });
@@ -2578,6 +2798,11 @@ void FloatingBall::executeSlotItem(const RadialSlotItem &item)
         if (item.id == QLatin1String("tray:empty")) return;
         statusMonitor()->activateTrayItem(item.trayItem, item.centerGlobal.toPoint(), this);
         DesktopActions::showToast(tr("✓ %1").arg(item.trayItem.title), anchor);
+        return;
+    }
+    if (item.kind == RadialSlotItem::TrayMenuSlot) {
+        statusMonitor()->triggerTrayMenuEntry(item.trayItem, item.trayMenuEntry.id);
+        DesktopActions::showToast(tr("✓ %1 · %2").arg(item.trayItem.title, item.trayMenuEntry.label), anchor);
         return;
     }
     if (item.kind == RadialSlotItem::SystemSlot) {
@@ -2969,8 +3194,10 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
 
     if (m_gestureMode == GestureFlickFan) {
         const qreal distFromBall = QLineF(anchorCenterGlobal(), globalPos).length();
-        // Pull past the outermost active ring -> seamless fooView Crosshair handoff!
-        if (m_crosshairPullEnabled && distFromBall > m_fanOverlay->fanOuterRadius() + 44.0) {
+        // Pull past the outermost active ring at Root -> seamless fooView Crosshair handoff!
+        // Never steal continuous drags when drilled inside a branch ring!
+        if (!m_fanOverlay->isDrilled() && m_crosshairPullEnabled &&
+            distFromBall > m_fanOverlay->fanOuterRadius() + 50.0) {
             m_gestureMode = GestureCrosshairAim;
             m_orbitVisible = false;
             startCrosshairDwell(globalPos);
@@ -2979,8 +3206,7 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
             update();
             return;
         }
-        const int hitBefore = m_fanOverlay->hitSlotAtGlobal(globalPos, true);
-        m_fanOverlay->updateBranchForPointer(globalPos, hitBefore);
+        m_fanOverlay->handleContinuousDragAt(globalPos);
         const int slot = m_fanOverlay->hitSlotAtGlobal(globalPos, true);
         m_fanOverlay->updateFinger(globalPos, slot);
         return;
@@ -3037,25 +3263,27 @@ void FloatingBall::endPointerInteraction(const QPointF &globalPos)
         const auto slotsData = m_fanOverlay->slotsData();
         const bool valid = (slot >= 0 && slot < slotsData.size());
         const RadialSlotItem chosen = valid ? slotsData[slot] : RadialSlotItem{};
-        if (valid && chosen.isBranchHub) {
-            const auto branch = (chosen.id == QLatin1String("tray_hub"))
-                ? RadialFanOverlay::BranchTray : RadialFanOverlay::BranchSystem;
+        if (valid && !chosen.drillKey.isEmpty()) {
+            QString title = chosen.shortLabel;
+            title.remove(QStringLiteral(" ›")).remove(QStringLiteral("›"));
             m_orbitVisible = true;
             m_orbitProgress = 1.0;
             m_fanOpenedTimer.restart();
             m_fanOverlay->openTapFan();
             m_fanOverlay->syncProgress(1.0);
-            m_fanOverlay->setActiveBranch(branch);
+            m_fanOverlay->drillInto(chosen.drillKey, title.trimmed(), chosen.accentColor, chosen.centerGlobal);
             installOutsideDismissMonitor();
             raise();
             refreshBallOpacity();
             update();
             return;
         }
+        const bool isControlNode = valid && (chosen.kind == RadialSlotItem::BackSlot ||
+                                             chosen.kind == RadialSlotItem::CenterSlot);
         closeFan(true);
         refreshBallOpacity();
         update();
-        if (valid) executeSlotItem(chosen);
+        if (valid && !isControlNode) executeSlotItem(chosen);
         return;
     }
 
@@ -3218,9 +3446,6 @@ void FloatingBall::enterEvent(QEnterEvent *event)
     Q_UNUSED(event);
     expandFromEdge();
     m_pointerInside = true;
-    if (m_orbitVisible && m_fanOverlay && m_fanOverlay->activeBranch() != RadialFanOverlay::BranchNone) {
-        m_fanOverlay->setActiveBranch(RadialFanOverlay::BranchNone);
-    }
     refreshSystemAudioState();
     refreshBallOpacity();
     update();

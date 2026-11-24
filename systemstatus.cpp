@@ -335,6 +335,57 @@ void parseDBusMenuNode(const QDBusArgument &arg, QMenu *parentMenu,
             parseDBusMenuNode(cv.variant().value<QDBusArgument>(), parentMenu, service, menuPath, false);
     }
 }
+
+void collectDBusMenuEntries(const QDBusArgument &arg, QList<TrayMenuEntry> *out, bool isRoot)
+{
+    int id = 0;
+    QVariantMap props;
+    QList<QDBusVariant> children;
+    arg.beginStructure();
+    arg >> id >> props;
+    arg.beginArray();
+    while (!arg.atEnd()) {
+        QDBusVariant childVar;
+        arg >> childVar;
+        children.append(childVar);
+    }
+    arg.endArray();
+    arg.endStructure();
+
+    const bool visible = props.value(QStringLiteral("visible"), true).toBool();
+    if (!isRoot && !visible) return;
+
+    if (!isRoot) {
+        const QString type = props.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("separator")) return;
+        QString label = props.value(QStringLiteral("label")).toString();
+        label.replace(QStringLiteral("__"), QStringLiteral("\x01"));
+        label.remove(QLatin1Char('_'));
+        label.replace(QStringLiteral("\x01"), QStringLiteral("_"));
+        label = label.trimmed();
+        const bool enabled = props.value(QStringLiteral("enabled"), true).toBool();
+        if (!label.isEmpty() && enabled && out->size() < 10) {
+            TrayMenuEntry e;
+            e.id = id;
+            e.label = label;
+            e.enabled = enabled;
+            const QString iconName = props.value(QStringLiteral("icon-name")).toString();
+            if (!iconName.isEmpty()) e.icon = QIcon::fromTheme(iconName);
+            const QString toggleType = props.value(QStringLiteral("toggle-type")).toString();
+            if (toggleType == QLatin1String("checkmark") || toggleType == QLatin1String("radio")) {
+                e.checkable = true;
+                e.checked = (props.value(QStringLiteral("toggle-state")).toInt() == 1);
+            }
+            out->append(e);
+        }
+        return;
+    }
+
+    for (const QDBusVariant &cv : children) {
+        if (cv.variant().canConvert<QDBusArgument>())
+            collectDBusMenuEntries(cv.variant().value<QDBusArgument>(), out, false);
+    }
+}
 #endif
 
 } // namespace
@@ -1230,6 +1281,48 @@ void SystemStatusMonitor::openTrayItemMenu(const TrayItemInfo &item, const QPoin
     });
 #else
     Q_UNUSED(item); Q_UNUSED(globalPos); Q_UNUSED(menuParent);
+#endif
+}
+
+void SystemStatusMonitor::fetchTrayMenuEntries(const TrayItemInfo &item,
+                                               std::function<void(const QList<TrayMenuEntry> &)> callback)
+{
+    if (!callback) return;
+#ifdef Q_OS_LINUX
+    if (item.service.isEmpty() || item.menuPath.isEmpty() || item.menuPath == QLatin1String("/NO_DBUSMENU")) {
+        callback({});
+        return;
+    }
+    auto bus = QDBusConnection::sessionBus();
+    auto msg = QDBusMessage::createMethodCall(
+        item.service, item.menuPath,
+        QStringLiteral("com.canonical.dbusmenu"),
+        QStringLiteral("GetLayout"));
+    msg.setArguments({0, 1, QStringList{}});
+    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(msg, 500), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [w, callback = std::move(callback)] {
+        const QDBusMessage reply = w->reply();
+        w->deleteLater();
+        QList<TrayMenuEntry> entries;
+        if (reply.type() == QDBusMessage::ReplyMessage && reply.arguments().size() >= 2 &&
+            reply.arguments().at(1).canConvert<QDBusArgument>()) {
+            collectDBusMenuEntries(reply.arguments().at(1).value<QDBusArgument>(), &entries, true);
+        }
+        callback(entries);
+    });
+#else
+    Q_UNUSED(item);
+    callback({});
+#endif
+}
+
+void SystemStatusMonitor::triggerTrayMenuEntry(const TrayItemInfo &item, int menuItemId)
+{
+#ifdef Q_OS_LINUX
+    if (item.service.isEmpty() || item.menuPath.isEmpty()) return;
+    sendDBusMenuEvent(item.service, item.menuPath, menuItemId);
+#else
+    Q_UNUSED(item); Q_UNUSED(menuItemId);
 #endif
 }
 
