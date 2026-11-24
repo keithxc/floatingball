@@ -95,6 +95,7 @@ public:
     BranchMode activeBranch() const { return m_activeBranch; }
     void setActiveBranch(BranchMode branch);
     void toggleBranch(BranchMode branch);
+    void updateBranchForPointer(const QPointF &globalPt, int hitSlot);
     int highlightedSlot() const { return m_highlightedSlot; }
     // Inner ring (ring 0, 5 classic slots) rects for backward compatibility
     QList<QRectF> slotGlobalRects() const;

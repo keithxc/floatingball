@@ -1013,6 +1013,48 @@ void RadialFanOverlay::toggleBranch(BranchMode branch)
     setActiveBranch(m_activeBranch == branch ? BranchNone : branch);
 }
 
+void RadialFanOverlay::updateBranchForPointer(const QPointF &globalPt, int hitSlot)
+{
+    if (hitSlot >= 0 && hitSlot < m_slots.size()) {
+        const RadialSlotItem &hit = m_slots[hitSlot];
+        if (hit.id == QLatin1String("tray_hub")) {
+            setActiveBranch(BranchTray);
+            return;
+        }
+        if (hit.id == QLatin1String("sys_hub")) {
+            setActiveBranch(BranchSystem);
+            return;
+        }
+        if (hit.isBranchItem) {
+            return; // Keep active branch while navigating inside its satellite rings
+        }
+    }
+
+    if (m_activeBranch == BranchNone) return;
+
+    // Collapse branch immediately when pointer moves near the main ball,
+    // hits a non-branch background slot, or leaves the branch cluster circle!
+    const qreal distToBall = QLineF(m_ballCenterGlobal, globalPt).length();
+    if (distToBall <= m_fanRadius * 0.85 || hitSlot >= 0) {
+        setActiveBranch(BranchNone);
+        return;
+    }
+
+    if (m_branchHubSlotIndex >= 0 && m_branchHubSlotIndex < m_slots.size()) {
+        const QPointF hubCenter = m_slots[m_branchHubSlotIndex].centerGlobal;
+        qreal clusterR = m_slots[m_branchHubSlotIndex].rectGlobal.width() * 0.5 + 16.0;
+        for (const RadialSlotItem &s : m_slots) {
+            if (s.isBranchItem) {
+                clusterR = qMax(clusterR, QLineF(hubCenter, s.centerGlobal).length() +
+                                              s.rectGlobal.width() * 0.5 + 14.0);
+            }
+        }
+        if (QLineF(hubCenter, globalPt).length() > clusterR) {
+            setActiveBranch(BranchNone);
+        }
+    }
+}
+
 void RadialFanOverlay::openTapFan()
 {
     m_mode = TapFanMode;
@@ -1128,12 +1170,10 @@ bool RadialFanOverlay::event(QEvent *ev)
                 return true;
             }
             if (ev->type() == QEvent::TouchBegin || ev->type() == QEvent::TouchUpdate) {
-                if (slot != m_highlightedSlot) {
-                    m_highlightedSlot = slot;
-                    if (slot >= 0 && slot < m_slots.size()) {
-                        if (m_slots[slot].id == QLatin1String("tray_hub")) setActiveBranch(BranchTray);
-                        else if (m_slots[slot].id == QLatin1String("sys_hub")) setActiveBranch(BranchSystem);
-                    }
+                updateBranchForPointer(globalPt, slot);
+                const int refreshedSlot = hitSlotAtGlobal(globalPt, false);
+                if (refreshedSlot != m_highlightedSlot) {
+                    m_highlightedSlot = refreshedSlot;
                     updateHitMask();
                     update();
                 }
@@ -1152,14 +1192,12 @@ void RadialFanOverlay::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_mode == TapFanMode) {
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
+        const int hitBefore = hitSlotAtGlobal(globalPt, false);
+        updateBranchForPointer(globalPt, hitBefore);
         const int next = hitSlotAtGlobal(globalPt, false);
         if (next != m_highlightedSlot) {
             // Slot positions & diameters remain strictly invariant on hover!
             m_highlightedSlot = next;
-            if (next >= 0 && next < m_slots.size()) {
-                if (m_slots[next].id == QLatin1String("tray_hub")) setActiveBranch(BranchTray);
-                else if (m_slots[next].id == QLatin1String("sys_hub")) setActiveBranch(BranchSystem);
-            }
             setCursor(next >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
             updateHitMask();
             update();
@@ -1224,10 +1262,15 @@ void RadialFanOverlay::wheelEvent(QWheelEvent *event)
 
 void RadialFanOverlay::leaveEvent(QEvent *event)
 {
-    if (m_mode == TapFanMode && m_highlightedSlot >= 0) {
-        m_highlightedSlot = -1;
-        updateHitMask();
-        update();
+    if (m_mode == TapFanMode) {
+        if (m_activeBranch != BranchNone && !QApplication::activePopupWidget()) {
+            setActiveBranch(BranchNone);
+        }
+        if (m_highlightedSlot >= 0) {
+            m_highlightedSlot = -1;
+            updateHitMask();
+            update();
+        }
     }
     QWidget::leaveEvent(event);
 }
@@ -2923,17 +2966,9 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
             update();
             return;
         }
+        const int hitBefore = m_fanOverlay->hitSlotAtGlobal(globalPos, true);
+        m_fanOverlay->updateBranchForPointer(globalPos, hitBefore);
         const int slot = m_fanOverlay->hitSlotAtGlobal(globalPos, true);
-        if (slot >= 0 && slot < m_fanOverlay->slotsData().size()) {
-            const RadialSlotItem &hit = m_fanOverlay->slotsData().at(slot);
-            if (hit.id == QLatin1String("tray_hub")) {
-                m_fanOverlay->setActiveBranch(RadialFanOverlay::BranchTray);
-            } else if (hit.id == QLatin1String("sys_hub")) {
-                m_fanOverlay->setActiveBranch(RadialFanOverlay::BranchSystem);
-            } else if (hit.ringIndex == 0 && m_fanOverlay->activeBranch() != RadialFanOverlay::BranchNone) {
-                m_fanOverlay->setActiveBranch(RadialFanOverlay::BranchNone);
-            }
-        }
         m_fanOverlay->updateFinger(globalPos, slot);
         return;
     }
@@ -3170,6 +3205,9 @@ void FloatingBall::enterEvent(QEnterEvent *event)
     Q_UNUSED(event);
     expandFromEdge();
     m_pointerInside = true;
+    if (m_orbitVisible && m_fanOverlay && m_fanOverlay->activeBranch() != RadialFanOverlay::BranchNone) {
+        m_fanOverlay->setActiveBranch(RadialFanOverlay::BranchNone);
+    }
     refreshSystemAudioState();
     refreshBallOpacity();
     update();
