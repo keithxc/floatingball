@@ -2519,22 +2519,36 @@ void SystemPopover::startHotspotAsync()
         proc->deleteLater();
         if (!self) return;
         self->m_hsBusy = false;
+        const bool fellBack24 = out.contains(QLatin1String("FB_FALLBACK_24G"));
+        if (fellBack24) {
+            self->m_hsBand5G = false;
+            self->saveHotspotPrefs();
+        }
+        const QString sec = self->m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
         if (st == QProcess::NormalExit && code == 0) {
             self->m_hsActive = true;
-            self->showStatusBanner(QStringLiteral("✓ 热点已开启 · %1 (%2)")
-                                       .arg(self->m_hsSsid, self->m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2")));
+            const QString msg = fellBack24
+                ? QStringLiteral("✓ 网卡固件禁用 5GHz AP，已自动切 2.4GHz 开启热点 · %1 (%2)").arg(self->m_hsSsid, sec)
+                : QStringLiteral("✓ 热点已开启 · %1 (%2 / %3)")
+                      .arg(self->m_hsSsid, sec, self->m_hsBand5G ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz"));
+            self->showStatusBanner(msg);
+            if (!self->isVisible()) DesktopActions::showToast(msg, self->geometry().center());
         } else {
             QString msg = err.isEmpty() ? out : err;
             if (msg.size() > 80) msg = msg.left(80) + QStringLiteral("…");
-            self->showStatusBanner(QStringLiteral("开启热点失败: %1").arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡/频段") : msg), true);
+            const QString fullErr = QStringLiteral("开启热点失败: %1")
+                .arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡/频段") : msg);
+            self->showStatusBanner(fullErr, true);
+            if (!self->isVisible()) DesktopActions::showToast(fullErr, self->geometry().center());
         }
         self->refreshHotspot();
         self->refreshWifi(false);
     });
 
     // Safe env-driven NM WPA3-SAE / WPA2-PSK shared AP startup:
-    // Enables Wi-Fi radio if off, waits for device readiness, recreates profile cleanly
-    // with mandatory RSN/CCMP/PMF=3 for WPA3-SAE, and activates shared 10.42.0.1/24 AP.
+    // Enables Wi-Fi radio if off, creates clean profile with mandatory RSN/CCMP/PMF=3
+    // for WPA3-SAE, and automatically falls back from 5GHz -> 2.4GHz when Wi-Fi firmware
+    // (such as Intel AX210 LAR) disallows 5GHz AP radiation.
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
@@ -2544,22 +2558,33 @@ void SystemPopover::startHotspotAsync()
                      "fi; "
                      "WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
                      "if [ -z \"$WIFI_DEV\" ]; then echo '未找到可用 Wi-Fi 网卡' >&2; exit 2; fi; "
-                     "nmcli connection down \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
-                     "nmcli connection delete \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
-                     "if [ \"$FB_HS_SEC\" = \"sae\" ]; then "
-                     "  nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
-                     "    ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$FB_HS_BAND\" "
-                     "    ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
-                     "    wifi-sec.key-mgmt sae wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.pmf 3 "
-                     "    wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
-                     "else "
-                     "  nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
-                     "    ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$FB_HS_BAND\" "
-                     "    ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
-                     "    wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp "
-                     "    wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
-                     "fi; "
-                     "nmcli connection up \"$FB_HS_CON\"")});
+                     "create_ap() { "
+                     "  nmcli connection down \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
+                     "  nmcli connection delete \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
+                     "  if [ \"$FB_HS_SEC\" = \"sae\" ]; then "
+                     "    nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
+                     "      ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$1\" "
+                     "      ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
+                     "      wifi-sec.key-mgmt sae wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.pmf 3 "
+                     "      wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
+                     "  else "
+                     "    nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
+                     "      ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$1\" "
+                     "      ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
+                     "      wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp "
+                     "      wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
+                     "  fi; "
+                     "}; "
+                     "create_ap \"$FB_HS_BAND\"; "
+                     "if ! nmcli -w 12 connection up \"$FB_HS_CON\"; then "
+                     "  if [ \"$FB_HS_BAND\" = \"a\" ]; then "
+                     "    echo 'FB_FALLBACK_24G'; "
+                     "    create_ap bg; "
+                     "    nmcli -w 15 connection up \"$FB_HS_CON\"; "
+                     "  else "
+                     "    exit 1; "
+                     "  fi; "
+                     "fi")});
 #endif
 }
 
