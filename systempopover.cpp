@@ -985,6 +985,9 @@ QWidget *SystemPopover::buildWifiPage(QWidget *parent)
     v->addWidget(m_wifiDetailCard);
 
     auto *scroll = makeTouchScrollArea(page, &m_wifiListLayout);
+    if (auto *ts = TouchScrollController::install(scroll)) {
+        ts->onHorizontalSwipe = [this](int d) { if (d < 0) showPage(PageHome); };
+    }
     v->addWidget(scroll, 1);
 
     return page;
@@ -1187,6 +1190,9 @@ QWidget *SystemPopover::buildHotspotPage(QWidget *parent)
     v->addWidget(m_hsClientsHeader);
 
     auto *scroll = makeTouchScrollArea(page, &m_hsClientsLayout);
+    if (auto *ts = TouchScrollController::install(scroll)) {
+        ts->onHorizontalSwipe = [this](int d) { if (d < 0) showPage(PageHome); };
+    }
     v->addWidget(scroll, 1);
 
     rebuildHotspotView();
@@ -1209,6 +1215,9 @@ QWidget *SystemPopover::buildBluetoothPage(QWidget *parent)
     v->addWidget(m_btSummaryLbl);
 
     auto *scroll = makeTouchScrollArea(page, &m_btListLayout);
+    if (auto *ts = TouchScrollController::install(scroll)) {
+        ts->onHorizontalSwipe = [this](int d) { if (d < 0) showPage(PageHome); };
+    }
     v->addWidget(scroll, 1);
     return page;
 }
@@ -1276,6 +1285,9 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
 
     // Node scroll list
     auto *scroll = makeTouchScrollArea(page, &m_mhNodeListLayout);
+    if (auto *ts = TouchScrollController::install(scroll)) {
+        ts->onHorizontalSwipe = [this](int d) { if (d < 0) showPage(PageHome); };
+    }
     v->addWidget(scroll, 1);
     return page;
 }

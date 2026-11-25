@@ -12,13 +12,14 @@
 #include <QVariantAnimation>
 #include <QWidget>
 #include <cmath>
+#include <functional>
 
 // Finger-locked 1:1 touch/drag vertical scrolling with smooth iOS-style kinetic
-// momentum for QScrollArea containers packed with clickable child buttons
-// (e.g. AppLauncherPopover icon grid and SystemPopover Wi-Fi/BT/Mihomo lists).
-// Works cleanly on Wayland touchscreens (via Qt's synthesized mouse events) as
-// well as direct mouse/trackpad drag, while preventing accidental button clicks
-// whenever the pointer moves beyond the drag threshold.
+// momentum AND axis-locked horizontal swipe detection (e.g. swipe left/right to
+// switch AppLauncher categories, or swipe right in a subpage to navigate back).
+// Works cleanly on Wayland touchscreens (via Qt's synthesized mouse events using
+// window-local scenePosition()) as well as direct mouse/trackpad drag, while
+// preventing accidental child button clicks whenever a drag/swipe occurs.
 class TouchScrollController final : public QObject
 {
 public:
@@ -35,12 +36,17 @@ public:
     }
 
     // Call on every dynamically added interactive child (e.g. AppGridTile, rowBtn)
-    // so starting a finger swipe directly on top of a button still scrolls smoothly.
+    // so starting a finger swipe directly on top of a button still scrolls/swipes smoothly.
     void attachWidget(QWidget *child)
     {
         if (!child) return;
         child->installEventFilter(this);
     }
+
+    // Optional horizontal swipe callback:
+    //   delta = +1 -> finger swiped RIGHT-to-LEFT (dx < 0, advance to next tab/category)
+    //   delta = -1 -> finger swiped LEFT-to-RIGHT (dx > 0, go to previous tab / navigate back)
+    std::function<void(int delta)> onHorizontalSwipe;
 
     static TouchScrollController *install(QScrollArea *area)
     {
@@ -59,7 +65,6 @@ protected:
     {
         if (!m_area) return false;
         QScrollBar *sb = m_area->verticalScrollBar();
-        if (!sb) return false;
 
         switch (ev->type()) {
         case QEvent::MouseButtonPress: {
@@ -67,11 +72,12 @@ protected:
             if (me->button() != Qt::LeftButton) return false;
             stopMomentum();
             m_tracking = true;
-            m_dragging = false;
+            m_axis = AxisNone;
             m_pressPos = me->scenePosition();
             m_lastPos = m_pressPos;
-            m_startScroll = sb->value();
-            m_velocityPxPerMs = 0.0;
+            m_startScroll = sb ? sb->value() : 0;
+            m_velocityY = 0.0;
+            m_velocityX = 0.0;
             m_sampleTimer.restart();
             return false;
         }
@@ -80,24 +86,45 @@ protected:
             auto *me = static_cast<QMouseEvent *>(ev);
             if (!(me->buttons() & Qt::LeftButton)) {
                 m_tracking = false;
-                m_dragging = false;
+                m_axis = AxisNone;
                 return false;
             }
             const QPointF cur = me->scenePosition();
+            const qreal totalDx = cur.x() - m_pressPos.x();
             const qreal totalDy = cur.y() - m_pressPos.y();
-            if (!m_dragging && std::abs(totalDy) >= 9.0) {
-                m_dragging = true;
-                if (auto *btn = qobject_cast<QAbstractButton *>(watched)) {
-                    btn->setDown(false);
+
+            if (m_axis == AxisNone) {
+                const qreal absX = std::abs(totalDx);
+                const qreal absY = std::abs(totalDy);
+                if (onHorizontalSwipe && absX >= 12.0 && absX > absY * 1.25) {
+                    m_axis = AxisHorizontal;
+                    if (auto *btn = qobject_cast<QAbstractButton *>(watched))
+                        btn->setDown(false);
+                    m_lastPos = cur;
+                    m_sampleTimer.restart();
+                } else if (sb && absY >= 9.0) {
+                    m_axis = AxisVertical;
+                    if (auto *btn = qobject_cast<QAbstractButton *>(watched))
+                        btn->setDown(false);
+                    m_lastPos = cur;
+                    m_sampleTimer.restart();
                 }
+            }
+
+            if (m_axis == AxisHorizontal) {
+                const qreal dt = qMax<qreal>(1.0, m_sampleTimer.elapsed());
+                const qreal stepDx = cur.x() - m_lastPos.x();
+                m_velocityX = m_velocityX * 0.45 + (stepDx / dt) * 0.55;
                 m_lastPos = cur;
                 m_sampleTimer.restart();
+                return true;
             }
-            if (m_dragging) {
+
+            if (m_axis == AxisVertical && sb) {
                 const qreal dt = qMax<qreal>(1.0, m_sampleTimer.elapsed());
                 const qreal stepDy = cur.y() - m_lastPos.y();
                 const qreal instantV = -stepDy / dt; // positive = scroll down
-                m_velocityPxPerMs = m_velocityPxPerMs * 0.45 + instantV * 0.55;
+                m_velocityY = m_velocityY * 0.45 + instantV * 0.55;
                 m_lastPos = cur;
                 m_sampleTimer.restart();
 
@@ -111,17 +138,29 @@ protected:
             if (!m_tracking) return false;
             auto *me = static_cast<QMouseEvent *>(ev);
             if (me->button() != Qt::LeftButton) return false;
-            const bool wasDragging = m_dragging;
+            const Axis finishedAxis = m_axis;
+            const qreal totalDx = me->scenePosition().x() - m_pressPos.x();
             m_tracking = false;
-            m_dragging = false;
-            if (wasDragging) {
-                if (auto *btn = qobject_cast<QAbstractButton *>(watched)) {
+            m_axis = AxisNone;
+
+            if (finishedAxis == AxisHorizontal) {
+                if (auto *btn = qobject_cast<QAbstractButton *>(watched))
                     btn->setDown(false);
+                const bool fastFlick = m_sampleTimer.isValid() && m_sampleTimer.elapsed() < 110 &&
+                                       std::abs(totalDx) >= 24.0 && std::abs(m_velocityX) >= 0.30;
+                if (onHorizontalSwipe && (std::abs(totalDx) >= 48.0 || fastFlick)) {
+                    // Swipe left (dx < 0) -> next (+1); Swipe right (dx > 0) -> prev (-1)
+                    onHorizontalSwipe(totalDx < 0.0 ? 1 : -1);
                 }
-                // Only launch momentum if finger was still moving recently (< 90ms ago)
+                return true;
+            }
+
+            if (finishedAxis == AxisVertical) {
+                if (auto *btn = qobject_cast<QAbstractButton *>(watched))
+                    btn->setDown(false);
                 if (m_sampleTimer.isValid() && m_sampleTimer.elapsed() < 90 &&
-                    std::abs(m_velocityPxPerMs) > 0.14) {
-                    startMomentum(m_velocityPxPerMs);
+                    std::abs(m_velocityY) > 0.14) {
+                    startMomentum(m_velocityY);
                 }
                 return true; // Swallow release so button never misfires clicked()
             }
@@ -133,6 +172,12 @@ protected:
     }
 
 private:
+    enum Axis {
+        AxisNone = 0,
+        AxisVertical,
+        AxisHorizontal
+    };
+
     void stopMomentum()
     {
         if (m_momentumAnim) {
@@ -176,7 +221,8 @@ private:
     QPointF m_pressPos;
     QPointF m_lastPos;
     int m_startScroll = 0;
-    qreal m_velocityPxPerMs = 0.0;
+    qreal m_velocityY = 0.0;
+    qreal m_velocityX = 0.0;
     bool m_tracking = false;
-    bool m_dragging = false;
+    Axis m_axis = AxisNone;
 };

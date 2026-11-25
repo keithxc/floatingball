@@ -18,6 +18,7 @@
 #include <QPointer>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QStyle>
 #include <QTimer>
@@ -248,7 +249,9 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     m_gridLayout->setVerticalSpacing(4);
     m_gridLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_gridScroll->setWidget(gridContainer);
-    TouchScrollController::install(m_gridScroll);
+    if (auto *ts = TouchScrollController::install(m_gridScroll)) {
+        ts->onHorizontalSwipe = [this](int delta) { stepCategory(delta); };
+    }
     root->addWidget(m_gridScroll, 1);
 
     // ---- Subtle Footer Hint ----
@@ -350,6 +353,10 @@ bool AppLauncherPopover::eventFilter(QObject *watched, QEvent *event)
         } else if (ke->key() == Qt::Key_Escape) {
             if (!m_searchEdit->text().isEmpty()) m_searchEdit->clear();
             else hide();
+            return true;
+        } else if (m_searchEdit->text().isEmpty() &&
+                   (ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab)) {
+            stepCategory(ke->key() == Qt::Key_Backtab ? -1 : 1);
             return true;
         }
     }
@@ -466,6 +473,7 @@ void AppLauncherPopover::reloadCatalog()
 void AppLauncherPopover::rebuildCategoryBar()
 {
     clearLayout(m_catLayout);
+    m_visibleCategories.clear();
     QHash<QString, int> counts;
     int topCount = 0;
     for (const DockAppEntry &e : m_allApps) {
@@ -479,6 +487,7 @@ void AppLauncherPopover::rebuildCategoryBar()
         if (key != QLatin1String("all") && key != QLatin1String("top") && counts.value(key) == 0)
             continue;
 
+        m_visibleCategories.append(key);
         auto *pill = new QToolButton(this);
         pill->setObjectName(QStringLiteral("catPill"));
         pill->setText(QString::fromUtf8(cd.label));
@@ -487,12 +496,29 @@ void AppLauncherPopover::rebuildCategoryBar()
         connect(pill, &QToolButton::clicked, this, [this, key] {
             if (m_activeCategory == key) return;
             m_activeCategory = key;
+            if (m_gridScroll && m_gridScroll->verticalScrollBar())
+                m_gridScroll->verticalScrollBar()->setValue(0);
             rebuildCategoryBar();
             applyFilter();
         });
         m_catLayout->addWidget(pill);
     }
     m_catLayout->addStretch(1);
+}
+
+void AppLauncherPopover::stepCategory(int delta)
+{
+    if (m_visibleCategories.size() <= 1 || delta == 0) return;
+    if (m_searchEdit && !m_searchEdit->text().trimmed().isEmpty()) return;
+    int idx = m_visibleCategories.indexOf(m_activeCategory);
+    if (idx < 0) idx = 0;
+    const int next = qBound(0, idx + delta, m_visibleCategories.size() - 1);
+    if (next == idx) return;
+    m_activeCategory = m_visibleCategories.at(next);
+    if (m_gridScroll && m_gridScroll->verticalScrollBar())
+        m_gridScroll->verticalScrollBar()->setValue(0);
+    rebuildCategoryBar();
+    applyFilter();
 }
 
 void AppLauncherPopover::applyFilter()
@@ -579,7 +605,7 @@ void AppLauncherPopover::rebuildGrid()
 
     const QString hint = highlightFirst
         ? QStringLiteral("匹配 %1 个应用 · Enter 打开首项 · Shift+Enter 新建窗口").arg(m_filteredApps.size())
-        : QStringLiteral("共 %1 个应用 · 蓝点为运行中 · 右键图标可置顶/新开窗口").arg(m_filteredApps.size());
+        : QStringLiteral("共 %1 个应用 · 上下滑动浏览 · 左右滑动切分类 · 右键置顶").arg(m_filteredApps.size());
     m_footerLbl->setText(hint);
 }
 

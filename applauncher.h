@@ -40,6 +40,7 @@ private:
     void positionCenteredOnScreen(const QPoint &anchorGlobal);
     void reloadCatalog();
     void rebuildCategoryBar();
+    void stepCategory(int delta);
     void applyFilter();
     void rebuildGrid();
     void activateApp(const DockAppEntry &entry, bool forceNewWindow = false);
@@ -63,6 +64,7 @@ private:
     QLabel *m_footerLbl = nullptr;
 
     QString m_activeCategory = QStringLiteral("all");
+    QStringList m_visibleCategories;
     QList<DockAppEntry> m_allApps;
     QList<DockAppEntry> m_filteredApps;
     QHash<QString, int> m_launchCounts;
