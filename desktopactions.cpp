@@ -460,8 +460,10 @@ Outcome triggerNativeScreenshot()
 #ifdef Q_OS_MACOS
     return macTriggerNativeScreenshot();
 #elif defined(Q_OS_LINUX)
+    // Match KDE Plasma's native PrtSc (_launch of org.kde.spectacle.desktop)
+    // so users get their exact familiar Spectacle overlay (screenshot + recording).
     const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
-    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {QStringLiteral("--region")})) {
+    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {})) {
         return {true, {}};
     }
     const QString flameshot = QStandardPaths::findExecutable(QStringLiteral("flameshot"));
@@ -487,9 +489,11 @@ Outcome triggerNativeScreenRecord()
 #ifdef Q_OS_MACOS
     return macTriggerNativeScreenRecord();
 #elif defined(Q_OS_LINUX)
+    // Match KDE Plasma's PrtSc Spectacle entry so users can pick full-screen or
+    // region recording directly inside Spectacle's native UI.
     const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
-    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {QStringLiteral("--launchonly")})) {
-        return {true, QStringLiteral("✓ 已打开 KDE Spectacle（可选区域/全屏录屏）")};
+    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {})) {
+        return {true, {}};
     }
     const QString obs = QStandardPaths::findExecutable(QStringLiteral("obs"));
     if (!obs.isEmpty() && QProcess::startDetached(obs, {})) {
