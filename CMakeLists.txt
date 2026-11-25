@@ -41,6 +41,7 @@ set(FLOATINGBALL_CORE_SOURCES
     screenrecorder.h
     floatingwindow.cpp
     floatingwindow.h
+    touchscroll.h
     uiicons.h
 )
 

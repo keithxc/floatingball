@@ -1,6 +1,7 @@
 #include "applauncher.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
+#include "touchscroll.h"
 #include "uiicons.h"
 
 #include <QApplication>
@@ -247,6 +248,7 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     m_gridLayout->setVerticalSpacing(4);
     m_gridLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_gridScroll->setWidget(gridContainer);
+    TouchScrollController::install(m_gridScroll);
     root->addWidget(m_gridScroll, 1);
 
     // ---- Subtle Footer Hint ----
@@ -557,10 +559,12 @@ void AppLauncherPopover::rebuildGrid()
     }
 
     const bool highlightFirst = m_searchEdit && !m_searchEdit->text().trimmed().isEmpty();
+    auto *touchScroll = TouchScrollController::install(m_gridScroll);
     constexpr int kCols = 7;
     for (int i = 0; i < m_filteredApps.size(); ++i) {
         const DockAppEntry entry = m_filteredApps[i];
         auto *tile = new AppGridTile(entry, this);
+        if (touchScroll) touchScroll->attachWidget(tile);
         if (highlightFirst && i == 0) {
             tile->setProperty("firstMatch", true);
             repolish(tile);

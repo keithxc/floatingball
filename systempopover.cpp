@@ -2,6 +2,7 @@
 #include "desktopactions.h"
 #include "floatingwindow.h"
 #include "systemstatus.h"
+#include "touchscroll.h"
 #include "uiicons.h"
 
 #include <QApplication>
@@ -449,8 +450,23 @@ QScrollArea *makeTouchScrollArea(QWidget *parent, QVBoxLayout **outInnerLayout)
     vbox->setContentsMargins(0, 2, 4, 2);
     vbox->setSpacing(6);
     scroll->setWidget(container);
+    TouchScrollController::install(scroll);
     if (outInnerLayout) *outInnerLayout = vbox;
     return scroll;
+}
+
+void attachTouchScroll(QLayout *innerLayout, QWidget *row)
+{
+    if (!innerLayout || !row) return;
+    QWidget *p = innerLayout->parentWidget();
+    while (p) {
+        if (auto *sa = qobject_cast<QScrollArea *>(p)) {
+            if (auto *ctrl = TouchScrollController::install(sa))
+                ctrl->attachWidget(row);
+            return;
+        }
+        p = p->parentWidget();
+    }
 }
 
 QString btDeviceEmoji(const QString &iconType, const QString &name)
@@ -2003,6 +2019,7 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &en
         btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, elideText(entry.ssid, 17), rightTag));
         btn->setToolTip(entry.ssid);
         connect(btn, &QPushButton::clicked, this, [this, entry] { connectWifi(entry); });
+        attachTouchScroll(m_wifiListLayout, btn);
         m_wifiListLayout->addWidget(btn);
     }
     m_wifiListLayout->addStretch(1);
@@ -2337,6 +2354,7 @@ void SystemPopover::rebuildBluetoothList(bool powered, const QList<BluetoothDevi
             status += QStringLiteral(" · 🔋%1%").arg(dev.batteryPercent);
         btn->setText(QStringLiteral("%1  %2   [%3]").arg(emoji, dev.name, status));
         connect(btn, &QPushButton::clicked, this, [this, dev] { toggleBluetoothDevice(dev); });
+        attachTouchScroll(m_btListLayout, btn);
         m_btListLayout->addWidget(btn);
     }
     m_btListLayout->addStretch(1);
@@ -2562,6 +2580,7 @@ void SystemPopover::rebuildMihomoView()
             }
             selectMihomoNode(gName, nName);
         });
+        attachTouchScroll(m_mhNodeListLayout, btn);
         m_mhNodeListLayout->addWidget(btn);
     }
     m_mhNodeListLayout->addStretch(1);
@@ -2878,6 +2897,7 @@ void SystemPopover::rebuildHotspotView()
                 if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(c.ip);
                 showStatusBanner(QStringLiteral("✓ 已复制设备 IP: %1").arg(c.ip));
             });
+            attachTouchScroll(m_hsClientsLayout, row);
             m_hsClientsLayout->addWidget(row);
         }
         m_hsClientsLayout->addStretch(1);
