@@ -506,7 +506,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
     // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
-    setFixedSize(344, 396);
+    setFixedSize(344, 404);
     setProperty("panelBlurInset", 10);
     setProperty("panelBlurRadius", 26);
 
@@ -530,17 +530,17 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QLabel#sliderTag { color:rgba(226,232,240,190); font-size:11px; font-weight:600; }"
         "QLabel#sliderVal { color:#f8fafc; font-size:11.5px; font-weight:600; }"
         "QToolButton#powerPill { background:rgba(255,255,255,18); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
-        "                        border-radius:11px; padding:2px 6px; font-size:10.5px; font-weight:600; }"
+        "                        border-radius:17px; padding:0 11px; font-size:12px; font-weight:600; }"
         "QToolButton#powerPill:hover { background:rgba(255,255,255,30); }"
         "QToolButton#powerPill[accent=\"green\"] { background:rgba(16,185,129,48); border:1px solid rgba(52,211,153,150); color:#d1fae5; }"
         "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(59,130,246,44); border:1px solid rgba(96,165,250,145); color:#dbeafe; }"
         "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(244,63,94,48);  border:1px solid rgba(251,113,133,150); color:#ffe4e6; }"
-        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:13px; }"
+        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:17px; font-size:16px; }"
         "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,32); }"
-        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:13px; }"
+        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:17px; }"
         "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,68); }"
         "QToolButton#backPill { background:rgba(255,255,255,18); color:#f8fafc; border:1px solid rgba(255,255,255,26);"
-        "                       border-radius:13px; padding:3px 9px 3px 5px; font-size:12px; font-weight:600; }"
+        "                       border-radius:17px; padding:0 11px 0 7px; font-size:12.5px; font-weight:600; }"
         "QToolButton#backPill:hover { background:rgba(255,255,255,32); }"
         "QPushButton#connRow { background:transparent; border:none; border-radius:12px; text-align:left; }"
         "QPushButton#connRow:hover { background:rgba(255,255,255,18); }"
@@ -584,27 +584,31 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(4);
+    hdrRow->setSpacing(5);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
-    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#f8fafc"), 13));
+    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#f8fafc"), 15));
+    m_backBtn->setIconSize(QSize(15, 15));
     m_backBtn->setText(QStringLiteral("返回"));
     m_backBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_backBtn->setFixedHeight(34);
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->hide();
     connect(m_backBtn, &QToolButton::clicked, this, [this] { showPage(PageHome); });
     hdrRow->addWidget(m_backBtn);
 
-    m_titleLbl = new QLabel(QStringLiteral("控制中心"), header);
+    m_titleLbl = new QLabel(header);
     m_titleLbl->setObjectName(QStringLiteral("ccTitle"));
     m_titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_titleLbl->hide();
     hdrRow->addWidget(m_titleLbl);
 
     // Clickable Battery + Power Profile Pill (cycles power-saver / balanced / performance)
     m_powerPill = new QToolButton(header);
     m_powerPill->setObjectName(QStringLiteral("powerPill"));
     m_powerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_powerPill->setFixedHeight(34);
     m_powerPill->setText(QStringLiteral("平衡"));
     m_powerPill->setToolTip(QStringLiteral("点击切换功耗模式（节能 / 平衡 / 性能）"));
     m_powerPill->setCursor(Qt::PointingHandCursor);
@@ -620,10 +624,10 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     auto makeHdrBtn = [&](const QString &objName, FloatingIcons::Icon icon, const QColor &ink, const QString &tip) {
         auto *b = new QToolButton(header);
         b->setObjectName(objName);
-        b->setIcon(FloatingIcons::make(icon, ink, 13));
-        b->setIconSize(QSize(13, 13));
+        b->setIcon(FloatingIcons::make(icon, ink, 16));
+        b->setIconSize(QSize(16, 16));
         b->setToolTip(tip);
-        b->setFixedSize(26, 26);
+        b->setFixedSize(34, 34);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -656,7 +660,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_refreshBtn->setObjectName(QStringLiteral("hdrIconBtn"));
     m_refreshBtn->setText(QStringLiteral("↻"));
     m_refreshBtn->setToolTip(QStringLiteral("刷新实时状态"));
-    m_refreshBtn->setFixedSize(26, 26);
+    m_refreshBtn->setFixedSize(34, 34);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QToolButton::clicked, this, [this] {
         if (m_currentPage == PageWifi) refreshWifi(true);
@@ -1410,16 +1414,16 @@ void SystemPopover::syncHeaderForPage()
 {
     const bool isHome = (m_currentPage == PageHome);
     m_backBtn->setVisible(!isHome);
+    m_titleLbl->setVisible(!isHome);
     if (m_powerPill) m_powerPill->setVisible(isHome);
     if (m_hdrSettingsBtn) m_hdrSettingsBtn->setVisible(isHome);
     if (m_hdrLockBtn) m_hdrLockBtn->setVisible(isHome);
     if (m_hdrPowerBtn) m_hdrPowerBtn->setVisible(isHome);
-    if (m_currentPage == PageHome) m_titleLbl->setText(QStringLiteral("控制中心"));
-    else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi"));
+    if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi"));
     else if (m_currentPage == PageCellular) m_titleLbl->setText(QStringLiteral("4G 网络"));
     else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
     else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙"));
-    else m_titleLbl->setText(QStringLiteral("Mihomo"));
+    else if (m_currentPage == PageMihomo) m_titleLbl->setText(QStringLiteral("Mihomo"));
 }
 
 void SystemPopover::refreshCurrentPage()
