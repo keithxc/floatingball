@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QIcon>
 #include <QList>
 #include <QObject>
@@ -11,6 +12,42 @@
 class QProcess;
 class QTimer;
 class QWidget;
+
+struct NotificationItem {
+    quint64 seqId = 0;
+    quint32 replacesId = 0;
+    QString appName;
+    QString desktopEntry;
+    QString appIconName;
+    QString summary;
+    QString body;
+    QDateTime timestamp;
+    QIcon icon;
+    bool unread = true;
+
+    QString displayAppName() const
+    {
+        const QString a = appName.trimmed();
+        if (!a.isEmpty()) return a;
+        QString d = desktopEntry.trimmed();
+        if (!d.isEmpty()) {
+            if (d.endsWith(QLatin1String(".desktop"), Qt::CaseInsensitive)) d.chop(8);
+            const int dot = d.lastIndexOf(QLatin1Char('.'));
+            if (dot >= 0 && dot + 1 < d.size()) d = d.mid(dot + 1);
+            return d;
+        }
+        return QStringLiteral("系统通知");
+    }
+
+    QString previewText() const
+    {
+        const QString s = summary.trimmed();
+        const QString b = body.trimmed();
+        if (!s.isEmpty() && !b.isEmpty() && s != b)
+            return s + QStringLiteral(" · ") + b;
+        return !s.isEmpty() ? s : b;
+    }
+};
 
 struct VirtualDesktopInfo {
     QString id;
@@ -107,6 +144,28 @@ public:
 
     void refreshNow();
     void clearNotifications();
+    void clearAllNotifications();
+
+    // Structured notification store (replaces system notification tray/history)
+    const QList<NotificationItem> &notifications() const { return m_notifications; }
+    QList<NotificationItem> unreadNotifications() const;
+    QList<NotificationItem> unreadNotificationsForApp(const QString &appKey,
+                                                      const QString &appName = QString(),
+                                                      const QString &desktopEntry = QString()) const;
+    void markNotificationsReadForApp(const QString &appKey,
+                                     const QString &appName = QString(),
+                                     const QString &desktopEntry = QString());
+    void markNotificationRead(quint64 seqId);
+    void dismissNotification(quint64 seqId);
+    void pushNotification(NotificationItem item);
+
+    static bool notificationMatchesApp(const NotificationItem &item,
+                                       const QString &appKey,
+                                       const QString &appName = QString(),
+                                       const QString &desktopEntry = QString());
+    static bool parseDbusMonitorNotifyBlock(const QString &block,
+                                            NotificationItem *out,
+                                            bool *isTransientOut = nullptr);
 
     // Activate virtual desktop (0-based index); returns true if request dispatched
     // and sets *alreadyCurrent=true when the target desktop is already active.
@@ -141,6 +200,7 @@ public:
 signals:
     void statusChanged(const SystemStatusSnapshot &snapshot);
     void trayItemsChanged();
+    void notificationsChanged();
     void notificationReceived(const QString &appName, const QString &desktopEntry, const QString &summary);
     void inputMethodActivity(const QString &label);
 
@@ -162,6 +222,8 @@ private:
     void stopPlatformWatchers();
     void pollSlowMetrics();
     void emitIfChanged(const SystemStatusSnapshot &next);
+    void syncNotificationSnapshot();
+    void processDbusNotifyBlock(const QString &block);
 
 #ifdef Q_OS_LINUX
     void initLinuxDBus();
@@ -176,6 +238,10 @@ private:
     bool m_dbusConnected = false;
     SystemStatusSnapshot m_snapshot;
     QList<TrayItemInfo> m_trayItems;
+    QList<NotificationItem> m_notifications;
+    quint64 m_nextNotifSeqId = 1;
+    QString m_notifBuffer;
+    QTimer *m_notifFlushTimer = nullptr;
     QTimer *m_pollTimer = nullptr;
     QTimer *m_imeFastTimer = nullptr;
     QProcess *m_notifMonitor = nullptr;

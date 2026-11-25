@@ -82,7 +82,7 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("sys_wifi")) return FloatingIcons::Wifi;
     if (id == QLatin1String("sys_bluetooth")) return FloatingIcons::Bluetooth;
     if (id == QLatin1String("sys_mihomo")) return FloatingIcons::Proxy;
-    if (id == QLatin1String("sys_dnd")) return FloatingIcons::Bell;
+    if (id == QLatin1String("sys_dnd") || id == QLatin1String("notifications")) return FloatingIcons::Bell;
     if (id == QLatin1String("sys_nightlight")) return FloatingIcons::Moon;
     if (id == QLatin1String("sys_power")) return FloatingIcons::Bolt;
     if (id == QLatin1String("sys_display")) return FloatingIcons::Desktop;
@@ -91,6 +91,41 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("sys_sleep")) return FloatingIcons::Power;
     if (id == QLatin1String("sys_settings")) return FloatingIcons::Settings;
     return FloatingIcons::Orb;
+}
+
+void drawRedBadgePill(QPainter &p, const QPointF &center, int count, const QFont &baseFont)
+{
+    p.save();
+    const bool showNum = count > 1;
+    const QString text = count > 9 ? QStringLiteral("9+") : QString::number(count);
+    const qreal glowR = showNum ? 11.5 : 8.2;
+    QRadialGradient glow(center, glowR);
+    glow.setColorAt(0.0, QColor(255, 68, 102, 235));
+    glow.setColorAt(1.0, QColor(255, 68, 102, 0));
+    p.setPen(Qt::NoPen);
+    p.setBrush(glow);
+    p.drawEllipse(center, glowR, glowR);
+
+    if (showNum) {
+        const qreal pillW = text.size() > 1 ? 18.0 : 14.5;
+        const qreal pillH = 14.5;
+        const QRectF r(center.x() - pillW * 0.5, center.y() - pillH * 0.5, pillW, pillH);
+        p.setBrush(QColor("#ff3b5c"));
+        p.setPen(QPen(QColor("#ffffff"), 1.2));
+        p.drawRoundedRect(r, pillH * 0.5, pillH * 0.5);
+
+        QFont f = baseFont;
+        f.setPixelSize(9);
+        f.setWeight(QFont::Bold);
+        p.setFont(f);
+        p.setPen(QColor("#ffffff"));
+        p.drawText(r, Qt::AlignCenter, text);
+    } else {
+        p.setBrush(QColor("#ff3b5c"));
+        p.setPen(QPen(QColor("#ffffff"), 1.2));
+        p.drawEllipse(center, 4.6, 4.6);
+    }
+    p.restore();
 }
 
 double normalizeAngleDeg(double deg)
@@ -264,7 +299,27 @@ void RadialFanOverlay::recomputeFanLayout()
                 }
             }
         } else if (top.key == QLatin1String("tray")) {
-            const auto &trayItems = m_owner->statusMonitor()->trayItems();
+            auto *mon = m_owner->statusMonitor();
+            const QList<NotificationItem> unreadAll = mon->unreadNotifications();
+            const int totalUnread = qMax(unreadAll.size(), mon->snapshot().unreadNotifications);
+
+            // Always expose Notification Center at the head of the Tray/Notifications ring
+            {
+                RadialSlotItem notifHub;
+                notifHub.kind = RadialSlotItem::ActionSlot;
+                notifHub.id = QStringLiteral("notifications");
+                notifHub.unreadCount = totalUnread;
+                notifHub.label = totalUnread > 0
+                    ? QStringLiteral("通知中心 · %1 条未读").arg(totalUnread)
+                    : QStringLiteral("通知中心");
+                notifHub.shortLabel = QStringLiteral("通知");
+                notifHub.isBranchItem = true;
+                notifHub.toggleActive = (totalUnread > 0);
+                notifHub.accentColor = totalUnread > 0 ? QColor("#ff5272") : QColor("#9aa8ff");
+                children.append(notifHub);
+            }
+
+            const auto &trayItems = mon->trayItems();
             for (const TrayItemInfo &ti : trayItems) {
                 if (children.size() >= 11) break;
                 RadialSlotItem item;
@@ -274,11 +329,14 @@ void RadialFanOverlay::recomputeFanLayout()
                 item.shortLabel = trimShort(ti.title, 7);
                 item.trayItem = ti;
                 item.isBranchItem = true;
-                item.toggleActive = (ti.status == QLatin1String("NeedsAttention"));
+                const QList<NotificationItem> tiUnread = mon->unreadNotificationsForApp(ti.id, ti.title);
+                item.unreadCount = tiUnread.size();
+                if (!tiUnread.isEmpty()) item.notificationPreview = tiUnread.first().previewText();
+                item.toggleActive = (ti.status == QLatin1String("NeedsAttention")) || (item.unreadCount > 0);
                 item.accentColor = item.toggleActive ? QColor("#ff5272") : QColor("#66d9ff");
                 children.append(item);
             }
-            if (children.isEmpty()) {
+            if (trayItems.isEmpty() && totalUnread == 0) {
                 RadialSlotItem emptyItem;
                 emptyItem.kind = RadialSlotItem::TraySlot;
                 emptyItem.id = QStringLiteral("tray:empty");
@@ -606,10 +664,13 @@ void RadialFanOverlay::recomputeFanLayout()
 
     // ------------------------------------------------------------------------
     // Ring 1..K: Auto-Expanding All Currently Open Windows (0..100+ windows!)
-    // Pure open windows only — zero unopened filler apps, zero manual ring count!
+    // + Unmatched Unread App Notifications (e.g. minimized-to-tray apps / system alerts)
+    // so tapping the ball ALWAYS reveals which exact app triggered any red dot!
     // ------------------------------------------------------------------------
     const QList<DockAppEntry> openWins = m_owner->dockModel()->openWindows();
-    if (openWins.isEmpty()) return;
+    auto *mon = m_owner->statusMonitor();
+    const QList<NotificationItem> unreadNotifs = mon ? mon->unreadNotifications() : QList<NotificationItem>{};
+    if (openWins.isEmpty() && unreadNotifs.isEmpty()) return;
 
     auto extractWindowMicroTag = [](const DockAppEntry &app) -> QString {
         QString cap = app.caption.trimmed();
@@ -643,7 +704,8 @@ void RadialFanOverlay::recomputeFanLayout()
     };
 
     QList<RadialSlotItem> windowQueue;
-    windowQueue.reserve(openWins.size());
+    windowQueue.reserve(openWins.size() + unreadNotifs.size());
+    QSet<quint64> matchedNotifSeqIds;
     for (const DockAppEntry &win : openWins) {
         RadialSlotItem item;
         item.kind = RadialSlotItem::AppSlot;
@@ -656,9 +718,52 @@ void RadialFanOverlay::recomputeFanLayout()
         }
         item.shortLabel = extractWindowMicroTag(win);
         item.app = win;
-        item.toggleActive = win.demandsAttention;
+        if (mon) {
+            const QList<NotificationItem> appUnread =
+                mon->unreadNotificationsForApp(win.appKey, win.name, win.id);
+            if (!appUnread.isEmpty()) {
+                item.unreadCount = appUnread.size();
+                item.notificationPreview = appUnread.first().previewText();
+                item.notificationItem = appUnread.first();
+                item.app.demandsAttention = true;
+                for (const NotificationItem &n : appUnread) matchedNotifSeqIds.insert(n.seqId);
+            }
+        }
+        item.toggleActive = item.app.demandsAttention;
         windowQueue.append(item);
     }
+
+    // Surface background/minimized-to-tray/system unread notifications as dedicated
+    // glowing NotificationSlot orbs grouped by app (appended after open windows so
+    // existing open window angles stay 100% spatially stable!).
+    QStringList notifGroupOrder;
+    QHash<QString, QList<NotificationItem>> notifGroups;
+    for (const NotificationItem &n : unreadNotifs) {
+        if (matchedNotifSeqIds.contains(n.seqId)) continue;
+        QString key = !n.desktopEntry.trimmed().isEmpty()
+            ? n.desktopEntry.trimmed().toLower()
+            : n.displayAppName().toLower();
+        if (key.endsWith(QLatin1String(".desktop"))) key.chop(8);
+        if (!notifGroups.contains(key)) notifGroupOrder.append(key);
+        notifGroups[key].append(n);
+    }
+    for (const QString &gKey : notifGroupOrder) {
+        const QList<NotificationItem> &grp = notifGroups[gKey];
+        if (grp.isEmpty()) continue;
+        const NotificationItem &latest = grp.first();
+        RadialSlotItem item;
+        item.kind = RadialSlotItem::NotificationSlot;
+        item.id = QStringLiteral("notif:") + QString::number(latest.seqId);
+        item.label = latest.displayAppName();
+        item.shortLabel = trimShort(latest.displayAppName(), 6);
+        item.notificationItem = latest;
+        item.unreadCount = grp.size();
+        item.notificationPreview = latest.previewText();
+        item.toggleActive = true;
+        item.accentColor = QColor("#ff4d6d");
+        windowQueue.append(item);
+    }
+    if (windowQueue.isEmpty()) return;
 
     const int totalWins = windowQueue.size();
     const double halfScanSweep = cornerQuadrant ? 47.0 : 87.0;
@@ -838,7 +943,8 @@ QList<qreal> RadialFanOverlay::computeAttentionAnglesRad()
         const QPointF target = s.finalCenterGlobal.isNull() ? s.centerGlobal : s.finalCenterGlobal;
         const qreal rad = std::atan2(target.y() - m_ballCenterGlobal.y(),
                                      target.x() - m_ballCenterGlobal.x());
-        if (s.kind == RadialSlotItem::AppSlot && s.app.demandsAttention) {
+        if ((s.kind == RadialSlotItem::AppSlot && (s.app.demandsAttention || s.unreadCount > 0)) ||
+            s.kind == RadialSlotItem::NotificationSlot) {
             hasWindowAttention = true;
             addUniqueAngle(rad);
         } else if (s.ringIndex == 0 && s.id == QLatin1String("tray_hub")) {
@@ -877,11 +983,42 @@ QString RadialFanOverlay::activeLabelText() const
     const RadialSlotItem &item = m_slots[m_highlightedSlot];
     QString text = item.label;
     if (item.kind == RadialSlotItem::AppSlot) {
-        if (item.app.demandsAttention) text += QStringLiteral(" · 🔴 新消息");
-        else if (item.app.active) text += QStringLiteral(" · 当前");
-        else if (item.app.minimized) text += QStringLiteral(" · 最小化");
+        if (item.unreadCount > 0 && !item.notificationPreview.isEmpty()) {
+            const QString cnt = item.unreadCount > 1
+                ? QStringLiteral(" (%1条)").arg(item.unreadCount)
+                : QString();
+            text = item.app.name + QStringLiteral(" · 🔴%1 ").arg(cnt) + item.notificationPreview;
+        } else if (item.app.demandsAttention) {
+            text += QStringLiteral(" · 🔴 新消息");
+        } else if (item.app.active) {
+            text += QStringLiteral(" · 当前");
+        } else if (item.app.minimized) {
+            text += QStringLiteral(" · 最小化");
+        }
+    } else if (item.kind == RadialSlotItem::NotificationSlot) {
+        const QString cnt = item.unreadCount > 1
+            ? QStringLiteral("%1条未读").arg(item.unreadCount)
+            : QStringLiteral("未读消息");
+        text = item.notificationPreview.isEmpty()
+            ? QStringLiteral("%1 · 🔴 %2").arg(item.label, cnt)
+            : QStringLiteral("%1 · 🔴 %2 · %3").arg(item.label, cnt, item.notificationPreview);
+    } else if (item.kind == RadialSlotItem::TraySlot) {
+        if (!item.notificationPreview.isEmpty()) {
+            text += QStringLiteral(" · 🔴 ") + item.notificationPreview;
+        } else if (item.toggleActive) {
+            text += QStringLiteral(" · 🔴 有新提醒");
+        }
     } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
         text = item.trayItem.title + QStringLiteral(" › ") + item.label;
+    } else if (item.id == QLatin1String("tray_hub") && m_owner) {
+        const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
+        if (st.unreadNotifications > 0) {
+            text = QStringLiteral("托盘与通知（%1 条未读） ›").arg(st.unreadNotifications);
+        } else if (st.trayNeedsAttention) {
+            text = QStringLiteral("托盘与通知（有新提醒） ›");
+        } else if (!text.endsWith(QStringLiteral("›"))) {
+            text += QStringLiteral(" ›");
+        }
     } else if (item.isBranchHub && !text.endsWith(QStringLiteral("›"))) {
         text += QStringLiteral(" ›");
     }
@@ -900,8 +1037,8 @@ QRectF RadialFanOverlay::labelPillRectLocal() const
     f.setPointSize(12);
     f.setWeight(QFont::DemiBold);
     const QFontMetrics fm(f);
-    const int maxTextW = qMax(120, qMin(width() - 56, 420));
-    const QString text = fm.elidedText(rawText, Qt::ElideMiddle, maxTextW);
+    const int maxTextW = qMax(120, qMin(width() - 56, 440));
+    const QString text = fm.elidedText(rawText, Qt::ElideRight, maxTextW);
     const int pw = qMin(width() - 20, fm.horizontalAdvance(text) + 28);
     const QPointF origin = geometry().topLeft();
 
@@ -932,7 +1069,7 @@ void RadialFanOverlay::updateHitMask()
         // outside clicks without swallowing the user's click on desktop windows.
         QRegion region;
         for (const RadialSlotItem &s : m_slots) {
-            const int pad = (s.kind == RadialSlotItem::AppSlot) ? 11 : 3;
+            const int pad = (s.kind == RadialSlotItem::AppSlot || s.kind == RadialSlotItem::NotificationSlot) ? 11 : 3;
             const QRect local = s.rectGlobal.translated(-geometry().topLeft()).toAlignedRect().adjusted(-pad, -pad, pad, pad);
             if (!local.isEmpty())
                 region += QRegion(local, QRegion::Ellipse);
@@ -1395,7 +1532,8 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
             return;
         }
         if (event->button() == Qt::MiddleButton && slot >= 0 && slot < m_slots.size() &&
-            m_slots[slot].kind == RadialSlotItem::AppSlot) {
+            (m_slots[slot].kind == RadialSlotItem::AppSlot ||
+             m_slots[slot].kind == RadialSlotItem::NotificationSlot)) {
             m_pressedTapSlot = slot;
             event->accept();
             return;
@@ -1426,7 +1564,9 @@ void RadialFanOverlay::mouseReleaseEvent(QMouseEvent *event)
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
         const int slot = hitSlotAtGlobal(globalPt, false);
         m_pressedTapSlot = -1;
-        if (slot >= 0 && slot < m_slots.size() && m_slots[slot].kind == RadialSlotItem::AppSlot) {
+        if (slot >= 0 && slot < m_slots.size() &&
+            (m_slots[slot].kind == RadialSlotItem::AppSlot ||
+             m_slots[slot].kind == RadialSlotItem::NotificationSlot)) {
             emit slotMiddleClicked(slot);
         }
         event->accept();
@@ -1625,13 +1765,19 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
         }
         p.restore();
     } else {
-        // Subtle directional bearing rays from main ball toward windows with unread messages/attention!
+        // Subtle directional bearing rays from main ball toward notifying windows,
+        // notification orbs, or tray_hub when tray/unattributed alerts exist!
         p.save();
-        QPen attnPen(QColor(255, 82, 114, 78), 1.6, Qt::DashLine, Qt::RoundCap);
+        QPen attnPen(QColor(255, 82, 114, 118), 1.8, Qt::DashLine, Qt::RoundCap);
         p.setPen(attnPen);
         const qreal startRim = qMax(m_owner->width(), m_owner->height()) * 0.5 + 2.0;
+        bool drewSpecificRay = false;
         for (const RadialSlotItem &s : m_slots) {
-            if (s.kind == RadialSlotItem::AppSlot && s.app.demandsAttention) {
+            const bool isNotifying =
+                (s.kind == RadialSlotItem::AppSlot && (s.app.demandsAttention || s.unreadCount > 0)) ||
+                (s.kind == RadialSlotItem::NotificationSlot);
+            if (isNotifying) {
+                drewSpecificRay = true;
                 const QPointF targetLocal = s.centerGlobal - origin;
                 const QPointF vec = targetLocal - localBallCenter;
                 const qreal len = std::hypot(vec.x(), vec.y());
@@ -1639,6 +1785,22 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                     const QPointF u = vec / len;
                     p.drawLine(localBallCenter + u * startRim,
                                targetLocal - u * (s.rectGlobal.width() * 0.52));
+                }
+            }
+        }
+        const SystemStatusSnapshot &stNow = m_owner->statusMonitor()->snapshot();
+        if (stNow.trayNeedsAttention || (stNow.unreadNotifications > 0 && !drewSpecificRay)) {
+            for (const RadialSlotItem &s : m_slots) {
+                if (s.ringIndex == 0 && s.id == QLatin1String("tray_hub")) {
+                    const QPointF targetLocal = s.centerGlobal - origin;
+                    const QPointF vec = targetLocal - localBallCenter;
+                    const qreal len = std::hypot(vec.x(), vec.y());
+                    if (len > startRim + s.rectGlobal.width() * 0.5) {
+                        const QPointF u = vec / len;
+                        p.drawLine(localBallCenter + u * startRim,
+                                   targetLocal - u * (s.rectGlobal.width() * 0.52));
+                    }
+                    break;
                 }
             }
         }
@@ -1664,7 +1826,8 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
         const RadialSlotItem &item = m_slots[i];
         QRectF slotRect = item.rectGlobal.translated(-origin);
         const bool selected = (i == m_highlightedSlot);
-        if (selected && item.kind == RadialSlotItem::AppSlot && slotRect.width() < 44.0) {
+        if (selected && (item.kind == RadialSlotItem::AppSlot || item.kind == RadialSlotItem::NotificationSlot) &&
+            slotRect.width() < 44.0) {
             const qreal grown = qMin(48.0, slotRect.width() * 1.28);
             const QPointF sc = slotRect.center();
             slotRect = QRectF(sc.x() - grown * 0.5, sc.y() - grown * 0.5, grown, grown);
@@ -1773,11 +1936,47 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             } else {
                 FloatingIcons::draw(p, FloatingIcons::TrayHub, iconRect.adjusted(3, 3, -3, -3), QColor("#8ad0ff"));
             }
-            if (item.toggleActive) {
-                p.setPen(Qt::NoPen);
-                p.setBrush(QColor("#ff5272"));
-                p.drawEllipse(QPointF(face.right() - 6.0, face.top() + 6.0), 3.4, 3.4);
+            if (item.toggleActive || item.unreadCount > 0) {
+                drawRedBadgePill(p, QPointF(face.right() - 5.5, face.top() + 5.5),
+                                 qMax(1, item.unreadCount), font());
             }
+        } else if (item.kind == RadialSlotItem::NotificationSlot) {
+            // Unread background/tray/system notification orb: warm coral halo + glass ring + real app icon + count badge
+            const QPointF c = slotRect.center();
+            const qreal haloRadius = slotRect.width() * (selected ? 0.74 : 0.68);
+            QRadialGradient halo(c, haloRadius);
+            if (selected) {
+                halo.setColorAt(0.00, QColor(255, 82, 114, 220));
+                halo.setColorAt(0.50, QColor(210, 46, 84, 130));
+                halo.setColorAt(1.00, QColor(180, 30, 68, 0));
+            } else {
+                halo.setColorAt(0.00, QColor(255, 77, 109, 175));
+                halo.setColorAt(0.54, QColor(168, 36, 68, 92));
+                halo.setColorAt(1.00, QColor(120, 24, 48, 0));
+            }
+            p.setPen(Qt::NoPen);
+            p.setBrush(halo);
+            p.drawEllipse(c, haloRadius, haloRadius);
+
+            const QRectF face = slotRect.adjusted(1.8, 1.8, -1.8, -1.8);
+            QLinearGradient grad(face.topLeft(), face.bottomRight());
+            grad.setColorAt(0.0, selected ? QColor(126, 36, 62, 246) : QColor(72, 26, 42, 238));
+            grad.setColorAt(1.0, selected ? QColor(74, 20, 38, 248) : QColor(30, 16, 26, 244));
+            p.setBrush(grad);
+            p.setPen(QPen(selected ? QColor("#ff8fa3") : QColor("#ff5272"), selected ? 2.1 : 1.7));
+            p.drawEllipse(face);
+
+            const qreal iconDim = face.width() * 0.66;
+            const QRectF iconRect(c.x() - iconDim * 0.5, c.y() - iconDim * 0.5, iconDim, iconDim);
+            if (!item.notificationItem.icon.isNull()) {
+                item.notificationItem.icon.paint(&p, iconRect.toAlignedRect(), Qt::AlignCenter);
+            } else {
+                FloatingIcons::draw(p, FloatingIcons::Bell, iconRect.adjusted(4, 4, -4, -4), QColor("#ffe4e6"));
+            }
+
+            drawRedBadgePill(p, QPointF(slotRect.right() - slotRect.width() * 0.14,
+                                        slotRect.top() + slotRect.height() * 0.14),
+                             qMax(1, item.unreadCount), font());
         } else if (item.kind == RadialSlotItem::SystemSlot) {
             // Branched KDE System Control orb (iOS/KDE Control Center tactile toggle glass)
             const QRectF face = slotRect.adjusted(1.6, 1.6, -1.6, -1.6);
@@ -1822,6 +2021,11 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 halo.setColorAt(0.46, QColor(42, 114, 224, 138));
                 halo.setColorAt(0.76, QColor(28, 82, 178, 46));
                 halo.setColorAt(1.00, QColor(20, 60, 140, 0));
+            } else if (item.app.demandsAttention || item.unreadCount > 0) {
+                halo.setColorAt(0.00, QColor(255, 77, 109, 195));
+                halo.setColorAt(0.48, QColor(196, 42, 74, 118));
+                halo.setColorAt(0.78, QColor(140, 24, 52, 38));
+                halo.setColorAt(1.00, QColor(120, 20, 44, 0));
             } else if (item.app.active) {
                 halo.setColorAt(0.00, QColor(36, 98, 186, 178));
                 halo.setColorAt(0.50, QColor(18, 44, 88, 112));
@@ -1859,19 +2063,11 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 p.drawEllipse(dotPos, item.app.active ? 2.5 : 2.0, item.app.active ? 2.5 : 2.0);
             }
 
-            // Unread message / demandsAttention badge dot on top-right of window orb!
-            if (item.app.demandsAttention) {
-                const QPointF badgePt(slotRect.right() - slotRect.width() * 0.16,
-                                      slotRect.top() + slotRect.height() * 0.16);
-                QRadialGradient glow(badgePt, 7.5);
-                glow.setColorAt(0.0, QColor(255, 77, 109, 225));
-                glow.setColorAt(1.0, QColor(255, 77, 109, 0));
-                p.setPen(Qt::NoPen);
-                p.setBrush(glow);
-                p.drawEllipse(badgePt, 7.5, 7.5);
-                p.setBrush(QColor("#ff4d6d"));
-                p.setPen(QPen(QColor("#ffffff"), 1.2));
-                p.drawEllipse(badgePt, 4.2, 4.2);
+            // Unread message / demandsAttention badge pill on top-right of window orb!
+            if (item.app.demandsAttention || item.unreadCount > 0) {
+                drawRedBadgePill(p, QPointF(slotRect.right() - slotRect.width() * 0.14,
+                                            slotRect.top() + slotRect.height() * 0.14),
+                                 qMax(1, item.unreadCount), font());
             }
         } else {
             // Inner rings (Ring 1 & Ring 2): tactile obsidian glass quick-action spheres
@@ -1958,10 +2154,15 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 }
                 FloatingIcons::draw(p, iconForAction(item.id), iconRect, ink);
 
-                if (item.id == QLatin1String("tray_hub") && m_owner->statusMonitor()->snapshot().trayNeedsAttention) {
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(QColor("#ff5272"));
-                    p.drawEllipse(QPointF(face.right() - 5.5, face.top() + 5.5), 3.3, 3.3);
+                if (item.id == QLatin1String("tray_hub")) {
+                    const SystemStatusSnapshot &stHub = m_owner->statusMonitor()->snapshot();
+                    if (stHub.trayNeedsAttention || stHub.unreadNotifications > 0) {
+                        drawRedBadgePill(p, QPointF(face.right() - 4.5, face.top() + 4.5),
+                                         qMax(1, stHub.unreadNotifications), font());
+                    }
+                } else if (item.id == QLatin1String("notifications") && item.unreadCount > 0) {
+                    drawRedBadgePill(p, QPointF(face.right() - 4.5, face.top() + 4.5),
+                                     item.unreadCount, font());
                 }
             }
         }
@@ -1979,7 +2180,7 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             f.setWeight(QFont::DemiBold);
             p.setFont(f);
             const QFontMetrics fm(f);
-            const QString elided = fm.elidedText(rawLabelText, Qt::ElideMiddle, qMax(80, int(pill.width()) - 24));
+            const QString elided = fm.elidedText(rawLabelText, Qt::ElideRight, qMax(80, int(pill.width()) - 24));
             p.setPen(QPen(QColor(255, 255, 255, 55), 1.0));
             p.setBrush(QColor(18, 22, 30, 232));
             p.drawRoundedRect(pill, 16, 16);
@@ -2176,6 +2377,18 @@ FloatingBall::FloatingBall(QWidget *parent,
         const auto slotsData = m_fanOverlay->slotsData();
         if (slot < 0 || slot >= slotsData.size()) return;
         const RadialSlotItem item = slotsData[slot];
+        if (item.kind == RadialSlotItem::NotificationSlot) {
+            statusMonitor()->markNotificationsReadForApp(
+                item.notificationItem.desktopEntry,
+                item.notificationItem.appName,
+                item.notificationItem.desktopEntry);
+            statusMonitor()->markNotificationRead(item.notificationItem.seqId);
+            DesktopActions::showToast(tr("✓ 已标为已读 · %1").arg(item.notificationItem.displayAppName()),
+                                      anchorCenterGlobal().toPoint());
+            m_fanOverlay->refreshLiveLayout();
+            refreshAttentionBearings();
+            return;
+        }
         if (item.kind != RadialSlotItem::AppSlot) return;
         const auto out = dockModel()->quitApp(item.app);
         if (!out.message.isEmpty()) DesktopActions::showToast(out.message, anchorCenterGlobal().toPoint());
@@ -2239,7 +2452,7 @@ FloatingBall::FloatingBall(QWidget *parent,
     if (isPrimaryBall()) {
         for (QScreen *display : QGuiApplication::screens()) watchScreen(display);
         connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen *display) {
-            watchScreen(display);
+            if (FloatingWindow::isValidScreen(display)) watchScreen(display);
             QTimer::singleShot(80, this, [this] { recoverVisibleAfterOutputChange(); });
         });
         connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen *removed) {
@@ -2271,6 +2484,11 @@ FloatingBall::FloatingBall(QWidget *parent,
                 refreshAttentionBearings();
                 update();
                 if (m_orbitVisible && m_fanOverlay) m_fanOverlay->update();
+            });
+            connect(mon, &SystemStatusMonitor::notificationsChanged, this, [this] {
+                refreshAttentionBearings();
+                update();
+                if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
             });
             connect(mon, &SystemStatusMonitor::inputMethodActivity, this, [this](const QString &lbl) {
                 triggerImeFlash(lbl);
@@ -2383,8 +2601,9 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("tray_hub")) {
         const int n = m_statusMonitor ? m_statusMonitor->trayItems().size()
             : (m_primaryPeer ? m_primaryPeer->statusMonitor()->trayItems().size() : 0);
-        return n > 0 ? tr("托盘图标 (%1)").arg(n) : tr("托盘图标");
+        return n > 0 ? tr("托盘与通知 (%1)").arg(n) : tr("托盘与通知");
     }
+    if (id == QLatin1String("notifications")) return tr("通知中心");
     if (id == QLatin1String("sys_hub")) return tr("系统控制中心");
     if (id == QLatin1String("tools_hub")) return tr("常用触控工具");
     return id;
@@ -2554,9 +2773,15 @@ void FloatingBall::syncScreenReplicas()
 {
     if (!isPrimaryBall()) return;
 
-    const QList<QScreen *> screens = QGuiApplication::screens();
+    const QList<QScreen *> allScreens = QGuiApplication::screens();
+    QList<QScreen *> screens;
+    for (QScreen *s : allScreens) {
+        if (FloatingWindow::isValidScreen(s)) screens.append(s);
+    }
+    if (screens.isEmpty()) return;
     if (!m_assignedScreen || !screens.contains(m_assignedScreen)) {
-        m_assignedScreen = QGuiApplication::primaryScreen();
+        QScreen *prim = QGuiApplication::primaryScreen();
+        m_assignedScreen = FloatingWindow::isValidScreen(prim) ? prim : screens.first();
         if (m_assignedScreen)
             setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
     }
@@ -2818,6 +3043,17 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
                 [this](const QString &appName, const QString &desktopEntry, const QString &) {
             dockModel()->notifyAppAttention(appName, desktopEntry);
             refreshAttentionBearings();
+            if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+        });
+        connect(m_statusMonitor, &SystemStatusMonitor::notificationsChanged, this, [this] {
+            refreshAttentionBearings();
+            update();
+            if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+            for (FloatingBall *rep : replicaBalls()) {
+                rep->refreshAttentionBearings();
+                rep->update();
+                if (rep->isOrbitVisible() && rep->fanOverlay()) rep->fanOverlay()->refreshLiveLayout();
+            }
         });
         connect(m_statusMonitor, &SystemStatusMonitor::inputMethodActivity, this,
                 [this](const QString &lbl) {
@@ -2900,6 +3136,13 @@ AppDockModel *FloatingBall::dockModel()
             refreshAttentionBearings();
             if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
         });
+        connect(m_dockModel, &AppDockModel::windowActivated, this,
+                [this](const QString &appKey, const QString &appName, const QString &desktopEntry) {
+            if (m_statusMonitor) {
+                m_statusMonitor->markNotificationsReadForApp(appKey, appName, desktopEntry);
+            }
+            refreshAttentionBearings();
+        });
         connect(m_dockModel, &AppDockModel::activeFullscreenChanged, this, [this](bool fs) {
             m_fullscreenTucked = (m_autoTuckFullscreen && fs);
             if (m_fullscreenTucked) tuckToEdgeCapsule(false, true);
@@ -2943,6 +3186,7 @@ SystemPopover *FloatingBall::systemPopover()
             if (m_statusMonitor) m_statusMonitor->updateBrightness(pct, true);
         });
         connect(m_systemPopover, &SystemPopover::quickDeckRequested, this, &FloatingBall::toggleQuickDeck);
+        connect(m_systemPopover, &SystemPopover::notificationActivated, this, &FloatingBall::openNotificationTarget);
     }
     return m_systemPopover;
 }
@@ -2952,7 +3196,7 @@ void FloatingBall::openSystemPopover(int tab)
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
     if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
-    const int clamped = qBound(0, tab, 5);
+    const int clamped = qBound(0, tab, static_cast<int>(SystemPopover::TabNotifications));
     systemPopover()->revealTab(static_cast<SystemPopover::Tab>(clamped), anchorCenterGlobal().toPoint());
 }
 
@@ -2973,19 +3217,58 @@ void FloatingBall::toggleAppLauncher()
     appLauncher()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 
+void FloatingBall::openNotificationTarget(const NotificationItem &item)
+{
+    const QPoint anchor = anchorCenterGlobal().toPoint();
+    auto *mon = statusMonitor();
+    if (mon) {
+        mon->markNotificationRead(item.seqId);
+        mon->markNotificationsReadForApp(item.desktopEntry, item.appName, item.desktopEntry);
+    }
+    refreshAttentionBearings();
+
+    // 1. Prefer activating an open window or installed app matching the notification
+    DesktopActions::Outcome out;
+    if (dockModel()->activateOrLaunchByHint(item.appName, item.desktopEntry, &out)) {
+        if (!out.message.isEmpty()) DesktopActions::showToast(out.message, anchor);
+        return;
+    }
+
+    // 2. Otherwise activate a matching minimized-to-tray StatusNotifierItem (e.g. Telegram / Motrix)
+    if (mon) {
+        for (const TrayItemInfo &ti : mon->trayItems()) {
+            if (SystemStatusMonitor::notificationMatchesApp(item, ti.id, ti.title)) {
+                mon->activateTrayItem(ti, anchor, this);
+                DesktopActions::showToast(tr("✓ 已唤起 %1").arg(ti.title), anchor);
+                return;
+            }
+        }
+    }
+
+    // 3. Fallback (e.g. system/daemon alert with no window): open Notification Center directly!
+    openSystemPopover(SystemPopover::TabNotifications);
+}
+
 void FloatingBall::executeSlotItem(const RadialSlotItem &item)
 {
     const QPoint anchor = anchorCenterGlobal().toPoint();
     if (item.kind == RadialSlotItem::AppSlot) {
         dockModel()->clearAttentionForApp(item.app);
+        statusMonitor()->markNotificationsReadForApp(item.app.appKey, item.app.name, item.app.id);
         refreshAttentionBearings();
         const auto outcome = dockModel()->toggleOrActivate(item.app);
         if (!outcome.message.isEmpty())
             DesktopActions::showToast(outcome.message, anchor);
         return;
     }
+    if (item.kind == RadialSlotItem::NotificationSlot) {
+        openNotificationTarget(item.notificationItem);
+        return;
+    }
     if (item.kind == RadialSlotItem::TraySlot) {
         if (item.id == QLatin1String("tray:empty")) return;
+        statusMonitor()->markNotificationsReadForApp(item.trayItem.id, item.trayItem.title);
+        refreshAttentionBearings();
         QWidget *surfaceAnchor = (m_fanOverlay && m_fanOverlay->isVisible() &&
                                   m_fanOverlay->overlayMode() == RadialFanOverlay::TapFanMode)
             ? static_cast<QWidget *>(m_fanOverlay)
@@ -3079,6 +3362,32 @@ void FloatingBall::showSlotContextMenu(int slotIndex, const QPoint &globalPos)
         statusMonitor()->openKdeModule(QString());
         return;
     }
+    if (item.kind == RadialSlotItem::NotificationSlot) {
+        m_menuOpen = true;
+        QMenu menu(this);
+        menu.addAction(tr("打开 %1").arg(item.notificationItem.displayAppName()), this, [this, item] {
+            closeFan(true);
+            openNotificationTarget(item.notificationItem);
+        });
+        menu.addAction(tr("标为已读"), this, [this, item] {
+            statusMonitor()->markNotificationsReadForApp(
+                item.notificationItem.desktopEntry,
+                item.notificationItem.appName,
+                item.notificationItem.desktopEntry);
+            statusMonitor()->markNotificationRead(item.notificationItem.seqId);
+            if (m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+            refreshAttentionBearings();
+        });
+        menu.addSeparator();
+        menu.addAction(tr("打开通知中心"), this, [this] {
+            closeFan(true);
+            openSystemPopover(SystemPopover::TabNotifications);
+        });
+        FloatingWindow::execPopupMenu(&menu, globalPos);
+        m_menuOpen = false;
+        refreshBallOpacity();
+        return;
+    }
     if (item.kind != RadialSlotItem::AppSlot) {
         showContextMenu(globalPos);
         return;
@@ -3107,7 +3416,7 @@ void FloatingBall::showSlotContextMenu(int slotIndex, const QPoint &globalPos)
             DesktopActions::showToast(out.message, anchorCenterGlobal().toPoint());
         });
     }
-    menu.exec(globalPos);
+    FloatingWindow::execPopupMenu(&menu, globalPos);
     m_menuOpen = false;
     refreshBallOpacity();
 }
@@ -3145,6 +3454,7 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) captureRegion();
     else if (id == QLatin1String("clipboard")) toggleClipboardBubble();
     else if (id == QLatin1String("deck")) toggleQuickDeck();
+    else if (id == QLatin1String("notifications")) openSystemPopover(SystemPopover::TabNotifications);
     else if (id == QLatin1String("paste")) toastOutcome(DesktopActions::pasteClipboard());
     else if (id == QLatin1String("copy")) toastOutcome(DesktopActions::copySelection());
     else if (id == QLatin1String("record")) recordScreen();
@@ -3761,11 +4071,19 @@ void FloatingBall::scheduleScreenAdaptation()
 
 void FloatingBall::adaptToScreen()
 {
-    QScreen *display = (m_multiScreenEnabled && m_assignedScreen && QGuiApplication::screens().contains(m_assignedScreen))
+    QScreen *display = (m_multiScreenEnabled && m_assignedScreen &&
+                        QGuiApplication::screens().contains(m_assignedScreen) &&
+                        FloatingWindow::isValidScreen(m_assignedScreen))
         ? m_assignedScreen.data()
         : m_currentScreen.data();
-    if (!display || !QGuiApplication::screens().contains(display))
+    if (!display || !QGuiApplication::screens().contains(display) || !FloatingWindow::isValidScreen(display))
         display = QGuiApplication::primaryScreen();
+    if (!FloatingWindow::isValidScreen(display)) {
+        display = nullptr;
+        for (QScreen *cand : QGuiApplication::screens()) {
+            if (FloatingWindow::isValidScreen(cand)) { display = cand; break; }
+        }
+    }
     if (!display) return;
     m_currentScreen = display;
     if (m_multiScreenEnabled && !m_assignedScreen) m_assignedScreen = display;
@@ -3775,13 +4093,21 @@ void FloatingBall::adaptToScreen()
 void FloatingBall::recoverVisibleAfterOutputChange()
 {
     if (!isPrimaryBall()) return;
-    const QList<QScreen *> screens = QGuiApplication::screens();
-    if (screens.isEmpty()) return;
+    QList<QScreen *> screens;
+    for (QScreen *s : QGuiApplication::screens()) {
+        if (FloatingWindow::isValidScreen(s)) screens.append(s);
+    }
+    if (screens.isEmpty()) {
+        // All outputs momentarily vanished (DPMS sleep / lid-close -> Wayland placeholder screen).
+        // Mark surface closed so we recreate cleanly when a real output returns.
+        m_waylandSurfaceClosed = true;
+        return;
+    }
 
     const bool assignedMissing = !m_assignedScreen || !screens.contains(m_assignedScreen);
     if (assignedMissing) {
-        m_assignedScreen = QGuiApplication::primaryScreen();
-        if (!m_assignedScreen) m_assignedScreen = screens.first();
+        QScreen *prim = QGuiApplication::primaryScreen();
+        m_assignedScreen = FloatingWindow::isValidScreen(prim) ? prim : screens.first();
         setProperty("floatingballAssignedScreen", QVariant::fromValue(m_assignedScreen.data()));
         loadScreenPlacement();
     }
@@ -4528,6 +4854,7 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
 #endif
     menu.addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
     menu.addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
+    menu.addAction(tr("通知中心"), this, [this] { openSystemPopover(SystemPopover::TabNotifications); });
     menu.addSeparator();
 
     if (m_dockSide != DockFree) {
@@ -4560,7 +4887,7 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
         menu.addAction(tr("隐藏悬浮球"), this, [this] { setBallVisible(false); });
     menu.addSeparator();
     menu.addAction(tr("退出悬浮球"), qApp, &QApplication::quit);
-    menu.exec(globalPos);
+    FloatingWindow::execPopupMenu(&menu, globalPos);
     m_menuOpen = false;
     refreshBallOpacity();
 }

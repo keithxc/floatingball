@@ -1,14 +1,23 @@
 #include "floatingwindow.h"
 #include "panelbackdrop.h"
+#include <QAction>
 #include <QApplication>
 #include <QDynamicPropertyChangeEvent>
+#include <QEventLoop>
+#include <QFontMetrics>
 #include <QGuiApplication>
+#include <QHelpEvent>
+#include <QKeyEvent>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QPainter>
 #include <QPen>
+#include <QPointer>
 #include <QRadialGradient>
 #include <QRectF>
+#include <QScreen>
 #include <QSettings>
+#include <QTimer>
 #include <QWidget>
 
 namespace {
@@ -113,7 +122,14 @@ private:
         }
         if (!screen) screen = QGuiApplication::screenAt(widget->geometry().center());
         if (!screen) screen = widget->screen();
-        if (!screen) return;
+        if (!FloatingWindow::isValidScreen(screen)) {
+            // Wayland emits a transient QPlaceholderScreen (empty name/geometry) when
+            // all wl_outputs vanish during DPMS off / lid-close / eGPU hotplug. Never
+            // bind zwlr_layer_surface_v1 to the placeholder; mark closed so it remaps
+            // cleanly as soon as a real output returns.
+            surfaceClosed = true;
+            return;
+        }
         const QPoint offset = widget->pos() - screen->geometry().topLeft();
         const QSize currentSize = widget->size();
         const QString screenName = screen->name();
@@ -139,7 +155,8 @@ private:
             QPointer<QScreen> sPtr(screen);
             QTimer::singleShot(0, widget, [this, wPtr, sPtr] {
                 remapping = false;
-                if (!wPtr || !sPtr || !QGuiApplication::screens().contains(sPtr)) return;
+                if (!wPtr || !sPtr || !QGuiApplication::screens().contains(sPtr) ||
+                    !FloatingWindow::isValidScreen(sPtr)) return;
                 if (!wPtr->isVisible()) return;
                 wPtr->hide();
                 surface->setScreen(sPtr);
@@ -165,8 +182,256 @@ private:
     bool remapping = false;
     bool surfaceClosed = false;
 };
+
+// Sleek click-through LayerShellQt tooltip pill used on Wayland in place of
+// Qt's QTipLabel (which attempts xdg_popup attachment onto zwlr_layer_surface_v1
+// and fails with "Cannot attach popup of unknown type").
+class WaylandTooltipPill final : public QWidget {
+public:
+    WaylandTooltipPill()
+        : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint |
+                           Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput)
+    {
+        setObjectName(QStringLiteral("floatingballHoverLabel"));
+        setProperty("floatingballSurface", true);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_hideTimer = new QTimer(this);
+        m_hideTimer->setSingleShot(true);
+        connect(m_hideTimer, &QTimer::timeout, this, &QWidget::hide);
+        FloatingWindow::prepare(this, false);
+    }
+
+    void showText(const QString &text, const QPoint &globalPos, const QWidget *anchorWidget)
+    {
+        const QString clean = text.trimmed();
+        if (clean.isEmpty()) {
+            hide();
+            return;
+        }
+        m_text = clean;
+        QFont f = font();
+        f.setPointSize(11);
+        f.setWeight(QFont::Medium);
+        setFont(f);
+        const QFontMetrics fm(f);
+        const int maxW = 420;
+        const QRect textRect = fm.boundingRect(QRect(0, 0, maxW - 24, 240), Qt::TextWordWrap, m_text);
+        const int w = qBound(72, textRect.width() + 26, maxW);
+        const int h = qMax(30, textRect.height() + 14);
+        resize(w, h);
+
+        QScreen *scr = QGuiApplication::screenAt(globalPos);
+        if (!FloatingWindow::isValidScreen(scr) && anchorWidget)
+            scr = anchorWidget->screen();
+        if (!FloatingWindow::isValidScreen(scr)) {
+            for (QScreen *cand : QGuiApplication::screens()) {
+                if (FloatingWindow::isValidScreen(cand)) { scr = cand; break; }
+            }
+        }
+        if (!FloatingWindow::isValidScreen(scr)) return;
+        setProperty("floatingballAssignedScreen", QVariant::fromValue(scr));
+
+        const QRect b = scr->availableGeometry();
+        int x = globalPos.x() - w / 2;
+        int y = globalPos.y() - h - 18;
+        if (y < b.top() + 8) y = globalPos.y() + 22;
+        x = qBound(b.left() + 8, x, qMax(b.left() + 8, b.right() - w - 8));
+        y = qBound(b.top() + 8, y, qMax(b.top() + 8, b.bottom() - h - 8));
+        move(x, y);
+        if (!isVisible()) show();
+        update();
+        m_hideTimer->start(5200);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+        p.setPen(QPen(QColor(255, 255, 255, 56), 1.0));
+        p.setBrush(QColor(18, 22, 32, 236));
+        p.drawRoundedRect(r, 12.0, 12.0);
+        p.setPen(QColor("#f4f7fc"));
+        p.setFont(font());
+        p.drawText(rect().adjusted(12, 6, -12, -6), Qt::AlignCenter | Qt::TextWordWrap, m_text);
+    }
+
+private:
+    QString m_text;
+    QTimer *m_hideTimer = nullptr;
+};
+
+class WaylandTooltipInterceptor final : public QObject {
+public:
+    explicit WaylandTooltipInterceptor(QObject *parent = nullptr) : QObject(parent) {}
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        auto *w = qobject_cast<QWidget *>(watched);
+        if (!w) return false;
+        QWidget *top = w->window();
+        if (!top || !top->property("floatingballLayerShell").toBool()) return false;
+        if (top->objectName() == QLatin1String("floatingballHoverLabel")) return false;
+
+        switch (event->type()) {
+        case QEvent::ToolTip: {
+            auto *help = static_cast<QHelpEvent *>(event);
+            QString tip;
+            for (const QWidget *cur = w; cur; cur = cur->parentWidget()) {
+                tip = cur->toolTip();
+                if (!tip.isEmpty()) break;
+            }
+            if (tip.isEmpty()) {
+                if (m_pill) m_pill->hide();
+            } else {
+                if (!m_pill) m_pill = new WaylandTooltipPill();
+                m_ownerWidget = w;
+                m_ownerTop = top;
+                m_pill->showText(tip, help->globalPos(), w);
+            }
+            return true; // Always consume so Qt never creates an xdg_popup QTipLabel!
+        }
+        case QEvent::Leave:
+        case QEvent::MouseButtonPress:
+        case QEvent::Wheel:
+        case QEvent::Hide:
+        case QEvent::Close:
+        case QEvent::WindowDeactivate:
+            if (m_pill && m_pill->isVisible() && (w == m_ownerWidget || top == m_ownerTop)) {
+                m_pill->hide();
+            }
+            break;
+        default:
+            break;
+        }
+        return false;
+    }
+
+private:
+    QPointer<WaylandTooltipPill> m_pill;
+    QPointer<QWidget> m_ownerWidget;
+    QPointer<QWidget> m_ownerTop;
+};
+
+void ensureWaylandTooltipInterceptor()
+{
+    static bool installed = false;
+    if (installed || !qApp) return;
+    installed = true;
+    qApp->installEventFilter(new WaylandTooltipInterceptor(qApp));
+}
+
+class WaylandMenuFilter final : public QObject {
+public:
+    explicit WaylandMenuFilter(QMenu *menu) : QObject(menu), m_menu(menu)
+    {
+        m_opened = false;
+        QPointer<WaylandMenuFilter> self(this);
+        QTimer::singleShot(140, menu, [self] {
+            if (self) self->m_opened = true;
+        });
+        menu->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject *, QEvent *event) override
+    {
+        if (!m_menu) return false;
+        if (event->type() == QEvent::WindowDeactivate && m_opened) {
+            // Keep open while a child submenu has focus
+            for (QMenu *sub : m_menu->findChildren<QMenu *>()) {
+                if (sub && sub->isVisible()) return false;
+            }
+            m_menu->close();
+        } else if (event->type() == QEvent::KeyPress) {
+            auto *ke = static_cast<QKeyEvent *>(event);
+            if (ke->key() == Qt::Key_Escape) {
+                m_menu->close();
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    QPointer<QMenu> m_menu;
+    bool m_opened = false;
+};
+
+void prepareWaylandMenu(QMenu *menu, const QPoint &globalPos)
+{
+    if (!menu) return;
+    if (menu->styleSheet().isEmpty()) {
+        menu->setStyleSheet(QStringLiteral(
+            "QMenu { background:rgba(20,24,34,242); color:#f1f5f9;"
+            "        border:1px solid rgba(255,255,255,44); border-radius:14px; padding:6px 4px;"
+            "        font-size:13px; }"
+            "QMenu::item { padding:8px 16px; border-radius:9px; margin:1px 4px; }"
+            "QMenu::item:selected { background:rgba(59,130,246,165); color:#ffffff; }"
+            "QMenu::item:disabled { color:rgba(148,163,184,135); }"
+            "QMenu::separator { height:1px; background:rgba(255,255,255,26); margin:5px 12px; }"
+            "QMenu::indicator { width:14px; height:14px; margin-left:6px; }"));
+    }
+    menu->setParent(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    menu->setAttribute(Qt::WA_TranslucentBackground, true);
+    menu->setProperty("floatingballSurface", true);
+    menu->setProperty("panelBlurInset", 2);
+    menu->setProperty("panelBlurRadius", 14);
+    FloatingWindow::prepare(menu, true);
+
+    // Flatten nested submenus gently or prepare them as LayerShellQt overlays too
+    for (QMenu *sub : menu->findChildren<QMenu *>()) {
+        if (sub && !sub->property("floatingballLayerShell").toBool()) {
+            sub->setStyleSheet(menu->styleSheet());
+            sub->setAttribute(Qt::WA_TranslucentBackground, true);
+            sub->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+            FloatingWindow::prepare(sub, true);
+        }
+    }
+
+    QScreen *scr = QGuiApplication::screenAt(globalPos);
+    if (!FloatingWindow::isValidScreen(scr)) {
+        for (QScreen *cand : QGuiApplication::screens()) {
+            if (FloatingWindow::isValidScreen(cand)) { scr = cand; break; }
+        }
+    }
+    if (FloatingWindow::isValidScreen(scr)) {
+        menu->setProperty("floatingballAssignedScreen", QVariant::fromValue(scr));
+    }
+
+    menu->adjustSize();
+    const QSize sz = menu->sizeHint().expandedTo(menu->size());
+    menu->resize(sz);
+    if (FloatingWindow::isValidScreen(scr)) {
+        const QRect b = scr->availableGeometry();
+        const int x = qBound(b.left() + 6, globalPos.x(), qMax(b.left() + 6, b.right() - sz.width() - 6));
+        const int y = qBound(b.top() + 6, globalPos.y(), qMax(b.top() + 6, b.bottom() - sz.height() - 6));
+        menu->move(x, y);
+    } else {
+        menu->move(globalPos);
+    }
+
+    if (!menu->property("floatingballWaylandMenuFilter").toBool()) {
+        new WaylandMenuFilter(menu);
+        menu->setProperty("floatingballWaylandMenuFilter", true);
+    }
+}
 } // namespace
 #endif
+
+bool FloatingWindow::isValidScreen(const QScreen *screen)
+{
+    if (!screen || screen->geometry().isEmpty() || screen->availableGeometry().isEmpty())
+        return false;
+    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland")) &&
+        screen->name().trimmed().isEmpty())
+        return false;
+    return true;
+}
 
 void FloatingWindow::prepare(QWidget *widget, bool activateOnShow)
 {
@@ -190,9 +455,58 @@ void FloatingWindow::prepare(QWidget *widget, bool activateOnShow)
         PanelBackdrop::setEnabled(widget, panelBlurEnabled());
     }
 #ifdef FLOATINGBALL_LAYER_SHELL
-    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland")))
-        new WaylandFloatingSurface(widget, activateOnShow);
+    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+        if (!widget->property("floatingballLayerShell").toBool()) {
+            widget->setProperty("floatingballLayerShell", true);
+            new WaylandFloatingSurface(widget, activateOnShow);
+        }
+        ensureWaylandTooltipInterceptor();
+    }
 #endif
+}
+
+QAction *FloatingWindow::execPopupMenu(QMenu *menu, const QPoint &globalPos)
+{
+    if (!menu) return nullptr;
+#ifdef FLOATINGBALL_LAYER_SHELL
+    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+        prepareWaylandMenu(menu, globalPos);
+        QPointer<QAction> chosen;
+        QEventLoop loop;
+        auto c1 = QObject::connect(menu, &QMenu::triggered, &loop, [&chosen, &loop, menu](QAction *act) {
+            chosen = act;
+            menu->close();
+            loop.quit();
+        });
+        auto c2 = QObject::connect(menu, &QMenu::aboutToHide, &loop, &QEventLoop::quit);
+        auto c3 = QObject::connect(menu, &QObject::destroyed, &loop, &QEventLoop::quit);
+        menu->show();
+        menu->raise();
+        menu->activateWindow();
+        loop.exec();
+        QObject::disconnect(c1);
+        QObject::disconnect(c2);
+        QObject::disconnect(c3);
+        return chosen.data();
+    }
+#endif
+    return menu->exec(globalPos);
+}
+
+void FloatingWindow::popupMenu(QMenu *menu, const QPoint &globalPos)
+{
+    if (!menu) return;
+#ifdef FLOATINGBALL_LAYER_SHELL
+    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+        prepareWaylandMenu(menu, globalPos);
+        QObject::connect(menu, &QMenu::triggered, menu, [menu](QAction *) { menu->close(); });
+        menu->show();
+        menu->raise();
+        menu->activateWindow();
+        return;
+    }
+#endif
+    menu->popup(globalPos);
 }
 
 double FloatingWindow::panelOpacity()

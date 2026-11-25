@@ -16,6 +16,7 @@ class QStackedWidget;
 class QTimer;
 class QToolButton;
 class QVBoxLayout;
+struct NotificationItem;
 class SystemStatusMonitor;
 class CapsuleSlider;
 class IosToggleSwitch;
@@ -37,7 +38,8 @@ public:
         PageHotspot = 2,
         PageBluetooth = 3,
         PageMihomo = 4,
-        PageCellular = 5
+        PageCellular = 5,
+        PageNotifications = 6
     };
     // Compatibility aliases for direct tab callers
     enum Tab {
@@ -46,7 +48,8 @@ public:
         TabHotspot = PageHotspot,
         TabBluetooth = PageBluetooth,
         TabMihomo = PageMihomo,
-        TabCellular = PageCellular
+        TabCellular = PageCellular,
+        TabNotifications = PageNotifications
     };
 
     explicit SystemPopover(SystemStatusMonitor *monitor, QWidget *parent = nullptr);
@@ -66,6 +69,7 @@ signals:
     void audioStateChanged(int percent, bool muted);
     void brightnessStateChanged(int percent);
     void quickDeckRequested();
+    void notificationActivated(const NotificationItem &item);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -111,6 +115,8 @@ private:
     QWidget *buildHotspotPage(QWidget *parent);
     QWidget *buildBluetoothPage(QWidget *parent);
     QWidget *buildMihomoPage(QWidget *parent);
+    QWidget *buildNotificationsPage(QWidget *parent);
+    void rebuildNotificationsView();
 
     void positionNear(const QPoint &anchorGlobal);
     void showStatusBanner(const QString &msg, bool isError = false);
@@ -179,6 +185,7 @@ private:
     QToolButton *m_backBtn = nullptr;
     QLabel *m_titleLbl = nullptr;
     QToolButton *m_powerPill = nullptr;
+    QToolButton *m_hdrNotifBtn = nullptr;
     QToolButton *m_hdrSettingsBtn = nullptr;
     QToolButton *m_hdrLockBtn = nullptr;
     QToolButton *m_hdrPowerBtn = nullptr;
@@ -210,6 +217,18 @@ private:
     QTimer *m_volumeDebounce = nullptr;
     bool m_muted = false;
     int m_lastVolume = 50;
+
+    // Home Unread Notification Preview Banner (auto-hides when 0 unread)
+    QPushButton *m_notifHomeCard = nullptr;
+    QLabel *m_notifHomeIcon = nullptr;
+    QLabel *m_notifHomeTitle = nullptr;
+    QLabel *m_notifHomeSub = nullptr;
+
+    // Notifications subpage widgets
+    QLabel *m_notifCountLbl = nullptr;
+    QToolButton *m_notifMarkAllBtn = nullptr;
+    QToolButton *m_notifClearAllBtn = nullptr;
+    QVBoxLayout *m_notifListLayout = nullptr;
 
     // Home MPRIS Now Playing card (auto-hides when idle)
     QWidget *m_mprisCard = nullptr;

@@ -652,6 +652,6 @@ void AppLauncherPopover::showTileContextMenu(const DockAppEntry &entry, const QP
             QTimer::singleShot(350, this, [this] { if (isVisible()) reloadCatalog(); });
         });
     }
-    menu.exec(globalPos);
+    FloatingWindow::execPopupMenu(&menu, globalPos);
     m_menuOpen = false;
 }

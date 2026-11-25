@@ -6,11 +6,16 @@
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QLocale>
+#include <QLoggingCategory>
 #include <QTimer>
 #include <QTranslator>
 
 int main(int argc, char *argv[])
 {
+    // Silence benign QtSvg parse warnings from third-party system icon themes
+    // (e.g. Breeze camera-photo/cups/printer SVGs rendered in AppLauncher).
+    QLoggingCategory::setFilterRules(QStringLiteral("qt.svg.warning=false"));
+
     QApplication a(argc, argv);
     a.setQuitOnLastWindowClosed(false);
 #ifndef Q_OS_MACOS

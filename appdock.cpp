@@ -1,4 +1,5 @@
 #include "appdock.h"
+#include "systemstatus.h"
 #include "uiicons.h"
 
 #include <QDir>
@@ -297,16 +298,20 @@ const QList<DesktopFileInfo> &cachedLinuxDesktopCatalog()
 const DesktopFileInfo *matchDesktopFile(const QString &desktopFileName, const QString &resourceClass)
 {
     const auto &all = cachedLinuxDesktopCatalog();
-    auto norm = [](QString s) {
+    auto rawLower = [](const QString &s) { return s.trimmed().toLower(); };
+    auto stripDesktop = [](QString s) {
         s = s.trimmed().toLower();
-        if (s.endsWith(QLatin1String(".desktop"))) s.chop(8);
+        if (s.endsWith(QLatin1String(".desktop")) && s.size() > 8) s.chop(8);
         return s;
     };
-    const QString df = norm(desktopFileName);
-    const QString cls = norm(resourceClass);
+    const QString dfRaw = rawLower(desktopFileName);
+    const QString df = stripDesktop(desktopFileName);
+    const QString cls = stripDesktop(resourceClass);
 
     for (const DesktopFileInfo &info : all) {
-        if (!df.isEmpty() && info.id.compare(df, Qt::CaseInsensitive) == 0) return &info;
+        if ((!dfRaw.isEmpty() && info.id.compare(dfRaw, Qt::CaseInsensitive) == 0) ||
+            (!df.isEmpty() && info.id.compare(df, Qt::CaseInsensitive) == 0))
+            return &info;
     }
     for (const DesktopFileInfo &info : all) {
         if (!cls.isEmpty() &&
@@ -501,6 +506,9 @@ void AppDockModel::initKWinBridge()
         for (const QString &t : self->m_pinnedTargets) pinnedSet.insert(normalizeTarget(t));
 
         QList<DockAppEntry> live;
+        QString activatedKey;
+        QString activatedName;
+        QString activatedDesktop;
         for (const QJsonValue &val : arr) {
             const QJsonObject obj = val.toObject();
             const QString winId = obj.value(QStringLiteral("id")).toString();
@@ -536,6 +544,9 @@ void AppDockModel::initKWinBridge()
             }
             if (active && !entry.appKey.isEmpty()) {
                 self->m_notifiedAppKeys.remove(entry.appKey);
+                activatedKey = entry.appKey;
+                activatedName = entry.name;
+                activatedDesktop = desktopFile.isEmpty() ? entry.id : desktopFile;
             }
             entry.demandsAttention = kwinAttention ||
                 (!active && !entry.appKey.isEmpty() && self->m_notifiedAppKeys.contains(entry.appKey));
@@ -544,6 +555,9 @@ void AppDockModel::initKWinBridge()
         }
 
         self->m_linuxRunningApps = live;
+        if (!activatedKey.isEmpty() || !activatedName.isEmpty()) {
+            emit self->windowActivated(activatedKey, activatedName, activatedDesktop);
+        }
         emit self->appsChanged();
     }, [self]() -> QString {
         if (!self) return {};
@@ -790,16 +804,18 @@ void AppDockModel::notifyAppAttention(const QString &appName, const QString &des
     const QString k1 = cleanKey(desktopEntry);
     const QString k2 = cleanKey(appName);
 
+    NotificationItem probe;
+    probe.appName = appName;
+    probe.desktopEntry = desktopEntry;
+
     bool matchedAny = false;
     auto tryMatchList = [&](QList<DockAppEntry> &list) {
         for (DockAppEntry &e : list) {
             const QString ek = cleanKey(e.appKey.isEmpty() ? e.id : e.appKey);
-            const QString en = e.name.trimmed().toLower();
-            const bool hit = (!k1.isEmpty() && (ek == k1 || ek.endsWith(QLatin1Char('.') + k1) || k1.endsWith(QLatin1Char('.') + ek))) ||
-                             (!k2.isEmpty() && (ek == k2 || en == k2 || ek.contains(k2) || en.contains(k2)));
+            const bool hit = SystemStatusMonitor::notificationMatchesApp(probe, ek, e.name, e.id);
             if (hit && !e.active) {
                 e.demandsAttention = true;
-                m_notifiedAppKeys.insert(ek);
+                if (!ek.isEmpty()) m_notifiedAppKeys.insert(ek);
                 matchedAny = true;
             }
         }
@@ -1176,6 +1192,57 @@ DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry
         return {true, QStringLiteral("✓ 已启动 ") + entry.name};
     return {false, QStringLiteral("无法启动 ") + entry.name};
 #endif
+}
+
+bool AppDockModel::activateOrLaunchByHint(const QString &appName,
+                                          const QString &desktopEntry,
+                                          DesktopActions::Outcome *out) const
+{
+    NotificationItem probe;
+    probe.appName = appName;
+    probe.desktopEntry = desktopEntry;
+
+    // 1. Prefer activating an already open window matching this notification's app
+    const QList<DockAppEntry> open = openWindows();
+    for (const DockAppEntry &w : open) {
+        if (SystemStatusMonitor::notificationMatchesApp(probe, w.appKey, w.name, w.id)) {
+            const auto res = activateOrLaunch(w);
+            if (out) *out = res;
+            return true;
+        }
+    }
+
+#ifndef Q_OS_MACOS
+    // 2. Otherwise try matching an installed .desktop entry
+    const DesktopFileInfo *matched = matchDesktopFile(desktopEntry, appName);
+    if (!matched) {
+        for (const DesktopFileInfo &info : cachedLinuxDesktopCatalog()) {
+            if (SystemStatusMonitor::notificationMatchesApp(probe, info.id, info.name, info.wmClass)) {
+                matched = &info;
+                break;
+            }
+        }
+    }
+    if (matched) {
+        DockAppEntry e;
+        e.id = matched->id;
+        e.name = matched->name;
+        e.launchTarget = matched->desktopPath;
+        const auto res = activateOrLaunch(e);
+        if (out) *out = res;
+        return res.ok;
+    }
+#else
+    const QList<DockAppEntry> inst = installedApps(160);
+    for (const DockAppEntry &e : inst) {
+        if (SystemStatusMonitor::notificationMatchesApp(probe, e.id, e.name, e.id)) {
+            const auto res = activateOrLaunch(e);
+            if (out) *out = res;
+            return res.ok;
+        }
+    }
+#endif
+    return false;
 }
 
 DesktopActions::Outcome AppDockModel::quitApp(const DockAppEntry &entry)

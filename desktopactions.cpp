@@ -46,7 +46,7 @@ namespace {
 class FloatingToast final : public QWidget {
 public:
     FloatingToast()
-        : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint |
+        : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint |
                            Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput)
     {
         setObjectName(QStringLiteral("floatingballToast"));

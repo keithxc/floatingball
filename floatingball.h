@@ -40,6 +40,7 @@ struct RadialSlotItem {
     enum Kind {
         ActionSlot,
         AppSlot,
+        NotificationSlot,
         TraySlot,
         SystemSlot,
         TrayMenuSlot,
@@ -53,6 +54,9 @@ struct RadialSlotItem {
     QString shortLabel; // Compact 2-6 char label shown beneath drilled/hub orbs
     QString drillKey;   // Non-empty for drillable hubs: "windows", "tray", "control", "tools"
     DockAppEntry app;
+    NotificationItem notificationItem;
+    int unreadCount = 0;
+    QString notificationPreview;
     TrayItemInfo trayItem;
     TrayMenuEntry trayMenuEntry;
     bool isBranchHub = false;
@@ -210,6 +214,7 @@ public:
     // Actions & panels
     void executeAction(const QString &id);
     void executeSlotItem(const RadialSlotItem &item);
+    void openNotificationTarget(const NotificationItem &item);
     void captureRegion();
     void recordScreen();
     void toggleClipboardBubble();

@@ -829,6 +829,177 @@ int main(int argc, char **argv)
               "re-triggering launcher toggles AppLauncherPopover closed");
     }
 
+    // ------------------------------------------------------------------------
+    // 11. Notification Attribution, D-Bus Parser, NotificationSlot & Center
+    // ------------------------------------------------------------------------
+    {
+        // 11a. D-Bus Notify block parser (multi-line HTML body + desktop-entry + transient OSD filter)
+        const QString sampleNotify = QStringLiteral(
+            "method call time=1795615700.123 sender=:1.112 -> destination=org.freedesktop.Notifications serial=77 "
+            "path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify\n"
+            "   string \"Telegram Desktop\"\n"
+            "   uint32 42\n"
+            "   string \"org.telegram.desktop\"\n"
+            "   string \"Alice\"\n"
+            "   string \"<b>晚上吃什么？</b>\n记得带伞 &amp; 钥匙\"\n"
+            "   array [\n"
+            "      string \"default\"\n"
+            "      string \"Open\"\n"
+            "   ]\n"
+            "   array [\n"
+            "      dict entry(\n"
+            "         string \"desktop-entry\"\n"
+            "         variant             string \"org.telegram.desktop\"\n"
+            "      )\n"
+            "      dict entry(\n"
+            "         string \"urgency\"\n"
+            "         variant             byte 1\n"
+            "      )\n"
+            "   ]\n"
+            "   int32 -1\n");
+        NotificationItem parsed;
+        bool isTransient = true;
+        check(SystemStatusMonitor::parseDbusMonitorNotifyBlock(sampleNotify, &parsed, &isTransient) &&
+                  !isTransient &&
+                  parsed.appName == QStringLiteral("Telegram Desktop") &&
+                  parsed.replacesId == 42 &&
+                  parsed.desktopEntry == QStringLiteral("org.telegram.desktop") &&
+                  parsed.summary == QStringLiteral("Alice") &&
+                  parsed.body.contains(QStringLiteral("晚上吃什么？")) &&
+                  parsed.body.contains(QStringLiteral("& 钥匙")) &&
+                  !parsed.body.contains(QStringLiteral("<b>")),
+              "D-Bus Notify block parser extracts multi-line body, strips HTML, and reads desktop-entry");
+
+        const QString transientOsd = QStringLiteral(
+            "method call time=1795615701.000 sender=:1.5 -> destination=org.freedesktop.Notifications serial=78 "
+            "path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify\n"
+            "   string \"Plasma Workspace\"\n"
+            "   uint32 0\n"
+            "   string \"audio-volume-high\"\n"
+            "   string \"Volume 70%\"\n"
+            "   string \"\"\n"
+            "   array [\n"
+            "   ]\n"
+            "   array [\n"
+            "      dict entry(\n"
+            "         string \"transient\"\n"
+            "         variant             boolean true\n"
+            "      )\n"
+            "   ]\n"
+            "   int32 1500\n");
+        NotificationItem osdItem;
+        bool osdTransient = false;
+        check(SystemStatusMonitor::parseDbusMonitorNotifyBlock(transientOsd, &osdItem, &osdTransient) && osdTransient,
+              "transient OSD notifications are flagged and filtered out from unread badge");
+
+        // 11b. Open window notification attribution + auto-clear (ZERO ghost red dot!)
+        ball.statusMonitor()->clearAllNotifications();
+        ball.clearNotificationDot();
+        DockAppEntry kmail;
+        kmail.id = QStringLiteral("org.kde.kmail2");
+        kmail.appKey = QStringLiteral("org.kde.kmail2");
+        kmail.name = QStringLiteral("KMail");
+        kmail.caption = QStringLiteral("Inbox — KMail");
+        kmail.windowId = QStringLiteral("win-kmail-1");
+        kmail.running = true;
+        ball.dockModel()->setOpenWindowsForTest({kmail});
+
+        NotificationItem mailNotif;
+        mailNotif.appName = QStringLiteral("KMail");
+        mailNotif.desktopEntry = QStringLiteral("org.kde.kmail2");
+        mailNotif.summary = QStringLiteral("招商银行账单");
+        mailNotif.body = QStringLiteral("本月账单已出");
+        ball.statusMonitor()->pushNotification(mailNotif);
+        app.processEvents();
+
+        ball.fanOverlay()->openTapFan();
+        ball.fanOverlay()->syncProgress(1.0);
+        app.processEvents();
+
+        int kmailSlotIdx = -1;
+        for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
+            const auto &s = ball.fanOverlay()->slotsData()[i];
+            if (s.kind == RadialSlotItem::AppSlot && s.app.id == QLatin1String("org.kde.kmail2")) {
+                kmailSlotIdx = i;
+                break;
+            }
+        }
+        check(kmailSlotIdx >= 0 &&
+                  ball.fanOverlay()->slotsData()[kmailSlotIdx].app.demandsAttention &&
+                  ball.fanOverlay()->slotsData()[kmailSlotIdx].unreadCount == 1 &&
+                  ball.fanOverlay()->slotsData()[kmailSlotIdx].notificationPreview.contains(QStringLiteral("招商银行账单")),
+              "open-window notification binds exact red badge count and message preview to matching window orb");
+
+        // Hover over KMail orb and verify preview appears in activeLabelText
+        const QPointF kmailCenter = ball.fanOverlay()->slotsData()[kmailSlotIdx].centerGlobal;
+        ball.fanOverlay()->updateFinger(kmailCenter, kmailSlotIdx);
+        check(ball.fanOverlay()->activeLabelText().contains(QStringLiteral("招商银行账单")),
+              "hovering notifying window orb reveals exact notification summary in callout pill");
+
+        // Clicking KMail clears BOTH window attention AND unread count -> zero ghost red dot!
+        ball.executeSlotItem(ball.fanOverlay()->slotsData()[kmailSlotIdx]);
+        ball.closeFan(true);
+        app.processEvents();
+        check(ball.statusMonitor()->snapshot().unreadNotifications == 0 &&
+                  ball.attentionAnglesRad().isEmpty(),
+              "activating notifying open window clears unread notification and leaves zero ghost red dot");
+
+        // 11c. Background / tray app notification (no open window) -> surfaces NotificationSlot orb + Notification Center!
+        NotificationItem tg1;
+        tg1.appName = QStringLiteral("Telegram Desktop");
+        tg1.desktopEntry = QStringLiteral("org.telegram.desktop");
+        tg1.summary = QStringLiteral("Alice");
+        tg1.body = QStringLiteral("晚上吃什么？");
+        ball.statusMonitor()->pushNotification(tg1);
+        NotificationItem tg2 = tg1;
+        tg2.body = QStringLiteral("楼下新开了家拉面");
+        ball.statusMonitor()->pushNotification(tg2);
+        app.processEvents();
+
+        ball.fanOverlay()->openTapFan();
+        ball.fanOverlay()->syncProgress(1.0);
+        app.processEvents();
+
+        int notifSlotIdx = -1;
+        for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
+            if (ball.fanOverlay()->slotsData()[i].kind == RadialSlotItem::NotificationSlot) {
+                notifSlotIdx = i;
+                break;
+            }
+        }
+        check(notifSlotIdx >= 0 &&
+                  ball.fanOverlay()->slotsData()[notifSlotIdx].unreadCount == 2 &&
+                  ball.fanOverlay()->slotsData()[notifSlotIdx].label == QStringLiteral("Telegram Desktop") &&
+                  !ball.attentionAnglesRad().isEmpty(),
+              "background/tray unread notifications surface a grouped NotificationSlot orb with exact count and radar bearing");
+
+        ball.fanOverlay()->updateFinger(ball.fanOverlay()->slotsData()[notifSlotIdx].centerGlobal, notifSlotIdx);
+        check(ball.fanOverlay()->activeLabelText().contains(QStringLiteral("Telegram Desktop")) &&
+                  ball.fanOverlay()->activeLabelText().contains(QStringLiteral("2条未读")),
+              "hovering NotificationSlot reveals sender app, unread count, and latest message preview");
+        check(ball.fanOverlay()->grab().save(QString::fromLocal8Bit(argv[1]) + "/notif-fan-preview.png"),
+              "saved fan preview with NotificationSlot orb outside source");
+        ball.closeFan(true);
+
+        // Verify Control Center Notification Center (PageNotifications) displays & clears cleanly
+        ball.openSystemPopover(SystemPopover::TabNotifications);
+        app.processEvents();
+        check(ball.systemPopover()->isVisible() &&
+                  ball.systemPopover()->currentPage() == SystemPopover::PageNotifications,
+              "Control Center opens built-in Liquid Glass Notification Center directly");
+        check(ball.systemPopover()->grab().save(QString::fromLocal8Bit(argv[1]) + "/notif-center-preview.png"),
+              "saved Notification Center preview outside source");
+
+        ball.statusMonitor()->clearAllNotifications();
+        app.processEvents();
+        check(ball.statusMonitor()->notifications().isEmpty() &&
+                  ball.statusMonitor()->snapshot().unreadNotifications == 0 &&
+                  ball.attentionAnglesRad().isEmpty(),
+              "clearing Notification Center removes history and extinguishes all red dots");
+        ball.systemPopover()->hide();
+        ball.dockModel()->setOpenWindowsForTest({});
+    }
+
     // Restore original clipboard
     if (savedClip) app.clipboard()->setMimeData(savedClip);
     else app.clipboard()->clear();

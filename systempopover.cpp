@@ -556,7 +556,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 #ifdef Q_OS_MACOS
     setFixedSize(344, 286);
 #else
-    setFixedSize(344, 404);
+    setFixedSize(344, 434);
 #endif
     setProperty("panelBlurInset", 10);
     setProperty("panelBlurRadius", 26);
@@ -581,17 +581,27 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QLabel#sliderTag { color:rgba(226,232,240,190); font-size:11px; font-weight:600; }"
         "QLabel#sliderVal { color:#f8fafc; font-size:11.5px; font-weight:600; }"
         "QToolButton#powerPill { background:rgba(255,255,255,18); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
-        "                        border-radius:17px; padding:0 11px; font-size:12px; font-weight:600; }"
+        "                        border-radius:16px; padding:0 10px; font-size:12px; font-weight:600; }"
         "QToolButton#powerPill:hover { background:rgba(255,255,255,30); }"
         "QToolButton#powerPill[accent=\"green\"] { background:rgba(16,185,129,48); border:1px solid rgba(52,211,153,150); color:#d1fae5; }"
         "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(59,130,246,44); border:1px solid rgba(96,165,250,145); color:#dbeafe; }"
         "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(244,63,94,48);  border:1px solid rgba(251,113,133,150); color:#ffe4e6; }"
-        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:17px; font-size:16px; }"
+        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:15px; font-size:15px; }"
         "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,32); }"
-        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:17px; }"
+        "QToolButton#hdrIconBtn[unread=\"true\"] { background:rgba(255,77,109,52); color:#ffe4e6; border:1px solid rgba(255,107,138,165); }"
+        "QToolButton#hdrIconBtn[unread=\"true\"]:hover { background:rgba(255,77,109,82); }"
+        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:15px; }"
         "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,68); }"
+        "QPushButton#notifBanner { background:rgba(255,77,109,34); border:1px solid rgba(255,112,140,120); border-radius:16px; text-align:left; }"
+        "QPushButton#notifBanner:hover { background:rgba(255,77,109,52); }"
+        "QPushButton#notifCardBtn { background:rgba(255,255,255,16); border:1px solid rgba(255,255,255,24); border-radius:14px; text-align:left; }"
+        "QPushButton#notifCardBtn:hover { background:rgba(255,255,255,28); }"
+        "QPushButton#notifCardBtn[unread=\"true\"] { background:rgba(255,77,109,28); border:1px solid rgba(255,112,140,115); }"
+        "QPushButton#notifCardBtn[unread=\"true\"]:hover { background:rgba(255,77,109,46); }"
+        "QToolButton#notifDismissBtn { background:rgba(255,255,255,14); color:#cbd5e1; border:1px solid rgba(255,255,255,20); border-radius:12px; }"
+        "QToolButton#notifDismissBtn:hover { background:rgba(244,63,94,85); color:#ffffff; }"
         "QToolButton#backPill { background:rgba(255,255,255,18); color:#f8fafc; border:1px solid rgba(255,255,255,26);"
-        "                       border-radius:17px; padding:0 11px 0 7px; font-size:12.5px; font-weight:600; }"
+        "                       border-radius:16px; padding:0 11px 0 7px; font-size:12.5px; font-weight:600; }"
         "QToolButton#backPill:hover { background:rgba(255,255,255,32); }"
         "QPushButton#connRow { background:transparent; border:none; border-radius:12px; text-align:left; }"
         "QPushButton#connRow:hover { background:rgba(255,255,255,18); }"
@@ -635,7 +645,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(5);
+    hdrRow->setSpacing(4);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
@@ -643,7 +653,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_backBtn->setIconSize(QSize(15, 15));
     m_backBtn->setText(QStringLiteral("返回"));
     m_backBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_backBtn->setFixedHeight(34);
+    m_backBtn->setFixedHeight(32);
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->hide();
     connect(m_backBtn, &QToolButton::clicked, this, [this] { showPage(PageHome); });
@@ -659,7 +669,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_powerPill = new QToolButton(header);
     m_powerPill->setObjectName(QStringLiteral("powerPill"));
     m_powerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    m_powerPill->setFixedHeight(34);
+    m_powerPill->setFixedHeight(32);
     m_powerPill->setText(QStringLiteral("平衡"));
     m_powerPill->setToolTip(QStringLiteral("点击切换功耗模式（节能 / 平衡 / 性能）"));
     m_powerPill->setCursor(Qt::PointingHandCursor);
@@ -675,13 +685,18 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     auto makeHdrBtn = [&](const QString &objName, FloatingIcons::Icon icon, const QColor &ink, const QString &tip) {
         auto *b = new QToolButton(header);
         b->setObjectName(objName);
-        b->setIcon(FloatingIcons::make(icon, ink, 16));
-        b->setIconSize(QSize(16, 16));
+        b->setIcon(FloatingIcons::make(icon, ink, 15));
+        b->setIconSize(QSize(15, 15));
         b->setToolTip(tip);
-        b->setFixedSize(34, 34);
+        b->setFixedSize(31, 31);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
+
+    m_hdrNotifBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Bell, QColor("#e2e8f0"),
+                               QStringLiteral("通知中心"));
+    connect(m_hdrNotifBtn, &QToolButton::clicked, this, [this] { showPage(PageNotifications); });
+    hdrRow->addWidget(m_hdrNotifBtn);
 
     m_hdrSettingsBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Settings, QColor("#e2e8f0"),
                                   QStringLiteral("系统设置"));
@@ -711,7 +726,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_refreshBtn->setObjectName(QStringLiteral("hdrIconBtn"));
     m_refreshBtn->setText(QStringLiteral("↻"));
     m_refreshBtn->setToolTip(QStringLiteral("刷新实时状态"));
-    m_refreshBtn->setFixedSize(34, 34);
+    m_refreshBtn->setFixedSize(31, 31);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QToolButton::clicked, this, [this] {
         if (m_currentPage == PageWifi) refreshWifi(true);
@@ -733,7 +748,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 
     loadHotspotPrefs();
 
-    // ---- Stacked Pages (0 = Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo, 5 = 4G) ----
+    // ---- Stacked Pages (0 = Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo, 5 = 4G, 6 = Notifications) ----
     m_stack = new QStackedWidget(card);
     m_stack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_stack->addWidget(buildHomePage(m_stack));
@@ -742,6 +757,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_stack->addWidget(buildBluetoothPage(m_stack));
     m_stack->addWidget(buildMihomoPage(m_stack));
     m_stack->addWidget(buildCellularPage(m_stack));
+    m_stack->addWidget(buildNotificationsPage(m_stack));
     root->addWidget(m_stack, 1);
 
     // Live 1s net speed/traffic sampler (runs only when visible on Wi-Fi / 4G / Hotspot page)
@@ -752,6 +768,10 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     if (m_monitor) {
         connect(m_monitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &) {
             syncHomeFromSnapshot();
+        });
+        connect(m_monitor, &SystemStatusMonitor::notificationsChanged, this, [this] {
+            syncHomeFromSnapshot();
+            if (m_currentPage == PageNotifications) rebuildNotificationsView();
         });
     }
 
@@ -1016,6 +1036,43 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
 
     upper->addLayout(rightCol, 122);
     v->addLayout(upper);
+
+    // ---- Auto-Hiding Unread Notification Banner (replaces system notification bar) ----
+    m_notifHomeCard = new QPushButton(page);
+    m_notifHomeCard->setObjectName(QStringLiteral("notifBanner"));
+    m_notifHomeCard->setCursor(Qt::PointingHandCursor);
+    m_notifHomeCard->setMinimumHeight(46);
+    auto *nRow = new QHBoxLayout(m_notifHomeCard);
+    nRow->setContentsMargins(9, 6, 9, 6);
+    nRow->setSpacing(8);
+
+    m_notifHomeIcon = new QLabel(m_notifHomeCard);
+    m_notifHomeIcon->setFixedSize(28, 28);
+    m_notifHomeIcon->setAlignment(Qt::AlignCenter);
+    m_notifHomeIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    nRow->addWidget(m_notifHomeIcon);
+
+    auto *nText = new QVBoxLayout();
+    nText->setContentsMargins(0, 0, 0, 0);
+    nText->setSpacing(1);
+    m_notifHomeTitle = new QLabel(m_notifHomeCard);
+    m_notifHomeTitle->setObjectName(QStringLiteral("rowTitle"));
+    m_notifHomeTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_notifHomeSub = new QLabel(m_notifHomeCard);
+    m_notifHomeSub->setObjectName(QStringLiteral("rowSub"));
+    m_notifHomeSub->setAttribute(Qt::WA_TransparentForMouseEvents);
+    nText->addWidget(m_notifHomeTitle);
+    nText->addWidget(m_notifHomeSub);
+    nRow->addLayout(nText, 1);
+
+    auto *nChev = new QLabel(m_notifHomeCard);
+    nChev->setPixmap(FloatingIcons::make(FloatingIcons::ChevronRight, QColor("#fda4af"), 14).pixmap(14, 14));
+    nChev->setAttribute(Qt::WA_TransparentForMouseEvents);
+    nRow->addWidget(nChev);
+
+    connect(m_notifHomeCard, &QPushButton::clicked, this, [this] { showPage(PageNotifications); });
+    m_notifHomeCard->hide();
+    v->addWidget(m_notifHomeCard);
 
     // ---- MPRIS Now Playing Card (Auto-Hidden When Nothing Playing) ----
     m_mprisCard = new QWidget(page);
@@ -1405,6 +1462,192 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
     return page;
 }
 
+QWidget *SystemPopover::buildNotificationsPage(QWidget *parent)
+{
+    auto *page = new QWidget(parent);
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(8);
+
+    auto *bar = new QWidget(page);
+    bar->setObjectName(QStringLiteral("bentoGroup"));
+    auto *bl = new QHBoxLayout(bar);
+    bl->setContentsMargins(10, 6, 8, 6);
+    bl->setSpacing(6);
+
+    m_notifCountLbl = new QLabel(QStringLiteral("暂无通知"), bar);
+    m_notifCountLbl->setObjectName(QStringLiteral("ccMeta"));
+    bl->addWidget(m_notifCountLbl, 1);
+
+    m_notifMarkAllBtn = new QToolButton(bar);
+    m_notifMarkAllBtn->setObjectName(QStringLiteral("tabBtn"));
+    m_notifMarkAllBtn->setText(QStringLiteral("全部已读"));
+    m_notifMarkAllBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_notifMarkAllBtn, &QToolButton::clicked, this, [this] {
+        if (!m_monitor) return;
+        m_monitor->clearNotifications();
+        rebuildNotificationsView();
+    });
+    bl->addWidget(m_notifMarkAllBtn);
+
+    m_notifClearAllBtn = new QToolButton(bar);
+    m_notifClearAllBtn->setObjectName(QStringLiteral("tabBtn"));
+    m_notifClearAllBtn->setText(QStringLiteral("清空"));
+    m_notifClearAllBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_notifClearAllBtn, &QToolButton::clicked, this, [this] {
+        if (!m_monitor) return;
+        m_monitor->clearAllNotifications();
+        rebuildNotificationsView();
+    });
+    bl->addWidget(m_notifClearAllBtn);
+    v->addWidget(bar);
+
+    auto *scroll = makeTouchScrollArea(page, &m_notifListLayout);
+    if (auto *ts = TouchScrollController::install(scroll)) {
+        ts->onHorizontalSwipe = [this](int d) { if (d < 0) showPage(PageHome); };
+    }
+    v->addWidget(scroll, 1);
+    return page;
+}
+
+void SystemPopover::rebuildNotificationsView()
+{
+    if (!m_notifListLayout) return;
+    clearLayout(m_notifListLayout);
+    if (!m_monitor) return;
+
+    const QList<NotificationItem> items = m_monitor->notifications();
+    int unread = 0;
+    for (const NotificationItem &n : items) {
+        if (n.unread) ++unread;
+    }
+
+    if (m_notifCountLbl) {
+        if (items.isEmpty()) {
+            m_notifCountLbl->setText(m_monitor->snapshot().dndEnabled
+                                         ? QStringLiteral("勿扰已开启 · 暂无通知")
+                                         : QStringLiteral("暂无通知"));
+        } else if (unread > 0) {
+            m_notifCountLbl->setText(QStringLiteral("%1 条通知 · %2 条未读").arg(items.size()).arg(unread));
+        } else {
+            m_notifCountLbl->setText(QStringLiteral("%1 条历史通知 · 全部已读").arg(items.size()));
+        }
+    }
+    if (m_notifMarkAllBtn) m_notifMarkAllBtn->setVisible(unread > 0);
+    if (m_notifClearAllBtn) m_notifClearAllBtn->setVisible(!items.isEmpty());
+
+    if (items.isEmpty()) {
+        auto *empty = new QLabel(QStringLiteral("所有消息均已处理完毕\n新通知会自动显示在主球与此处"),
+                                 m_notifListLayout->parentWidget());
+        empty->setObjectName(QStringLiteral("ccSub"));
+        empty->setAlignment(Qt::AlignCenter);
+        empty->setWordWrap(true);
+        empty->setMinimumHeight(140);
+        m_notifListLayout->addWidget(empty);
+        m_notifListLayout->addStretch(1);
+        return;
+    }
+
+    const QDateTime now = QDateTime::currentDateTime();
+    auto formatAge = [&now](const QDateTime &ts) -> QString {
+        if (!ts.isValid()) return QString();
+        const qint64 secs = ts.secsTo(now);
+        if (secs < 45) return QStringLiteral("刚刚");
+        if (secs < 3600) return QStringLiteral("%1分钟前").arg(qMax<qint64>(1, secs / 60));
+        return ts.toString(QStringLiteral("HH:mm"));
+    };
+
+    for (const NotificationItem &item : items) {
+        auto *rowWrap = new QWidget(m_notifListLayout->parentWidget());
+        auto *outerRow = new QHBoxLayout(rowWrap);
+        outerRow->setContentsMargins(0, 0, 0, 0);
+        outerRow->setSpacing(5);
+
+        auto *cardBtn = new QPushButton(rowWrap);
+        cardBtn->setObjectName(QStringLiteral("notifCardBtn"));
+        cardBtn->setProperty("unread", item.unread ? QStringLiteral("true") : QStringLiteral("false"));
+        cardBtn->setCursor(Qt::PointingHandCursor);
+        cardBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+
+        auto *cl = new QHBoxLayout(cardBtn);
+        cl->setContentsMargins(9, 8, 9, 8);
+        cl->setSpacing(8);
+
+        auto *icoLbl = new QLabel(cardBtn);
+        icoLbl->setFixedSize(28, 28);
+        icoLbl->setAlignment(Qt::AlignCenter);
+        icoLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        const QIcon ico = item.icon.isNull()
+            ? FloatingIcons::make(FloatingIcons::Bell, QColor("#fda4af"), 22)
+            : item.icon;
+        icoLbl->setPixmap(ico.pixmap(26, 26));
+        cl->addWidget(icoLbl, 0, Qt::AlignTop);
+
+        auto *textCol = new QVBoxLayout();
+        textCol->setContentsMargins(0, 0, 0, 0);
+        textCol->setSpacing(2);
+
+        auto *metaRow = new QHBoxLayout();
+        metaRow->setContentsMargins(0, 0, 0, 0);
+        metaRow->setSpacing(4);
+        auto *appLbl = new QLabel(
+            (item.unread ? QStringLiteral("● ") : QString()) + elideText(item.displayAppName(), 16),
+            cardBtn);
+        appLbl->setStyleSheet(item.unread
+            ? QStringLiteral("color:#ff8fa3; font-size:11.5px; font-weight:700;")
+            : QStringLiteral("color:#cbd5e1; font-size:11.5px; font-weight:600;"));
+        appLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        metaRow->addWidget(appLbl, 1);
+
+        auto *timeLbl = new QLabel(formatAge(item.timestamp), cardBtn);
+        timeLbl->setObjectName(QStringLiteral("ccSub"));
+        timeLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        metaRow->addWidget(timeLbl);
+        textCol->addLayout(metaRow);
+
+        const QString titleStr = !item.summary.isEmpty() ? item.summary : item.body;
+        if (!titleStr.isEmpty()) {
+            auto *sumLbl = new QLabel(elideText(titleStr, 36), cardBtn);
+            sumLbl->setObjectName(QStringLiteral("rowTitle"));
+            sumLbl->setWordWrap(true);
+            sumLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+            textCol->addWidget(sumLbl);
+        }
+        if (!item.body.isEmpty() && item.body != item.summary) {
+            auto *bodyLbl = new QLabel(elideText(item.body, 74), cardBtn);
+            bodyLbl->setObjectName(QStringLiteral("rowSub"));
+            bodyLbl->setWordWrap(true);
+            bodyLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+            textCol->addWidget(bodyLbl);
+        }
+        cl->addLayout(textCol, 1);
+
+        connect(cardBtn, &QPushButton::clicked, this, [this, item] {
+            if (m_monitor) m_monitor->markNotificationRead(item.seqId);
+            hide();
+            emit notificationActivated(item);
+        });
+        outerRow->addWidget(cardBtn, 1);
+
+        auto *dismissBtn = new QToolButton(rowWrap);
+        dismissBtn->setObjectName(QStringLiteral("notifDismissBtn"));
+        dismissBtn->setIcon(FloatingIcons::make(FloatingIcons::Close, QColor("#cbd5e1"), 12));
+        dismissBtn->setIconSize(QSize(12, 12));
+        dismissBtn->setFixedSize(26, 26);
+        dismissBtn->setCursor(Qt::PointingHandCursor);
+        dismissBtn->setToolTip(QStringLiteral("清除此通知"));
+        connect(dismissBtn, &QToolButton::clicked, this, [this, seqId = item.seqId] {
+            if (m_monitor) m_monitor->dismissNotification(seqId);
+            rebuildNotificationsView();
+        });
+        outerRow->addWidget(dismissBtn, 0, Qt::AlignVCenter);
+
+        attachTouchScroll(m_notifListLayout, cardBtn);
+        m_notifListLayout->addWidget(rowWrap);
+    }
+    m_notifListLayout->addStretch(1);
+}
+
 // ============================================================================
 // Lifecycle, Reveal, Positioning & Click-Outside Auto-Dismiss
 // ============================================================================
@@ -1487,7 +1730,7 @@ void SystemPopover::revealHome(const QPoint &anchorGlobal, bool toggle)
 
 void SystemPopover::revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle)
 {
-    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), 5));
+    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), static_cast<int>(PageNotifications)));
     if (isVisible() && toggle && m_currentPage == target) {
         hide();
         return;
@@ -1515,7 +1758,8 @@ void SystemPopover::showPage(Page page)
     refreshCurrentPage();
 #ifdef Q_OS_MACOS
     if (page == PageHome) {
-        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
+        const bool hasBanner = m_notifHomeCard && m_notifHomeCard->isVisible();
+        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0) + (hasBanner ? 54 : 0));
     } else {
         setFixedHeight(436);
     }
@@ -1528,6 +1772,7 @@ void SystemPopover::syncHeaderForPage()
     m_backBtn->setVisible(!isHome);
     m_titleLbl->setVisible(!isHome);
     if (m_powerPill) m_powerPill->setVisible(isHome);
+    if (m_hdrNotifBtn) m_hdrNotifBtn->setVisible(isHome);
     if (m_hdrSettingsBtn) m_hdrSettingsBtn->setVisible(isHome);
     if (m_hdrLockBtn) m_hdrLockBtn->setVisible(isHome);
     if (m_hdrPowerBtn) m_hdrPowerBtn->setVisible(isHome);
@@ -1536,6 +1781,7 @@ void SystemPopover::syncHeaderForPage()
     else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
     else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙"));
     else if (m_currentPage == PageMihomo) m_titleLbl->setText(QStringLiteral("Mihomo"));
+    else if (m_currentPage == PageNotifications) m_titleLbl->setText(QStringLiteral("通知中心"));
 }
 
 void SystemPopover::refreshCurrentPage()
@@ -1558,6 +1804,8 @@ void SystemPopover::refreshCurrentPage()
         refreshHotspot();
     } else if (m_currentPage == PageBluetooth) {
         refreshBluetooth();
+    } else if (m_currentPage == PageNotifications) {
+        rebuildNotificationsView();
     } else {
         refreshMihomo();
     }
@@ -1761,6 +2009,45 @@ void SystemPopover::syncHomeFromSnapshot()
                      st.dndEnabled ? QColor("#8b5cf6") : QColor(255, 255, 255, 28),
                      st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 28);
     m_dndSub->setText(st.dndEnabled ? QStringLiteral("已开启") : QStringLiteral("已关闭"));
+
+    // Header Bell Button + Auto-Hiding Unread Notification Banner
+    const QList<NotificationItem> unreadList = m_monitor->unreadNotifications();
+    const int unreadCount = qMax(unreadList.size(), st.unreadNotifications);
+    if (m_hdrNotifBtn) {
+        m_hdrNotifBtn->setProperty("unread", unreadCount > 0 ? QStringLiteral("true") : QStringLiteral("false"));
+        m_hdrNotifBtn->setIcon(FloatingIcons::make(
+            FloatingIcons::Bell, unreadCount > 0 ? QColor("#ff6b8a") : QColor("#e2e8f0"), 15));
+        m_hdrNotifBtn->setToolTip(unreadCount > 0
+            ? QStringLiteral("通知中心 · %1 条未读消息").arg(unreadCount)
+            : QStringLiteral("通知中心"));
+        repolish(m_hdrNotifBtn);
+    }
+    if (m_notifHomeCard) {
+        if (unreadCount > 0) {
+            if (!unreadList.isEmpty()) {
+                const NotificationItem &latest = unreadList.first();
+                const QIcon ico = latest.icon.isNull()
+                    ? FloatingIcons::make(FloatingIcons::Bell, QColor("#ff6b8a"), 22)
+                    : latest.icon;
+                m_notifHomeIcon->setPixmap(ico.pixmap(26, 26));
+                const QString preview = latest.previewText();
+                m_notifHomeTitle->setText(elideText(
+                    preview.isEmpty() ? latest.displayAppName()
+                                      : QStringLiteral("%1 · %2").arg(latest.displayAppName(), preview),
+                    24));
+            } else {
+                m_notifHomeIcon->setPixmap(
+                    FloatingIcons::make(FloatingIcons::Bell, QColor("#ff6b8a"), 22).pixmap(22, 22));
+                m_notifHomeTitle->setText(elideText(
+                    st.lastNotificationSummary.isEmpty() ? QStringLiteral("收到新通知") : st.lastNotificationSummary,
+                    24));
+            }
+            m_notifHomeSub->setText(QStringLiteral("%1 条未读消息 · 点按查看全部").arg(unreadCount));
+            m_notifHomeCard->show();
+        } else {
+            m_notifHomeCard->hide();
+        }
+    }
 }
 
 // ============================================================================

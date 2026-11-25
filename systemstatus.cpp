@@ -1,5 +1,6 @@
 #include "systemstatus.h"
 #include "desktopactions.h"
+#include "floatingwindow.h"
 #include "uiicons.h"
 
 #include <QAction>
@@ -451,11 +452,525 @@ void SystemStatusMonitor::stopPlatformWatchers()
 
 void SystemStatusMonitor::clearNotifications()
 {
+    bool listChanged = false;
+    for (NotificationItem &n : m_notifications) {
+        if (n.unread) {
+            n.unread = false;
+            listChanged = true;
+        }
+    }
+    if (listChanged) emit notificationsChanged();
     if (m_snapshot.unreadNotifications == 0 && m_snapshot.lastNotificationSummary.isEmpty()) return;
     SystemStatusSnapshot next = m_snapshot;
     next.unreadNotifications = 0;
     next.lastNotificationSummary.clear();
     emitIfChanged(next);
+}
+
+void SystemStatusMonitor::clearAllNotifications()
+{
+    const bool hadItems = !m_notifications.isEmpty();
+    m_notifications.clear();
+    if (hadItems) emit notificationsChanged();
+    if (m_snapshot.unreadNotifications == 0 && m_snapshot.lastNotificationSummary.isEmpty()) return;
+    SystemStatusSnapshot next = m_snapshot;
+    next.unreadNotifications = 0;
+    next.lastNotificationSummary.clear();
+    emitIfChanged(next);
+}
+
+namespace {
+QString cleanNotificationText(QString s)
+{
+    if (s.isEmpty()) return s;
+    static const QRegularExpression kBrRe(QStringLiteral("<\\s*br\\s*/?\\s*>"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kTagRe(QStringLiteral("<[^>]+>"));
+    s.replace(kBrRe, QStringLiteral(" "));
+    s.remove(kTagRe);
+    s.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+    s.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+    s.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+    s.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+    s.replace(QStringLiteral("&#39;"), QStringLiteral("'"));
+    s.replace(QStringLiteral("&apos;"), QStringLiteral("'"));
+    s.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    s.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    static const QRegularExpression kWsRe(QStringLiteral("\\s{2,}"));
+    s.replace(kWsRe, QStringLiteral(" "));
+    return s.trimmed();
+}
+
+QStringList extractAppMatchTokens(const QString &raw)
+{
+    QString s = raw.trimmed().toLower();
+    if (s.endsWith(QLatin1String(".desktop"))) s.chop(8);
+    if (s.isEmpty()) return {};
+
+    static const QSet<QString> kStopWords{
+        QStringLiteral("org"), QStringLiteral("com"), QStringLiteral("net"),
+        QStringLiteral("io"), QStringLiteral("dev"), QStringLiteral("kde"),
+        QStringLiteral("freedesktop"), QStringLiteral("github"), QStringLiteral("desktop"),
+        QStringLiteral("app"), QStringLiteral("application"), QStringLiteral("client"),
+        QStringLiteral("window"), QStringLiteral("bin"), QStringLiteral("gui"),
+        QStringLiteral("linux"), QStringLiteral("hub")
+    };
+
+    QStringList out;
+    auto addTok = [&](const QString &t) {
+        const QString c = t.trimmed();
+        if (c.size() >= 2 && !kStopWords.contains(c) && !out.contains(c))
+            out.append(c);
+    };
+
+    addTok(s);
+    QString compact = s;
+    compact.remove(QLatin1Char(' '));
+    compact.remove(QLatin1Char('-'));
+    compact.remove(QLatin1Char('_'));
+    compact.remove(QLatin1Char('.'));
+    addTok(compact);
+
+    const QStringList dotParts = s.split(QLatin1Char('.'), Qt::SkipEmptyParts);
+    if (dotParts.size() > 1) {
+        for (const QString &p : dotParts) addTok(p);
+        // Also combine last two meaningful parts (e.g. org.telegram.desktop -> telegram)
+        QStringList kept;
+        for (const QString &p : dotParts) {
+            if (!kStopWords.contains(p)) kept.append(p);
+        }
+        if (!kept.isEmpty()) addTok(kept.join(QString()));
+    }
+    const QStringList spaceParts = s.split(QRegularExpression(QStringLiteral("[\\s\\-_]+")), Qt::SkipEmptyParts);
+    if (spaceParts.size() > 1) {
+        for (const QString &p : spaceParts) {
+            if (p.size() >= 3) addTok(p);
+        }
+    }
+    return out;
+}
+
+QIcon lookupDesktopIconByIdOrName(const QString &desktopEntry, const QString &appName)
+{
+#ifdef Q_OS_LINUX
+    auto tryIconName = [](const QString &iconName) -> QIcon {
+        if (iconName.isEmpty()) return {};
+        if (QFileInfo::exists(iconName)) {
+            QIcon ico(iconName);
+            if (!ico.isNull()) return ico;
+        }
+        QIcon themed = QIcon::fromTheme(iconName);
+        if (!themed.isNull()) return themed;
+        const QString user = qEnvironmentVariable("USER");
+        const QStringList roots{
+            QDir::homePath() + QStringLiteral("/.local/share/icons"),
+            QDir::homePath() + QStringLiteral("/.local/share/flatpak/exports/share/icons"),
+            QStringLiteral("/var/lib/flatpak/exports/share/icons"),
+            QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/icons"),
+            QStringLiteral("/run/current-system/sw/share/icons"),
+            QStringLiteral("/run/current-system/sw/share/pixmaps"),
+            QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/pixmaps")
+        };
+        static const QStringList subs{
+            QStringLiteral(""),
+            QStringLiteral("/hicolor/scalable/apps"),
+            QStringLiteral("/hicolor/256x256/apps"),
+            QStringLiteral("/hicolor/128x128/apps"),
+            QStringLiteral("/hicolor/64x64/apps"),
+            QStringLiteral("/hicolor/48x48/apps"),
+            QStringLiteral("/hicolor/512x512/apps"),
+            QStringLiteral("/breeze-dark/apps/64"),
+            QStringLiteral("/breeze-dark/apps/48"),
+            QStringLiteral("/breeze/apps/64"),
+            QStringLiteral("/breeze/apps/48")
+        };
+        static const QStringList exts{QStringLiteral(".svg"), QStringLiteral(".png"), QStringLiteral(".xpm")};
+        for (const QString &r : roots) {
+            if (!QDir(r).exists()) continue;
+            for (const QString &sub : subs) {
+                for (const QString &ext : exts) {
+                    const QString p = r + sub + QLatin1Char('/') + iconName + ext;
+                    if (QFileInfo::exists(p)) {
+                        QIcon ico(p);
+                        if (!ico.isNull()) return ico;
+                    }
+                }
+            }
+        }
+        return {};
+    };
+
+    // Try raw desktopEntry first (handles reverse-DNS IDs like "org.telegram.desktop"!),
+    // then fall back to stripping a trailing ".desktop" file suffix if present.
+    QStringList deCandidates;
+    const QString rawDe = desktopEntry.trimmed();
+    if (!rawDe.isEmpty()) {
+        deCandidates.append(rawDe);
+        if (rawDe.endsWith(QLatin1String(".desktop"), Qt::CaseInsensitive) && rawDe.size() > 8) {
+            deCandidates.append(rawDe.left(rawDe.size() - 8));
+        }
+    }
+    for (const QString &de : deCandidates) {
+        QIcon direct = tryIconName(de);
+        if (!direct.isNull()) return direct;
+    }
+
+    const QString user = qEnvironmentVariable("USER");
+    const QStringList appDirs{
+        QDir::homePath() + QStringLiteral("/.local/share/applications"),
+        QDir::homePath() + QStringLiteral("/.local/share/flatpak/exports/share/applications"),
+        QStringLiteral("/var/lib/flatpak/exports/share/applications"),
+        QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/applications"),
+        QStringLiteral("/run/current-system/sw/share/applications"),
+        QStringLiteral("/usr/share/applications")
+    };
+
+    auto readIconFromDesktopFile = [&](const QString &filePath) -> QIcon {
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
+        bool inEntry = false;
+        while (!f.atEnd()) {
+            const QString line = QString::fromUtf8(f.readLine()).trimmed();
+            if (line.startsWith(QLatin1Char('['))) {
+                if (inEntry) break;
+                inEntry = (line == QLatin1String("[Desktop Entry]"));
+                continue;
+            }
+            if (!inEntry) continue;
+            if (line.startsWith(QLatin1String("Icon="))) {
+                return tryIconName(line.mid(5).trimmed());
+            }
+        }
+        return {};
+    };
+
+    for (const QString &de : deCandidates) {
+        for (const QString &dir : appDirs) {
+            const QString cand = dir + QLatin1Char('/') + de + QStringLiteral(".desktop");
+            if (QFileInfo::exists(cand)) {
+                QIcon ico = readIconFromDesktopFile(cand);
+                if (!ico.isNull()) return ico;
+            }
+        }
+    }
+    const QString lowerApp = appName.trimmed().toLower();
+    if (!lowerApp.isEmpty()) {
+        QIcon direct = tryIconName(lowerApp);
+        if (!direct.isNull()) return direct;
+        for (const QString &dir : appDirs) {
+            QDir d(dir);
+            if (!d.exists()) continue;
+            for (const QFileInfo &fi : d.entryInfoList({QStringLiteral("*.desktop")}, QDir::Files)) {
+                const QString base = fi.completeBaseName().toLower();
+                if (base == lowerApp || base.endsWith(QLatin1Char('.') + lowerApp)) {
+                    QIcon ico = readIconFromDesktopFile(fi.absoluteFilePath());
+                    if (!ico.isNull()) return ico;
+                }
+            }
+        }
+    }
+#else
+    Q_UNUSED(desktopEntry); Q_UNUSED(appName);
+#endif
+    return {};
+}
+} // namespace
+
+bool SystemStatusMonitor::notificationMatchesApp(const NotificationItem &item,
+                                                 const QString &appKey,
+                                                 const QString &appName,
+                                                 const QString &desktopEntry)
+{
+    QStringList itemTokens = extractAppMatchTokens(item.desktopEntry);
+    itemTokens.append(extractAppMatchTokens(item.appName));
+    itemTokens.append(extractAppMatchTokens(item.appIconName));
+    if (itemTokens.isEmpty()) return false;
+
+    QStringList targetTokens = extractAppMatchTokens(appKey);
+    targetTokens.append(extractAppMatchTokens(desktopEntry));
+    targetTokens.append(extractAppMatchTokens(appName));
+    if (targetTokens.isEmpty()) return false;
+
+    for (const QString &a : itemTokens) {
+        for (const QString &b : targetTokens) {
+            if (a == b) return true;
+            if (a.size() >= 4 && b.size() >= 4) {
+                if (a.startsWith(b) || b.startsWith(a)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool SystemStatusMonitor::parseDbusMonitorNotifyBlock(const QString &block,
+                                                      NotificationItem *out,
+                                                      bool *isTransientOut)
+{
+    if (isTransientOut) *isTransientOut = false;
+    if (!out || !block.contains(QStringLiteral("member=Notify"))) return false;
+
+    const int headerEnd = block.indexOf(QLatin1Char('\n'));
+    if (headerEnd < 0) return false;
+    const QString args = block.mid(headerEnd + 1);
+
+    // dbus-monitor formats Notify(s app_name, u replaces_id, s app_icon, s summary, s body, as actions, a{sv} hints, i timeout)
+    // with 3-space top-level indentation. Parse using structural anchors so multi-line bodies and quotes never truncate!
+    int pos = 0;
+    auto readTopStringUntil = [&](const QString &nextMarker, QString *dest) -> bool {
+        const int startMark = args.indexOf(QStringLiteral("   string \""), pos);
+        if (startMark < 0) return false;
+        const int contentStart = startMark + 11;
+        const int nextPos = args.indexOf(nextMarker, contentStart);
+        if (nextPos < 0) return false;
+        int endQuote = nextPos;
+        while (endQuote > contentStart && args.at(endQuote - 1) != QLatin1Char('"')) {
+            --endQuote;
+        }
+        if (endQuote <= contentStart) {
+            *dest = QString();
+        } else {
+            *dest = args.mid(contentStart, endQuote - 1 - contentStart);
+        }
+        pos = nextPos + 1; // point at leading spaces of nextMarker (skipping '\n')
+        return true;
+    };
+
+    QString appName, appIcon, summary, body;
+    quint32 replacesId = 0;
+
+    if (!readTopStringUntil(QStringLiteral("\n   uint32 "), &appName)) {
+        // Fallback for compact single-line test blocks
+        QRegularExpression strRe(QStringLiteral("string \"([^\"]{0,128})\""));
+        auto it = strRe.globalMatch(args);
+        if (it.hasNext()) appName = it.next().captured(1);
+        if (it.hasNext()) appIcon = it.next().captured(1);
+        if (it.hasNext()) summary = it.next().captured(1);
+        if (it.hasNext()) body = it.next().captured(1);
+    } else {
+        // Read uint32 replaces_id
+        const int uStart = args.indexOf(QStringLiteral("   uint32 "), pos);
+        if (uStart >= 0) {
+            const int uEnd = args.indexOf(QLatin1Char('\n'), uStart);
+            const QString uStr = (uEnd > uStart)
+                ? args.mid(uStart + 10, uEnd - (uStart + 10)).trimmed()
+                : args.mid(uStart + 10).trimmed();
+            replacesId = uStr.toUInt();
+            pos = (uEnd > 0) ? (uEnd + 1) : args.size();
+        }
+        readTopStringUntil(QStringLiteral("\n   string \""), &appIcon);
+        readTopStringUntil(QStringLiteral("\n   string \""), &summary);
+        readTopStringUntil(QStringLiteral("\n   array ["), &body);
+    }
+
+    QString desktopEntry;
+    QRegularExpression deRe(QStringLiteral("string \"desktop-entry\"\\s+variant\\s+string \"([^\"]{1,128})\""));
+    if (const auto m = deRe.match(args); m.hasMatch()) desktopEntry = m.captured(1);
+
+    QString imagePath;
+    QRegularExpression imgRe(QStringLiteral("string \"(?:image-path|image_path)\"\\s+variant\\s+string \"([^\"]{1,256})\""));
+    if (const auto m = imgRe.match(args); m.hasMatch()) imagePath = m.captured(1);
+
+    bool isTransient = false;
+    QRegularExpression trRe(QStringLiteral("string \"transient\"\\s+variant\\s+boolean\\s+true"));
+    if (trRe.match(args).hasMatch()) isTransient = true;
+    if (args.contains(QStringLiteral("string \"x-canonical-private-synchronous\"")) ||
+        args.contains(QStringLiteral("string \"synchronous\""))) {
+        isTransient = true;
+    }
+
+    int urgency = 1;
+    QRegularExpression urgRe(QStringLiteral("string \"urgency\"\\s+variant\\s+byte\\s+(\\d+)"));
+    if (const auto m = urgRe.match(args); m.hasMatch()) urgency = m.captured(1).toInt();
+
+    const QString cleanApp = appName.trimmed();
+    const QString cleanDe = desktopEntry.trimmed();
+    const QString cleanSummary = cleanNotificationText(summary);
+    const QString cleanBody = cleanNotificationText(body);
+
+    // Filter pure OSD/system noise (volume, brightness, floatingball self-notifications, empty payloads)
+    const QString lowerApp = cleanApp.toLower();
+    const QString lowerDe = cleanDe.toLower();
+    if (lowerApp == QLatin1String("floatingball") || lowerDe == QLatin1String("floatingball") ||
+        lowerDe == QLatin1String("org.kde.plasma.volume") ||
+        lowerDe == QLatin1String("org.kde.plasma.brightness") ||
+        (urgency == 0 && (lowerDe.contains(QLatin1String("powerdevil")) || lowerApp.contains(QLatin1String("powerdevil"))))) {
+        isTransient = true;
+    }
+    if (cleanSummary.isEmpty() && cleanBody.isEmpty()) {
+        isTransient = true;
+    }
+
+    if (isTransientOut) *isTransientOut = isTransient;
+
+    NotificationItem item;
+    item.replacesId = replacesId;
+    item.appName = cleanApp;
+    item.desktopEntry = cleanDe;
+    item.appIconName = !appIcon.trimmed().isEmpty() ? appIcon.trimmed() : imagePath.trimmed();
+    item.summary = cleanSummary;
+    item.body = cleanBody;
+    item.timestamp = QDateTime::currentDateTime();
+    item.unread = true;
+    *out = item;
+    return true;
+}
+
+QList<NotificationItem> SystemStatusMonitor::unreadNotifications() const
+{
+    QList<NotificationItem> out;
+    for (const NotificationItem &n : m_notifications) {
+        if (n.unread) out.append(n);
+    }
+    return out;
+}
+
+QList<NotificationItem> SystemStatusMonitor::unreadNotificationsForApp(const QString &appKey,
+                                                                       const QString &appName,
+                                                                       const QString &desktopEntry) const
+{
+    QList<NotificationItem> out;
+    for (const NotificationItem &n : m_notifications) {
+        if (n.unread && notificationMatchesApp(n, appKey, appName, desktopEntry)) {
+            out.append(n);
+        }
+    }
+    return out;
+}
+
+void SystemStatusMonitor::syncNotificationSnapshot()
+{
+    int unreadCount = 0;
+    QString latestSummary;
+    for (const NotificationItem &n : m_notifications) {
+        if (!n.unread) continue;
+        ++unreadCount;
+        if (latestSummary.isEmpty()) {
+            const QString app = n.displayAppName();
+            const QString prev = n.previewText();
+            latestSummary = prev.isEmpty()
+                ? QStringLiteral("%1 发来新通知").arg(app)
+                : QStringLiteral("%1：%2").arg(app, prev.left(64));
+        }
+    }
+    SystemStatusSnapshot next = m_snapshot;
+    next.unreadNotifications = qMin(99, unreadCount);
+    next.lastNotificationSummary = latestSummary;
+    emitIfChanged(next);
+}
+
+void SystemStatusMonitor::pushNotification(NotificationItem item)
+{
+    if (!item.timestamp.isValid()) item.timestamp = QDateTime::currentDateTime();
+    if (item.icon.isNull()) {
+        QIcon resolved;
+        if (!item.appIconName.isEmpty()) {
+#ifdef Q_OS_LINUX
+            resolved = lookupDesktopIconByIdOrName(item.appIconName, QString());
+#endif
+        }
+        if (resolved.isNull()) {
+            resolved = lookupDesktopIconByIdOrName(item.desktopEntry, item.appName);
+        }
+        if (resolved.isNull()) {
+            // Also check live tray items for a matching icon
+            for (const TrayItemInfo &ti : m_trayItems) {
+                if (notificationMatchesApp(item, ti.id, ti.title) && !ti.icon.isNull()) {
+                    resolved = ti.icon;
+                    break;
+                }
+            }
+        }
+        if (resolved.isNull()) {
+            resolved = FloatingIcons::make(FloatingIcons::Bell, QColor("#fda4af"), 28);
+        }
+        item.icon = resolved;
+    }
+
+    // Deduplicate in-place on replacesId or rapid identical bursts (within 3s)
+    int existingIdx = -1;
+    for (int i = 0; i < m_notifications.size(); ++i) {
+        const NotificationItem &cur = m_notifications[i];
+        if (item.replacesId != 0 && cur.replacesId == item.replacesId &&
+            cur.displayAppName().compare(item.displayAppName(), Qt::CaseInsensitive) == 0) {
+            existingIdx = i;
+            break;
+        }
+        if (cur.displayAppName().compare(item.displayAppName(), Qt::CaseInsensitive) == 0 &&
+            cur.summary == item.summary && cur.body == item.body &&
+            qAbs(cur.timestamp.secsTo(item.timestamp)) <= 3) {
+            existingIdx = i;
+            break;
+        }
+    }
+
+    if (existingIdx >= 0) {
+        item.seqId = m_notifications[existingIdx].seqId;
+        m_notifications.removeAt(existingIdx);
+    } else {
+        item.seqId = m_nextNotifSeqId++;
+    }
+    m_notifications.prepend(item);
+    while (m_notifications.size() > 30) {
+        m_notifications.removeLast();
+    }
+
+    syncNotificationSnapshot();
+    emit notificationsChanged();
+    emit notificationReceived(item.displayAppName(), item.desktopEntry, m_snapshot.lastNotificationSummary);
+}
+
+void SystemStatusMonitor::markNotificationsReadForApp(const QString &appKey,
+                                                      const QString &appName,
+                                                      const QString &desktopEntry)
+{
+    bool changed = false;
+    for (NotificationItem &n : m_notifications) {
+        if (n.unread && notificationMatchesApp(n, appKey, appName, desktopEntry)) {
+            n.unread = false;
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    syncNotificationSnapshot();
+    emit notificationsChanged();
+}
+
+void SystemStatusMonitor::markNotificationRead(quint64 seqId)
+{
+    bool changed = false;
+    for (NotificationItem &n : m_notifications) {
+        if (n.seqId == seqId && n.unread) {
+            n.unread = false;
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) return;
+    syncNotificationSnapshot();
+    emit notificationsChanged();
+}
+
+void SystemStatusMonitor::dismissNotification(quint64 seqId)
+{
+    bool removed = false;
+    for (int i = 0; i < m_notifications.size(); ++i) {
+        if (m_notifications[i].seqId == seqId) {
+            m_notifications.removeAt(i);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) return;
+    syncNotificationSnapshot();
+    emit notificationsChanged();
+}
+
+void SystemStatusMonitor::processDbusNotifyBlock(const QString &block)
+{
+    NotificationItem item;
+    bool isTransient = false;
+    if (!parseDbusMonitorNotifyBlock(block, &item, &isTransient)) return;
+    if (isTransient) return;
+    pushNotification(item);
 }
 
 void SystemStatusMonitor::updateAudio(int percent, bool muted, bool available)
@@ -1225,27 +1740,49 @@ void SystemStatusMonitor::startNotificationMonitor()
     const QString dbusMonitor = QStandardPaths::findExecutable(QStringLiteral("dbus-monitor"));
     if (dbusMonitor.isEmpty()) return;
 
+    if (!m_notifFlushTimer) {
+        m_notifFlushTimer = new QTimer(this);
+        m_notifFlushTimer->setSingleShot(true);
+        m_notifFlushTimer->setInterval(45);
+        connect(m_notifFlushTimer, &QTimer::timeout, this, [this] {
+            if (!m_notifBuffer.isEmpty()) {
+                const QString pending = m_notifBuffer;
+                m_notifBuffer.clear();
+                processDbusNotifyBlock(pending);
+            }
+        });
+    }
+
+    m_notifBuffer.clear();
     m_notifMonitor = new SafeStatusProcess(this);
     connect(m_notifMonitor, &QProcess::readyReadStandardOutput, this, [this] {
-        const QString chunk = QString::fromUtf8(m_notifMonitor->readAllStandardOutput());
-        if (chunk.contains(QStringLiteral("member=Notify"))) {
-            SystemStatusSnapshot next = m_snapshot;
-            next.unreadNotifications = qMin(99, next.unreadNotifications + 1);
-            QRegularExpression strRe(QStringLiteral("string \"([^\"]{1,64})\""));
-            auto it = strRe.globalMatch(chunk);
-            QString appName;
-            if (it.hasNext()) appName = it.next().captured(1);
+        m_notifBuffer.append(QString::fromUtf8(m_notifMonitor->readAllStandardOutput()));
 
-            QString desktopEntry;
-            QRegularExpression deRe(QStringLiteral("string \"desktop-entry\"\\s+variant\\s+string \"([^\"]{1,64})\""));
-            const auto deMatch = deRe.match(chunk);
-            if (deMatch.hasMatch()) desktopEntry = deMatch.captured(1);
+        // Split complete D-Bus message blocks whenever a new top-level message header arrives
+        static const QRegularExpression kMsgStartRe(
+            QStringLiteral("(?m)^(method call|method return|signal|error) "));
+        int firstIdx = -1;
+        auto it = kMsgStartRe.globalMatch(m_notifBuffer);
+        QList<int> starts;
+        while (it.hasNext()) starts.append(it.next().capturedStart());
+        if (starts.size() >= 2) {
+            for (int i = 0; i + 1 < starts.size(); ++i) {
+                const QString block = m_notifBuffer.mid(starts[i], starts[i + 1] - starts[i]);
+                processDbusNotifyBlock(block);
+            }
+            m_notifBuffer = m_notifBuffer.mid(starts.last());
+        } else if (starts.size() == 1 && starts.first() > 0) {
+            m_notifBuffer = m_notifBuffer.mid(starts.first());
+        }
+        Q_UNUSED(firstIdx);
 
-            next.lastNotificationSummary = appName.isEmpty()
-                ? QStringLiteral("收到新通知 (%1)").arg(QTime::currentTime().toString(QStringLiteral("HH:mm")))
-                : QStringLiteral("%1 发来新通知").arg(appName);
-            emitIfChanged(next);
-            emit notificationReceived(appName, desktopEntry, next.lastNotificationSummary);
+        // Guard against unbounded buffer if malformed output ever appears
+        if (m_notifBuffer.size() > 65536) {
+            const QString pending = m_notifBuffer;
+            m_notifBuffer.clear();
+            processDbusNotifyBlock(pending);
+        } else if (!m_notifBuffer.isEmpty()) {
+            m_notifFlushTimer->start();
         }
     });
     m_notifMonitor->start(
@@ -1256,6 +1793,8 @@ void SystemStatusMonitor::startNotificationMonitor()
 
 void SystemStatusMonitor::stopNotificationMonitor()
 {
+    if (m_notifFlushTimer) m_notifFlushTimer->stop();
+    m_notifBuffer.clear();
     if (!m_notifMonitor) return;
     m_notifMonitor->kill();
     m_notifMonitor->waitForFinished(200);
@@ -1493,7 +2032,7 @@ void SystemStatusMonitor::openTrayItemMenu(const TrayItemInfo &item, const QPoin
             fallbackContextMenu();
             return;
         }
-        menu->popup(globalPos);
+        FloatingWindow::popupMenu(menu, globalPos);
     });
 #else
     Q_UNUSED(item); Q_UNUSED(globalPos); Q_UNUSED(menuParent);

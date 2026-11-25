@@ -62,6 +62,9 @@ public:
 
     DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry) const;
     DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry) const;
+    bool activateOrLaunchByHint(const QString &appName,
+                                const QString &desktopEntry,
+                                DesktopActions::Outcome *out = nullptr) const;
     DesktopActions::Outcome minimizeAllWindows() const;
     DesktopActions::Outcome launchFresh(const DockAppEntry &entry) const;
     DesktopActions::Outcome quitApp(const DockAppEntry &entry);
@@ -71,6 +74,7 @@ public:
 signals:
     void appsChanged();
     void activeFullscreenChanged(bool fullscreen);
+    void windowActivated(const QString &appKey, const QString &appName, const QString &desktopEntry);
 
 private:
     void loadPinned();
