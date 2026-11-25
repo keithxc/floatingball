@@ -799,6 +799,8 @@ int main(int argc, char **argv)
         check(ball.systemPopover() != nullptr && ball.systemPopover()->isVisible() &&
                   ball.systemPopover()->currentPage() == SystemPopover::PageHome,
               "sys_hub opens unified Control Center directly on Bento Home page");
+        check(ball.systemPopover()->grab().save(QString::fromLocal8Bit(argv[1]) + "/control-center-home-preview.png"),
+              "saved Obsidian Liquid Glass Control Center Home preview outside source");
         ball.systemPopover()->showPage(SystemPopover::PageHotspot);
         app.processEvents();
         check(ball.systemPopover()->currentPage() == SystemPopover::PageHotspot &&

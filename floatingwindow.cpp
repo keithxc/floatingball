@@ -11,6 +11,7 @@
 #include <QLinearGradient>
 #include <QMenu>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QPointer>
 #include <QRadialGradient>
@@ -596,48 +597,47 @@ void FloatingWindow::paintLiquidGlass(QPainter &p, const QRect &widgetRect, doub
         return;
     }
 
-    // 1. Borderless feathered outer ambient gradient (no hard outer stroke)
+    // 1. Tight, clean dark ambient drop-shadow (neutral obsidian, no hazy blue-gray halo)
     struct FeatherStep { qreal expand; int alpha; };
     static const FeatherStep kFeather[] = {
-        {10.0, 5}, {7.5, 10}, {5.0, 16}, {2.5, 24}
+        {5.0, 14}, {2.5, 28}
     };
     for (const FeatherStep &s : kFeather) {
         if (s.expand > inset + 0.5) continue;
-        p.setBrush(QColor(10, 16, 28, s.alpha));
-        p.drawRoundedRect(base.adjusted(-s.expand, -s.expand, s.expand, s.expand),
-                          radius + s.expand * 0.45, radius + s.expand * 0.45);
+        p.setBrush(QColor(0, 0, 0, s.alpha));
+        p.drawRoundedRect(base.adjusted(-s.expand, -s.expand + 1.0, s.expand, s.expand + 1.5),
+                          radius + s.expand * 0.4, radius + s.expand * 0.4);
     }
 
-    // 2. High-clarity translucent Liquid Glass body over compositor Gaussian blur
+    // 2. Neutral Obsidian Frosted Glass body over compositor Gaussian blur
+    //    (matches FloatingBall's carbon-obsidian sphere & dark KDE desktop with zero blue wash)
     QLinearGradient glass(base.topLeft(), base.bottomRight());
-    glass.setColorAt(0.0, QColor(52, 66, 98, 92));
-    glass.setColorAt(0.38, QColor(24, 32, 52, 96));
-    glass.setColorAt(1.0, QColor(14, 19, 34, 114));
+    glass.setColorAt(0.0, QColor(36, 39, 46, 186));
+    glass.setColorAt(0.45, QColor(23, 25, 31, 198));
+    glass.setColorAt(1.0, QColor(16, 18, 23, 210));
     p.setBrush(glass);
     p.drawRoundedRect(base, radius, radius);
 
-    // 3. Dual-angle optical specular refraction bloom (top-left warm/white catch-light
-    //    + bottom-right cool glass counter-refraction)
-    QRadialGradient topSheen(base.topLeft() + QPointF(base.width() * 0.24, 0.0), base.width() * 0.88);
-    topSheen.setColorAt(0.0, QColor(255, 255, 255, 36));
-    topSheen.setColorAt(0.45, QColor(196, 224, 255, 10));
-    topSheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-    p.setBrush(topSheen);
-    p.drawRoundedRect(base, radius, radius);
+    // 3. Banding-free top-edge linear specular catch-light (subtle beveled glass sheen)
+    {
+        QPainterPath clip;
+        clip.addRoundedRect(base, radius, radius);
+        p.save();
+        p.setClipPath(clip);
+        const qreal sheenH = qMin(42.0, base.height() * 0.24);
+        QLinearGradient topCatch(base.topLeft(), QPointF(base.left(), base.top() + sheenH));
+        topCatch.setColorAt(0.0, QColor(255, 255, 255, 16));
+        topCatch.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setBrush(topCatch);
+        p.drawRect(QRectF(base.left(), base.top(), base.width(), sheenH));
+        p.restore();
+    }
 
-    QRadialGradient botRefract(base.bottomRight() - QPointF(base.width() * 0.2, 0.0), base.width() * 0.72);
-    botRefract.setColorAt(0.0, QColor(125, 211, 252, 18));
-    botRefract.setColorAt(1.0, QColor(125, 211, 252, 0));
-    p.setBrush(botRefract);
-    p.drawRoundedRect(base, radius, radius);
-
-    // 4. Delicate 1px optical specular inner rim (fades through midtones so it reads
-    //    as light refraction on liquid glass rather than a solid border)
+    // 4. Crisp 1px optical specular inner rim matching FloatingBall's obsidian sphere edge
     QLinearGradient rimGrad(base.topLeft(), base.bottomRight());
-    rimGrad.setColorAt(0.0, QColor(255, 255, 255, 52));
-    rimGrad.setColorAt(0.35, QColor(255, 255, 255, 10));
-    rimGrad.setColorAt(0.7, QColor(255, 255, 255, 6));
-    rimGrad.setColorAt(1.0, QColor(165, 216, 255, 28));
+    rimGrad.setColorAt(0.0, QColor(255, 255, 255, 62));
+    rimGrad.setColorAt(0.40, QColor(255, 255, 255, 16));
+    rimGrad.setColorAt(1.0, QColor(255, 255, 255, 28));
     p.setPen(QPen(QBrush(rimGrad), 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawRoundedRect(base.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5);

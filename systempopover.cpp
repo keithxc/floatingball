@@ -75,7 +75,7 @@ public:
         , m_fillColor(fillColor)
         , m_emptyIconColor(emptyIconColor)
     {
-        setMinimumSize(52, 136);
+        setMinimumSize(52, 118);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
@@ -129,11 +129,11 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
 
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        const qreal radius = 18.0;
+        const qreal radius = 16.0;
 
         QPainterPath track;
         track.addRoundedRect(r, radius, radius);
-        p.fillPath(track, QColor(255, 255, 255, m_dragging ? 28 : 20));
+        p.fillPath(track, QColor(255, 255, 255, m_dragging ? 16 : 10));
 
         const qreal frac = isEnabled()
             ? qBound(0.0, qreal(m_value - m_min) / qreal(m_max - m_min), 1.0)
@@ -145,54 +145,76 @@ protected:
             p.save();
             p.setClipPath(track);
             QRectF fillRect(r.left(), fillTop, r.width(), fillH + 1.0);
-            const QColor fill = m_muted ? QColor(148, 163, 184, 108) : m_fillColor;
+            const QColor baseCol = m_muted ? QColor(148, 163, 184) : m_fillColor;
+            QLinearGradient fillGrad(QPointF(r.left(), fillTop), QPointF(r.left(), r.bottom()));
+            if (m_muted) {
+                fillGrad.setColorAt(0.0, QColor(148, 163, 184, 72));
+                fillGrad.setColorAt(1.0, QColor(100, 116, 139, 36));
+            } else {
+                const int topA = m_dragging ? 128 : 96;
+                const int botA = m_dragging ? 72 : 48;
+                fillGrad.setColorAt(0.0, QColor(baseCol.red(), baseCol.green(), baseCol.blue(), topA));
+                fillGrad.setColorAt(1.0, QColor(baseCol.red(), baseCol.green(), baseCol.blue(), botA));
+            }
             p.setPen(Qt::NoPen);
-            p.setBrush(fill);
+            p.setBrush(fillGrad);
             p.drawRect(fillRect);
+
+            // Luminous liquid-glass meniscus line right at the fluid level
+            if (frac < 0.985) {
+                const QColor meniscus = m_muted
+                    ? QColor(203, 213, 225, 120)
+                    : QColor(qMin(255, baseCol.red() + 42),
+                             qMin(255, baseCol.green() + 42),
+                             qMin(255, baseCol.blue() + 42),
+                             m_dragging ? 240 : 195);
+                p.setPen(QPen(meniscus, m_dragging ? 1.8 : 1.4));
+                p.drawLine(QPointF(r.left() + 1.0, fillTop + 0.7),
+                           QPointF(r.right() - 1.0, fillTop + 0.7));
+            }
             p.restore();
         }
 
-        // Optical specular Liquid Glass rim (brightens softly while actively dragging)
+        // Crisp obsidian optical rim
         QLinearGradient rim(r.topLeft(), r.bottomRight());
         if (m_muted) {
-            rim.setColorAt(0.0, QColor(251, 113, 133, 165));
-            rim.setColorAt(1.0, QColor(251, 113, 133, 95));
+            rim.setColorAt(0.0, QColor(251, 113, 133, 145));
+            rim.setColorAt(1.0, QColor(251, 113, 133, 72));
         } else if (m_dragging) {
-            rim.setColorAt(0.0, QColor(255, 255, 255, 160));
-            rim.setColorAt(1.0, QColor(147, 197, 253, 120));
+            rim.setColorAt(0.0, QColor(255, 255, 255, 135));
+            rim.setColorAt(1.0, QColor(m_fillColor.red(), m_fillColor.green(), m_fillColor.blue(), 120));
         } else {
-            rim.setColorAt(0.0, QColor(255, 255, 255, 58));
-            rim.setColorAt(0.5, QColor(255, 255, 255, 18));
-            rim.setColorAt(1.0, QColor(186, 230, 253, 38));
+            rim.setColorAt(0.0, QColor(255, 255, 255, 36));
+            rim.setColorAt(0.5, QColor(255, 255, 255, 16));
+            rim.setColorAt(1.0, QColor(255, 255, 255, 24));
         }
-        p.setPen(QPen(QBrush(rim), m_dragging ? 1.4 : 1.0));
+        p.setPen(QPen(QBrush(rim), m_dragging ? 1.3 : 1.0));
         p.setBrush(Qt::NoBrush);
         p.drawPath(track);
 
-        // Top numeric / status readout (enlarges & highlights during touch drag for blind-drag accuracy)
+        // Top numeric readout (clean ice-white typography; never flips to harsh black)
         if (!m_badgeText.isEmpty()) {
-            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 26.0);
             QFont f = font();
-            f.setPointSize(m_dragging ? 11 : 9);
+            f.setPointSize(m_dragging ? 10 : 9);
             f.setWeight(m_dragging ? QFont::Bold : QFont::DemiBold);
             p.setFont(f);
-            p.setPen(m_muted
-                         ? QColor("#fda4af")
-                         : (overLightFill ? QColor("#0f172a")
-                                          : (m_dragging ? QColor("#ffffff") : QColor(241, 245, 249, 225))));
-            p.drawText(QRectF(r.left() + 2.0, r.top() + 7.0, r.width() - 4.0, 20.0),
+            const QColor txtColor = m_muted
+                ? QColor("#fda4af")
+                : (m_dragging ? QColor("#ffffff")
+                              : (frac <= 0.01 ? QColor(186, 196, 210, 170) : QColor(242, 246, 252, 225)));
+            p.setPen(txtColor);
+            p.drawText(QRectF(r.left() + 2.0, r.top() + 8.0, r.width() - 4.0, 20.0),
                        Qt::AlignCenter, m_badgeText);
         }
 
-        // Bottom centered iOS icon with automatic contrast over fill
-        const qreal iconSize = 19.0;
+        // Bottom centered vector icon tinted smoothly to match liquid fill
+        const qreal iconSize = 18.0;
         const QRectF iconRect(r.center().x() - iconSize * 0.5,
-                              r.bottom() - iconSize - 13.0,
+                              r.bottom() - iconSize - 12.0,
                               iconSize, iconSize);
-        const bool iconOverLightFill = !m_muted && isEnabled() && (fillH >= 32.0);
         const QColor iconColor = m_muted
             ? QColor("#fb7185")
-            : (iconOverLightFill ? QColor("#1e293b") : m_emptyIconColor);
+            : (frac > 0.02 ? m_emptyIconColor : QColor(168, 178, 194, 175));
         FloatingIcons::draw(p, m_icon, iconRect, iconColor);
     }
 
@@ -499,28 +521,32 @@ QString btDeviceEmoji(const QString &iconType, const QString &name)
     return QStringLiteral("ᛒ");
 }
 
-void styleCircleBadge(QLabel *badge, FloatingIcons::Icon icon, const QColor &bg, const QColor &fg, int size = 34)
+void styleCircleBadge(QLabel *badge, FloatingIcons::Icon icon, const QColor &bg, const QColor &fg,
+                      int size = 34, const QColor &rimColor = QColor(255, 255, 255, 26))
 {
     if (!badge) return;
     badge->setFixedSize(size, size);
     badge->setAlignment(Qt::AlignCenter);
-    badge->setPixmap(FloatingIcons::make(icon, fg, size - 16).pixmap(size - 16, size - 16));
-    badge->setStyleSheet(QStringLiteral("background:%1; border-radius:%2px; border:1px solid rgba(255,255,255,34);")
+    badge->setPixmap(FloatingIcons::make(icon, fg, size - 14).pixmap(size - 14, size - 14));
+    badge->setStyleSheet(QStringLiteral("background:%1; border-radius:%2px; border:1px solid %3;")
                              .arg(bg.name(QColor::HexArgb))
-                             .arg(size / 2));
+                             .arg(size / 2)
+                             .arg(rimColor.name(QColor::HexArgb)));
 }
 
 void styleCircleOrbBtn(QToolButton *btn, FloatingIcons::Icon icon, const QColor &bg, const QColor &fg,
-                       bool active, int size = 32)
+                       bool active, int size = 30)
 {
     if (!btn) return;
     btn->setFixedSize(size, size);
-    btn->setIcon(FloatingIcons::make(icon, fg, size - 15));
-    btn->setIconSize(QSize(size - 15, size - 15));
-    const QString rim = active ? QStringLiteral("rgba(255,255,255,82)") : QStringLiteral("rgba(255,255,255,34)");
+    btn->setIcon(FloatingIcons::make(icon, fg, size - 14));
+    btn->setIconSize(QSize(size - 14, size - 14));
+    const QString rim = active
+        ? QColor(qMin(255, bg.red() + 68), qMin(255, bg.green() + 68), qMin(255, bg.blue() + 68), 148).name(QColor::HexArgb)
+        : QStringLiteral("rgba(255,255,255,24)");
     btn->setStyleSheet(QStringLiteral(
                            "QToolButton { background:%1; border-radius:%2px; border:1px solid %3; }"
-                           "QToolButton:hover { border:1px solid rgba(255,255,255,140); }")
+                           "QToolButton:hover { border:1px solid rgba(255,255,255,125); }")
                            .arg(bg.name(QColor::HexArgb))
                            .arg(size / 2)
                            .arg(rim));
@@ -551,15 +577,11 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
-    // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
-    // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
-#ifdef Q_OS_MACOS
-    setFixedSize(344, 286);
-#else
-    setFixedSize(344, 434);
-#endif
+    // Dynamic tight height (updated by updatePopoverHeight) eliminates empty dead space
+    // while keeping fixed width so LayerShellQt layout stays crisp across all pages.
+    setFixedSize(344, 266);
     setProperty("panelBlurInset", 10);
-    setProperty("panelBlurRadius", 26);
+    setProperty("panelBlurRadius", 24);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(10, 10, 10, 10);
@@ -571,89 +593,89 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     FloatingWindow::setPanelStyleSheet(
         card,
         "QWidget#ccCard { background:transparent; border:none; }"
-        "QWidget#bentoGroup { background:rgba(255,255,255,22); border:1px solid rgba(255,255,255,34); border-radius:18px; }"
+        "QWidget#bentoGroup { background:rgba(255,255,255,10); border:1px solid rgba(255,255,255,22); border-radius:16px; }"
         "QLabel { color:#e2e8f0; font-size:12px; background:transparent; }"
-        "QLabel#ccTitle { color:#ffffff; font-size:14px; font-weight:700; }"
+        "QLabel#ccTitle { color:#f5f8fd; font-size:13.5px; font-weight:700; }"
         "QLabel#ccMeta { color:#cbd5e1; font-size:11px; font-weight:600; }"
-        "QLabel#ccSub { color:rgba(226,232,240,185); font-size:11px; }"
-        "QLabel#rowTitle { color:#ffffff; font-size:12.5px; font-weight:600; }"
-        "QLabel#rowSub { color:rgba(226,232,240,175); font-size:11px; }"
-        "QLabel#sliderTag { color:rgba(226,232,240,190); font-size:11px; font-weight:600; }"
-        "QLabel#sliderVal { color:#f8fafc; font-size:11.5px; font-weight:600; }"
-        "QToolButton#powerPill { background:rgba(255,255,255,18); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
-        "                        border-radius:16px; padding:0 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#powerPill:hover { background:rgba(255,255,255,30); }"
-        "QToolButton#powerPill[accent=\"green\"] { background:rgba(16,185,129,48); border:1px solid rgba(52,211,153,150); color:#d1fae5; }"
-        "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(59,130,246,44); border:1px solid rgba(96,165,250,145); color:#dbeafe; }"
-        "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(244,63,94,48);  border:1px solid rgba(251,113,133,150); color:#ffe4e6; }"
-        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:15px; font-size:15px; }"
-        "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,32); }"
-        "QToolButton#hdrIconBtn[unread=\"true\"] { background:rgba(255,77,109,52); color:#ffe4e6; border:1px solid rgba(255,107,138,165); }"
-        "QToolButton#hdrIconBtn[unread=\"true\"]:hover { background:rgba(255,77,109,82); }"
-        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:15px; }"
-        "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,68); }"
-        "QPushButton#notifBanner { background:rgba(255,77,109,34); border:1px solid rgba(255,112,140,120); border-radius:16px; text-align:left; }"
-        "QPushButton#notifBanner:hover { background:rgba(255,77,109,52); }"
-        "QPushButton#notifCardBtn { background:rgba(255,255,255,16); border:1px solid rgba(255,255,255,24); border-radius:14px; text-align:left; }"
-        "QPushButton#notifCardBtn:hover { background:rgba(255,255,255,28); }"
-        "QPushButton#notifCardBtn[unread=\"true\"] { background:rgba(255,77,109,28); border:1px solid rgba(255,112,140,115); }"
-        "QPushButton#notifCardBtn[unread=\"true\"]:hover { background:rgba(255,77,109,46); }"
-        "QToolButton#notifDismissBtn { background:rgba(255,255,255,14); color:#cbd5e1; border:1px solid rgba(255,255,255,20); border-radius:12px; }"
-        "QToolButton#notifDismissBtn:hover { background:rgba(244,63,94,85); color:#ffffff; }"
-        "QToolButton#backPill { background:rgba(255,255,255,18); color:#f8fafc; border:1px solid rgba(255,255,255,26);"
-        "                       border-radius:16px; padding:0 11px 0 7px; font-size:12.5px; font-weight:600; }"
-        "QToolButton#backPill:hover { background:rgba(255,255,255,32); }"
-        "QPushButton#connRow { background:transparent; border:none; border-radius:12px; text-align:left; }"
-        "QPushButton#connRow:hover { background:rgba(255,255,255,18); }"
-        "QPushButton#connRow:pressed { background:rgba(255,255,255,28); }"
-        "QPushButton#dndCard { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:18px; text-align:left; }"
-        "QPushButton#dndCard:hover { background:rgba(255,255,255,28); }"
-        "QPushButton#dndCard[on=\"true\"] { background:rgba(139,92,246,64); border:1px solid rgba(167,139,250,165); }"
-        "QToolButton#mediaBtn { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:15px; }"
-        "QToolButton#mediaBtn:hover { background:rgba(255,255,255,32); }"
-        "QToolButton#tabBtn { background:rgba(255,255,255,16); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "QLabel#ccSub { color:rgba(203,213,225,165); font-size:11px; }"
+        "QLabel#rowTitle { color:#f2f6fc; font-size:12.5px; font-weight:600; }"
+        "QLabel#rowSub { color:rgba(196,206,220,165); font-size:11px; }"
+        "QLabel#sliderTag { color:rgba(203,213,225,180); font-size:11px; font-weight:600; }"
+        "QLabel#sliderVal { color:#f2f6fc; font-size:11.5px; font-weight:600; }"
+        "QToolButton#powerPill { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
+        "                        border-radius:15px; padding:0 11px; font-size:11.5px; font-weight:600; }"
+        "QToolButton#powerPill:hover { background:rgba(255,255,255,22); }"
+        "QToolButton#powerPill[accent=\"green\"] { background:rgba(110,219,160,24); border:1px solid rgba(110,219,160,92); color:#d1fae5; }"
+        "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(124,200,255,24); border:1px solid rgba(124,200,255,92); color:#dbeafe; }"
+        "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(255,82,114,28);  border:1px solid rgba(255,107,138,105); color:#ffe4e6; }"
+        "QToolButton#hdrIconBtn { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,22); border-radius:15px; font-size:14px; }"
+        "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,24); border:1px solid rgba(255,255,255,44); }"
+        "QToolButton#hdrIconBtn[unread=\"true\"] { background:rgba(255,77,109,46); color:#ffe4e6; border:1px solid rgba(255,107,138,150); }"
+        "QToolButton#hdrIconBtn[unread=\"true\"]:hover { background:rgba(255,77,109,74); }"
+        "QToolButton#hdrDangerBtn { background:rgba(255,255,255,11); color:#fda4af; border:1px solid rgba(255,255,255,22); border-radius:15px; }"
+        "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,52); border:1px solid rgba(251,113,133,125); }"
+        "QPushButton#notifBanner { background:rgba(255,77,109,28); border:1px solid rgba(255,112,140,105); border-radius:15px; text-align:left; }"
+        "QPushButton#notifBanner:hover { background:rgba(255,77,109,44); }"
+        "QPushButton#notifCardBtn { background:rgba(255,255,255,10); border:1px solid rgba(255,255,255,20); border-radius:14px; text-align:left; }"
+        "QPushButton#notifCardBtn:hover { background:rgba(255,255,255,20); }"
+        "QPushButton#notifCardBtn[unread=\"true\"] { background:rgba(255,77,109,22); border:1px solid rgba(255,112,140,98); }"
+        "QPushButton#notifCardBtn[unread=\"true\"]:hover { background:rgba(255,77,109,38); }"
+        "QToolButton#notifDismissBtn { background:rgba(255,255,255,10); color:#cbd5e1; border:1px solid rgba(255,255,255,18); border-radius:12px; }"
+        "QToolButton#notifDismissBtn:hover { background:rgba(244,63,94,75); color:#ffffff; }"
+        "QToolButton#backPill { background:rgba(255,255,255,12); color:#f2f6fc; border:1px solid rgba(255,255,255,24);"
+        "                       border-radius:15px; padding:0 11px 0 7px; font-size:12px; font-weight:600; }"
+        "QToolButton#backPill:hover { background:rgba(255,255,255,24); }"
+        "QPushButton#connRow { background:transparent; border:none; border-radius:11px; text-align:left; }"
+        "QPushButton#connRow:hover { background:rgba(255,255,255,14); }"
+        "QPushButton#connRow:pressed { background:rgba(255,255,255,24); }"
+        "QPushButton#dndCard { background:rgba(255,255,255,10); border:1px solid rgba(255,255,255,22); border-radius:16px; text-align:left; }"
+        "QPushButton#dndCard:hover { background:rgba(255,255,255,18); }"
+        "QPushButton#dndCard[on=\"true\"] { background:rgba(139,92,246,48); border:1px solid rgba(167,139,250,140); }"
+        "QToolButton#mediaBtn { background:rgba(255,255,255,12); border:1px solid rgba(255,255,255,22); border-radius:14px; }"
+        "QToolButton#mediaBtn:hover { background:rgba(255,255,255,24); }"
+        "QToolButton#tabBtn { background:rgba(255,255,255,12); color:#e2e8f0; border:1px solid rgba(255,255,255,20);"
         "                     border-radius:11px; padding:4px 9px; font-size:11.5px; font-weight:600; }"
-        "QToolButton#tabBtn:hover { background:rgba(255,255,255,28); color:#ffffff; }"
-        "QToolButton#tabBtn[active=\"true\"] { background:rgba(59,130,246,175); color:#ffffff; border:1px solid rgba(147,197,253,195); }"
-        "QToolButton#modeBtn { background:rgba(255,255,255,15); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "QToolButton#tabBtn:hover { background:rgba(255,255,255,24); color:#ffffff; }"
+        "QToolButton#tabBtn[active=\"true\"] { background:rgba(56,152,255,125); color:#ffffff; border:1px solid rgba(124,200,255,175); }"
+        "QToolButton#modeBtn { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,20);"
         "                      border-radius:12px; padding:6px 6px; font-size:12px; font-weight:600; }"
-        "QToolButton#modeBtn:hover { background:rgba(255,255,255,26); }"
-        "QToolButton#modeBtn[active=\"true\"] { background:rgba(56,189,248,68); color:#ffffff; border:1px solid rgba(125,211,252,195); }"
-        "QToolButton#modeBtn[tone=\"green\"][active=\"true\"] { background:rgba(16,185,129,72); color:#ffffff; border:1px solid rgba(52,211,153,195); }"
-        "QToolButton#modeBtn[tone=\"blue\"][active=\"true\"]  { background:rgba(59,130,246,84); color:#ffffff; border:1px solid rgba(147,197,253,205); }"
-        "QToolButton#modeBtn[tone=\"amber\"][active=\"true\"] { background:rgba(245,158,11,76); color:#ffffff; border:1px solid rgba(251,191,36,205); }"
-        "QPushButton#rowBtn { background:rgba(255,255,255,14); color:#f8fafc; border:1px solid rgba(255,255,255,20);"
+        "QToolButton#modeBtn:hover { background:rgba(255,255,255,22); }"
+        "QToolButton#modeBtn[active=\"true\"] { background:rgba(56,189,248,58); color:#ffffff; border:1px solid rgba(125,211,252,175); }"
+        "QToolButton#modeBtn[tone=\"green\"][active=\"true\"] { background:rgba(16,185,129,60); color:#ffffff; border:1px solid rgba(52,211,153,175); }"
+        "QToolButton#modeBtn[tone=\"blue\"][active=\"true\"]  { background:rgba(59,130,246,68); color:#ffffff; border:1px solid rgba(147,197,253,180); }"
+        "QToolButton#modeBtn[tone=\"amber\"][active=\"true\"] { background:rgba(245,158,11,62); color:#ffffff; border:1px solid rgba(251,191,36,180); }"
+        "QPushButton#rowBtn { background:rgba(255,255,255,10); color:#f2f6fc; border:1px solid rgba(255,255,255,18);"
         "                     border-radius:12px; padding:8px 11px; text-align:left; font-size:12px; font-weight:500; }"
-        "QPushButton#rowBtn:hover { background:rgba(255,255,255,26); }"
-        "QPushButton#rowBtn[connected=\"true\"] { background:rgba(56,189,248,44); border:1px solid rgba(125,211,252,150); color:#ffffff; }"
-        "QToolButton#footBtn { background:rgba(255,255,255,15); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "QPushButton#rowBtn:hover { background:rgba(255,255,255,20); }"
+        "QPushButton#rowBtn[connected=\"true\"] { background:rgba(56,189,248,38); border:1px solid rgba(125,211,252,140); color:#ffffff; }"
+        "QToolButton#footBtn { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,20);"
         "                      border-radius:12px; padding:7px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#footBtn:hover { background:rgba(255,255,255,28); color:#ffffff; }"
-        "QToolButton#primaryBtn { background:rgba(59,130,246,165); color:#ffffff; border:1px solid rgba(147,197,253,190);"
+        "QToolButton#footBtn:hover { background:rgba(255,255,255,22); color:#ffffff; }"
+        "QToolButton#primaryBtn { background:rgba(56,152,255,128); color:#ffffff; border:1px solid rgba(124,200,255,175);"
         "                         border-radius:12px; padding:7px 12px; font-size:12px; font-weight:600; }"
-        "QToolButton#primaryBtn:hover { background:rgba(59,130,246,210); }"
-        "QLineEdit#hsInput { background:rgba(12,18,32,145); color:#ffffff; border:1px solid rgba(255,255,255,30);"
+        "QToolButton#primaryBtn:hover { background:rgba(56,152,255,168); }"
+        "QLineEdit#hsInput { background:rgba(12,16,24,145); color:#ffffff; border:1px solid rgba(255,255,255,26);"
         "                    border-radius:10px; padding:5px 9px; font-size:12px; }"
-        "QLineEdit#hsInput:focus { border:1px solid rgba(96,165,250,210); }");
+        "QLineEdit#hsInput:focus { border:1px solid rgba(124,200,255,195); }");
 
     auto *root = new QVBoxLayout(card);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(9);
+    root->setContentsMargins(12, 11, 12, 11);
+    root->setSpacing(8);
 
     // ---- Shared Top Draggable Header ----
     auto *header = new PopoverDragHeader(card);
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(4);
+    hdrRow->setSpacing(6);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
-    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#f8fafc"), 15));
-    m_backBtn->setIconSize(QSize(15, 15));
+    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#f2f6fc"), 14));
+    m_backBtn->setIconSize(QSize(14, 14));
     m_backBtn->setText(QStringLiteral("返回"));
     m_backBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_backBtn->setFixedHeight(32);
+    m_backBtn->setFixedHeight(30);
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->hide();
     connect(m_backBtn, &QToolButton::clicked, this, [this] { showPage(PageHome); });
@@ -669,7 +691,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_powerPill = new QToolButton(header);
     m_powerPill->setObjectName(QStringLiteral("powerPill"));
     m_powerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    m_powerPill->setFixedHeight(32);
+    m_powerPill->setFixedHeight(30);
     m_powerPill->setText(QStringLiteral("平衡"));
     m_powerPill->setToolTip(QStringLiteral("点击切换功耗模式（节能 / 平衡 / 性能）"));
     m_powerPill->setCursor(Qt::PointingHandCursor);
@@ -688,7 +710,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         b->setIcon(FloatingIcons::make(icon, ink, 15));
         b->setIconSize(QSize(15, 15));
         b->setToolTip(tip);
-        b->setFixedSize(31, 31);
+        b->setFixedSize(30, 30);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -706,7 +728,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     });
     hdrRow->addWidget(m_hdrSettingsBtn);
 
-    m_hdrLockBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Lock, QColor("#f1f5f9"),
+    m_hdrLockBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Lock, QColor("#e2e8f0"),
                               QStringLiteral("锁屏"));
     connect(m_hdrLockBtn, &QToolButton::clicked, this, [this] {
         hide();
@@ -725,19 +747,15 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_refreshBtn = new QToolButton(header);
     m_refreshBtn->setObjectName(QStringLiteral("hdrIconBtn"));
     m_refreshBtn->setText(QStringLiteral("↻"));
-    m_refreshBtn->setToolTip(QStringLiteral("刷新实时状态"));
-    m_refreshBtn->setFixedSize(31, 31);
+    m_refreshBtn->setToolTip(QStringLiteral("刷新列表"));
+    m_refreshBtn->setFixedSize(30, 30);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
+    m_refreshBtn->hide();
     connect(m_refreshBtn, &QToolButton::clicked, this, [this] {
         if (m_currentPage == PageWifi) refreshWifi(true);
         else refreshCurrentPage();
     });
     hdrRow->addWidget(m_refreshBtn);
-
-    auto *closeBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Close, QColor("#cbd5e1"),
-                                QStringLiteral("关闭"));
-    connect(closeBtn, &QToolButton::clicked, this, &QWidget::hide);
-    hdrRow->addWidget(closeBtn);
     root->addWidget(header);
 
     // ---- Inline Action Status Banner ----
@@ -806,16 +824,16 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                            const QString &orbTip, std::function<void()> onOrbToggle,
                            std::function<void()> onOpenDetail) {
         auto *rowHost = new QWidget(connCard);
-        rowHost->setMinimumHeight(40);
+        rowHost->setMinimumHeight(37);
         auto *hl = new QHBoxLayout(rowHost);
-        hl->setContentsMargins(4, 2, 2, 2);
+        hl->setContentsMargins(3, 1, 2, 1);
         hl->setSpacing(6);
 
         // Left circular Liquid Glass orb: direct 1-tap toggle!
         auto *orbBtn = new QToolButton(rowHost);
         orbBtn->setCursor(Qt::PointingHandCursor);
         orbBtn->setToolTip(orbTip);
-        styleCircleOrbBtn(orbBtn, icon, badgeBg, QColor("#ffffff"), false, 32);
+        styleCircleOrbBtn(orbBtn, icon, badgeBg, QColor("#e2e8f0"), false, 30);
         connect(orbBtn, &QToolButton::clicked, this, [onOrbToggle] { onOrbToggle(); });
         hl->addWidget(orbBtn);
 
@@ -823,10 +841,10 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
         auto *detailBtn = new QPushButton(rowHost);
         detailBtn->setObjectName(QStringLiteral("connRow"));
         detailBtn->setCursor(Qt::PointingHandCursor);
-        detailBtn->setMinimumHeight(36);
+        detailBtn->setMinimumHeight(35);
         auto *dl = new QHBoxLayout(detailBtn);
-        dl->setContentsMargins(4, 2, 4, 2);
-        dl->setSpacing(4);
+        dl->setContentsMargins(3, 1, 3, 1);
+        dl->setSpacing(2);
 
         auto *textCol = new QVBoxLayout();
         textCol->setContentsMargins(0, 0, 0, 0);
@@ -910,17 +928,17 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     auto *rightCol = new QVBoxLayout();
     rightCol->setSpacing(9);
 
-    // DND Wide Card
+    // DND Wide Card (distinct crescent Moon icon so it never duplicates the header Bell)
     m_dndTile = new QPushButton(page);
     m_dndTile->setObjectName(QStringLiteral("dndCard"));
     m_dndTile->setCursor(Qt::PointingHandCursor);
-    m_dndTile->setFixedHeight(52);
+    m_dndTile->setFixedHeight(48);
     auto *dndRow = new QHBoxLayout(m_dndTile);
-    dndRow->setContentsMargins(8, 6, 8, 6);
+    dndRow->setContentsMargins(8, 5, 8, 5);
     dndRow->setSpacing(7);
     m_dndBadge = new QLabel(m_dndTile);
     m_dndBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    styleCircleBadge(m_dndBadge, FloatingIcons::Bell, QColor(255, 255, 255, 26), QColor("#cbd5e1"), 28);
+    styleCircleBadge(m_dndBadge, FloatingIcons::Moon, QColor(255, 255, 255, 12), QColor("#cbd5e1"), 28);
     dndRow->addWidget(m_dndBadge);
     auto *dndText = new QVBoxLayout();
     dndText->setContentsMargins(0, 0, 0, 0);
@@ -947,7 +965,7 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     slidersRow->setSpacing(8);
 
     m_brightnessSlider = new CapsuleSlider(
-        FloatingIcons::Sun, QColor(248, 250, 252, 236), QColor("#fcd34d"), page);
+        FloatingIcons::Sun, QColor(232, 238, 248), QColor("#fde68a"), page);
     m_brightnessSlider->setToolTip(QStringLiteral("上下拖动或滚轮调节显示器亮度"));
     m_brightnessSlider->setRange(1, 100);
     m_brightnessSlider->setValue(70);
@@ -1003,7 +1021,7 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     });
 
     m_volumeSlider = new CapsuleSlider(
-        FloatingIcons::Volume, QColor(242, 248, 255, 234), QColor("#cbd5e1"), page);
+        FloatingIcons::Volume, QColor(124, 200, 255), QColor("#bae6fd"), page);
     m_volumeSlider->setToolTip(QStringLiteral("上下拖动调节音量 · 轻点底部图标或右键切换静音"));
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setValue(60);
@@ -1704,22 +1722,55 @@ void SystemPopover::hideEvent(QHideEvent *event)
 void SystemPopover::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 26.0);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 24.0);
+}
+
+void SystemPopover::updatePopoverHeight()
+{
+    int targetH = 396;
+    if (m_currentPage == PageHome) {
+        const bool hasWwan = m_wwanAvailable || (m_homeWwanRow && m_homeWwanRow->isVisible());
+        const bool hasNotif = m_notifHomeCard && !m_notifHomeCard->isHidden();
+        const bool hasMpris = m_mprisVisible && m_mprisCard && !m_mprisCard->isHidden();
+        const bool hasStatus = m_statusBanner && !m_statusBanner->isHidden();
+        targetH = (hasWwan ? 314 : 276)
+                + (hasNotif ? 54 : 0)
+                + (hasMpris ? 56 : 0)
+                + (hasStatus ? 22 : 0);
+    }
+    if (height() == targetH) return;
+    setFixedHeight(targetH);
+    if (isVisible()) {
+        QScreen *scr = QGuiApplication::screenAt(geometry().center());
+        if (!FloatingWindow::isValidScreen(scr)) scr = screen();
+        if (FloatingWindow::isValidScreen(scr)) {
+            const QRect b = scr->availableGeometry();
+            const int margin = 12;
+            const int clampedY = qBound(b.top() + margin, y(), qMax(b.top() + margin, b.bottom() - targetH - margin));
+            if (clampedY != y()) move(x(), clampedY);
+        }
+    }
 }
 
 void SystemPopover::showStatusBanner(const QString &msg, bool isError)
 {
     if (msg.isEmpty()) {
         m_statusBanner->hide();
+        updatePopoverHeight();
         return;
     }
     m_statusBanner->setStyleSheet(isError ? QStringLiteral("color:#fb7185; font-size:11px; font-weight:600;")
                                           : QStringLiteral("color:#7cc8ff; font-size:11px; font-weight:600;"));
     m_statusBanner->setText(msg);
     m_statusBanner->show();
+    updatePopoverHeight();
+    QPointer<SystemPopover> self(this);
     QPointer<QLabel> banner(m_statusBanner);
-    QTimer::singleShot(2500, this, [banner, msg] {
-        if (banner && banner->text() == msg) banner->hide();
+    QTimer::singleShot(2500, this, [self, banner, msg] {
+        if (banner && banner->text() == msg) {
+            banner->hide();
+            if (self) self->updatePopoverHeight();
+        }
     });
 }
 
@@ -1756,14 +1807,7 @@ void SystemPopover::showPage(Page page)
     syncHeaderForPage();
     syncNetStatsTimer();
     refreshCurrentPage();
-#ifdef Q_OS_MACOS
-    if (page == PageHome) {
-        const bool hasBanner = m_notifHomeCard && m_notifHomeCard->isVisible();
-        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0) + (hasBanner ? 54 : 0));
-    } else {
-        setFixedHeight(436);
-    }
-#endif
+    updatePopoverHeight();
 }
 
 void SystemPopover::syncHeaderForPage()
@@ -1776,6 +1820,7 @@ void SystemPopover::syncHeaderForPage()
     if (m_hdrSettingsBtn) m_hdrSettingsBtn->setVisible(isHome);
     if (m_hdrLockBtn) m_hdrLockBtn->setVisible(isHome);
     if (m_hdrPowerBtn) m_hdrPowerBtn->setVisible(isHome);
+    if (m_refreshBtn) m_refreshBtn->setVisible(!isHome && m_currentPage != PageNotifications);
     if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi"));
     else if (m_currentPage == PageCellular) m_titleLbl->setText(QStringLiteral("4G 网络"));
     else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
@@ -1924,33 +1969,25 @@ void SystemPopover::syncHomeFromSnapshot()
         repolish(m_powerPill);
     }
 
-    // Home Wi-Fi row
+    // Home Wi-Fi row (harmonized Obsidian Jewel Glass orb)
     const bool wifiOn = !m_cachedWifiSsid.isEmpty() && m_wifiRadioEnabled && !m_hsActive;
     styleCircleOrbBtn(m_homeWifiBadge, FloatingIcons::Wifi,
-                      wifiOn ? QColor("#2563eb") : QColor(255, 255, 255, 28),
-                      wifiOn ? QColor("#ffffff") : QColor("#cbd5e1"), wifiOn, 32);
+                      wifiOn ? QColor(56, 152, 255, 62) : QColor(255, 255, 255, 12),
+                      wifiOn ? QColor("#bae6fd") : QColor("#94a3b8"), wifiOn, 30);
     if (m_hsActive) {
         m_homeWifiSub->setText(QStringLiteral("热点共享中"));
     } else if (wifiOn) {
-        m_homeWifiSub->setText(elideText(QStringLiteral("%1 · %2%").arg(m_cachedWifiSsid).arg(m_cachedWifiSignal), 13));
+        m_homeWifiSub->setText(elideText(QStringLiteral("%1 · %2%").arg(m_cachedWifiSsid).arg(m_cachedWifiSignal), 19));
     } else {
         m_homeWifiSub->setText(m_wifiRadioEnabled ? QStringLiteral("未连接") : QStringLiteral("已关闭"));
     }
 
     // Home 4G WWAN row
     if (m_homeWwanRow) {
-        const bool wasVis = m_homeWwanRow->isVisible();
         m_homeWwanRow->setVisible(m_wwanAvailable);
-#ifdef Q_OS_MACOS
-        if (m_currentPage == PageHome && wasVis != m_wwanAvailable) {
-            setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
-        }
-#else
-        Q_UNUSED(wasVis);
-#endif
         styleCircleOrbBtn(m_homeWwanBadge, FloatingIcons::Cellular,
-                          m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 28),
-                          m_wwanEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), m_wwanEnabled, 32);
+                          m_wwanEnabled ? QColor(52, 211, 153, 56) : QColor(255, 255, 255, 12),
+                          m_wwanEnabled ? QColor("#a7f3d0") : QColor("#94a3b8"), m_wwanEnabled, 30);
         if (!m_wwanEnabled) m_homeWwanSub->setText(QStringLiteral("已关闭"));
         else if (m_wwanConnected) {
             const QString tech = m_cellTech.isEmpty() ? QStringLiteral("4G") : m_cellTech;
@@ -1962,8 +1999,8 @@ void SystemPopover::syncHomeFromSnapshot()
 
     // Home Hotspot row
     styleCircleOrbBtn(m_homeHotspotBadge, FloatingIcons::Hotspot,
-                      m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 28),
-                      m_hsActive ? QColor("#ffffff") : QColor("#cbd5e1"), m_hsActive, 32);
+                      m_hsActive ? QColor(52, 211, 153, 56) : QColor(255, 255, 255, 12),
+                      m_hsActive ? QColor("#a7f3d0") : QColor("#94a3b8"), m_hsActive, 30);
 #ifdef Q_OS_MACOS
     m_homeHotspotSub->setText(m_hsActive ? QStringLiteral("共享中") : QStringLiteral("未开启"));
 #else
@@ -1972,7 +2009,7 @@ void SystemPopover::syncHomeFromSnapshot()
         const QString sub = m_hsClients.isEmpty()
             ? QStringLiteral("%1 · %2").arg(m_hsSsid, sec)
             : QStringLiteral("%1 · %2台").arg(m_hsSsid).arg(m_hsClients.size());
-        m_homeHotspotSub->setText(elideText(sub, 13));
+        m_homeHotspotSub->setText(elideText(sub, 19));
     } else {
         m_homeHotspotSub->setText(QStringLiteral("已关闭"));
     }
@@ -1981,18 +2018,22 @@ void SystemPopover::syncHomeFromSnapshot()
     // Home Bluetooth row
     const bool btOn = st.bluetoothPowered || m_btPowered;
     styleCircleOrbBtn(m_homeBtBadge, FloatingIcons::Bluetooth,
-                      btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 28),
-                      btOn ? QColor("#ffffff") : QColor("#cbd5e1"), btOn, 32);
+                      btOn ? QColor(56, 152, 255, 62) : QColor(255, 255, 255, 12),
+                      btOn ? QColor("#bae6fd") : QColor("#94a3b8"), btOn, 30);
     if (!btOn) m_homeBtSub->setText(QStringLiteral("已关闭"));
-    else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 13));
+    else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 19));
     else m_homeBtSub->setText(QStringLiteral("已开启"));
 
     // Home Mihomo row
-    const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 28)
-                        : (m_mhMode == QLatin1String("direct") ? QColor("#f59e0b")
-                           : (m_mhMode == QLatin1String("global") ? QColor("#3b82f6") : QColor("#10b981")));
-    styleCircleOrbBtn(m_homeMhBadge, FloatingIcons::Proxy, mhBg,
-                      m_mhReachable ? QColor("#ffffff") : QColor("#cbd5e1"), m_mhReachable, 32);
+    const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 12)
+                        : (m_mhMode == QLatin1String("direct") ? QColor(245, 158, 11, 58)
+                           : (m_mhMode == QLatin1String("global") ? QColor(56, 152, 255, 62)
+                                                                  : QColor(52, 211, 153, 56)));
+    const QColor mhFg = !m_mhReachable ? QColor("#94a3b8")
+                        : (m_mhMode == QLatin1String("direct") ? QColor("#fde68a")
+                           : (m_mhMode == QLatin1String("global") ? QColor("#bae6fd")
+                                                                  : QColor("#a7f3d0")));
+    styleCircleOrbBtn(m_homeMhBadge, FloatingIcons::Proxy, mhBg, mhFg, m_mhReachable, 30);
     if (m_mhReachable) {
         const QString modeCn = (m_mhMode == QLatin1String("global")) ? QStringLiteral("全局")
                              : (m_mhMode == QLatin1String("direct") ? QStringLiteral("直连") : QStringLiteral("规则"));
@@ -2002,12 +2043,13 @@ void SystemPopover::syncHomeFromSnapshot()
         m_homeMhSub->setText(QStringLiteral("本地未连接"));
     }
 
-    // DND Wide Card
+    // DND Wide Card (distinct Moon icon)
     m_dndTile->setProperty("on", st.dndEnabled);
     repolish(m_dndTile);
-    styleCircleBadge(m_dndBadge, FloatingIcons::Bell,
-                     st.dndEnabled ? QColor("#8b5cf6") : QColor(255, 255, 255, 28),
-                     st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 28);
+    styleCircleBadge(m_dndBadge, FloatingIcons::Moon,
+                     st.dndEnabled ? QColor(139, 92, 246, 68) : QColor(255, 255, 255, 12),
+                     st.dndEnabled ? QColor("#ede9fe") : QColor("#94a3b8"), 28,
+                     st.dndEnabled ? QColor(167, 139, 250, 150) : QColor(255, 255, 255, 24));
     m_dndSub->setText(st.dndEnabled ? QStringLiteral("已开启") : QStringLiteral("已关闭"));
 
     // Header Bell Button + Auto-Hiding Unread Notification Banner
@@ -2048,6 +2090,7 @@ void SystemPopover::syncHomeFromSnapshot()
             m_notifHomeCard->hide();
         }
     }
+    updatePopoverHeight();
 }
 
 // ============================================================================
@@ -2123,11 +2166,7 @@ void SystemPopover::applyMprisVisuals()
             m_mprisPlaying ? FloatingIcons::MediaPause : FloatingIcons::MediaPlay,
             QColor("#ffffff"), 14));
     }
-#ifdef Q_OS_MACOS
-    if (m_currentPage == PageHome) {
-        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
-    }
-#endif
+    updatePopoverHeight();
 }
 
 void SystemPopover::refreshMpris()

@@ -9,6 +9,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPointer>
 #include <QPropertyAnimation>
 #include <QScreen>
@@ -47,33 +48,36 @@ QuickDeck::QuickDeck(QWidget *parent) : QWidget(parent)
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_ShowWithoutActivating);
     setAttribute(Qt::WA_TranslucentBackground);
+    setProperty("panelBlurInset", 10);
+    setProperty("panelBlurRadius", 24);
     resize(372, 360);
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 8);
+    outer->setContentsMargins(10, 10, 10, 10);
     auto *card = new QWidget(this);
     card->setObjectName(QStringLiteral("deckCard"));
     outer->addWidget(card);
 
     FloatingWindow::setPanelStyleSheet(
         card,
-        "QWidget#deckCard { background:@panelTint@; border:1px solid rgba(255,255,255,40); border-radius:22px; }"
-        "QLabel { color:#aab6c8; font-size:11px; background:transparent; }"
-        "QLabel#deckTitle { color:#f5f8fd; font-size:15px; font-weight:600; }"
-        "QLabel#sectionTag { color:#8896ab; font-size:11px; font-weight:600; }"
-        "QToolButton { background:rgba(255,255,255,14); color:#f2f6fc; border:1px solid rgba(255,255,255,20);"
+        "QWidget#deckCard { background:transparent; border:none; }"
+        "QLabel { color:rgba(226,232,240,175); font-size:11px; background:transparent; }"
+        "QLabel#deckTitle { color:#f5f8fd; font-size:14.5px; font-weight:700; }"
+        "QLabel#sectionTag { color:rgba(203,213,225,165); font-size:11px; font-weight:600; }"
+        "QToolButton { background:rgba(255,255,255,11); color:#f2f6fc; border:1px solid rgba(255,255,255,22);"
         "              border-radius:14px; padding:6px 4px; font-size:12px; font-weight:500; }"
-        "QToolButton:hover { background:rgba(255,255,255,25); }"
-        "QToolButton:pressed { background:rgba(255,255,255,38); }"
-        "QToolButton#dangerTile { background:rgba(235,78,102,28); border:1px solid rgba(255,112,132,55); color:#ffdce2; }"
-        "QToolButton#dangerTile:hover { background:rgba(235,78,102,48); }"
-        "QToolButton#deckMuteBtn[muted=\"true\"] { background:rgba(235,78,102,42); border:1px solid rgba(255,112,132,90); }"
-        "QToolButton#deckClose { background:transparent; border:0; border-radius:15px; }"
-        "QSlider::groove:horizontal { height:10px; background:rgba(255,255,255,22); border-radius:5px; }"
-        "QSlider::sub-page:horizontal { background:#4b9bff; border-radius:5px; }"
-        "QSlider[muted=\"true\"]::sub-page:horizontal { background:rgba(155,165,180,105); border-radius:5px; }"
-        "QSlider::handle:horizontal { width:22px; height:22px; margin:-6px 0; background:#ffffff; border-radius:11px; }"
-        "QSlider[muted=\"true\"]::handle:horizontal { background:#cbd4e1; }");
+        "QToolButton:hover { background:rgba(255,255,255,22); border:1px solid rgba(255,255,255,36); }"
+        "QToolButton:pressed { background:rgba(255,255,255,32); }"
+        "QToolButton#dangerTile { background:rgba(244,63,94,24); border:1px solid rgba(251,113,133,65); color:#ffdce2; }"
+        "QToolButton#dangerTile:hover { background:rgba(244,63,94,46); }"
+        "QToolButton#deckMuteBtn[muted=\"true\"] { background:rgba(244,63,94,38); border:1px solid rgba(251,113,133,95); }"
+        "QToolButton#deckClose { background:rgba(255,255,255,10); border:1px solid rgba(255,255,255,20); border-radius:15px; }"
+        "QToolButton#deckClose:hover { background:rgba(255,255,255,22); }"
+        "QSlider::groove:horizontal { height:8px; background:rgba(255,255,255,16); border-radius:4px; }"
+        "QSlider::sub-page:horizontal { background:rgba(124,200,255,195); border-radius:4px; }"
+        "QSlider[muted=\"true\"]::sub-page:horizontal { background:rgba(148,163,184,95); border-radius:4px; }"
+        "QSlider::handle:horizontal { width:20px; height:20px; margin:-6px 0; background:#f2f6fc; border-radius:10px; }"
+        "QSlider[muted=\"true\"]::handle:horizontal { background:#94a3b8; }");
 
     auto *layout = new QVBoxLayout(card);
     layout->setContentsMargins(14, 12, 14, 14);
@@ -215,7 +219,7 @@ QuickDeck::QuickDeck(QWidget *parent) : QWidget(parent)
     brightLayout->setSpacing(8);
     auto *brightIcon = new QToolButton(m_brightnessRow);
     brightIcon->setEnabled(false);
-    brightIcon->setIcon(FloatingIcons::make(FloatingIcons::Settings, QColor("#ffd88a"), 19));
+    brightIcon->setIcon(FloatingIcons::make(FloatingIcons::Sun, QColor("#fde68a"), 19));
     brightIcon->setFixedSize(42, 42);
     brightLayout->addWidget(brightIcon);
 
@@ -365,6 +369,12 @@ void QuickDeck::syncBrightness()
             emit self->brightnessStateChanged(pct);
         }
     });
+}
+
+void QuickDeck::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 24.0);
 }
 
 void QuickDeck::keyPressEvent(QKeyEvent *event)

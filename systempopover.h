@@ -119,6 +119,7 @@ private:
     void rebuildNotificationsView();
 
     void positionNear(const QPoint &anchorGlobal);
+    void updatePopoverHeight();
     void showStatusBanner(const QString &msg, bool isError = false);
     void syncHeaderForPage();
     void syncHomeFromSnapshot();
