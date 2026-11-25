@@ -186,17 +186,17 @@ private:
     QLabel *m_statusBanner = nullptr;
     QStackedWidget *m_stack = nullptr;
 
-    // Home Bento connectivity rows (Wi-Fi / 4G / Hotspot / Bluetooth / Mihomo)
-    QLabel *m_homeWifiBadge = nullptr;
+    // Home Bento connectivity rows (tap left glass orb = instant toggle; tap text/chevron = subpage)
+    QToolButton *m_homeWifiBadge = nullptr;
     QLabel *m_homeWifiSub = nullptr;
-    QPushButton *m_homeWwanRow = nullptr;
-    QLabel *m_homeWwanBadge = nullptr;
+    QWidget *m_homeWwanRow = nullptr;
+    QToolButton *m_homeWwanBadge = nullptr;
     QLabel *m_homeWwanSub = nullptr;
-    QLabel *m_homeHotspotBadge = nullptr;
+    QToolButton *m_homeHotspotBadge = nullptr;
     QLabel *m_homeHotspotSub = nullptr;
-    QLabel *m_homeBtBadge = nullptr;
+    QToolButton *m_homeBtBadge = nullptr;
     QLabel *m_homeBtSub = nullptr;
-    QLabel *m_homeMhBadge = nullptr;
+    QToolButton *m_homeMhBadge = nullptr;
     QLabel *m_homeMhSub = nullptr;
 
     // Home Bento right column (DND + two slender iOS vertical sliders)

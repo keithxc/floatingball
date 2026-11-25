@@ -44,6 +44,8 @@ public:
     int importFromSystemDock();
 
     DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry) const;
+    DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry) const;
+    DesktopActions::Outcome minimizeAllWindows() const;
     DesktopActions::Outcome launchFresh(const DockAppEntry &entry) const;
     DesktopActions::Outcome quitApp(const DockAppEntry &entry) const;
 

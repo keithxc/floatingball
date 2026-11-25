@@ -895,6 +895,53 @@ DesktopActions::Outcome AppDockModel::launchFresh(const DockAppEntry &entry) con
     return activateOrLaunch(fresh);
 }
 
+DesktopActions::Outcome AppDockModel::toggleOrActivate(const DockAppEntry &entry) const
+{
+#ifdef Q_OS_LINUX
+    if (entry.running && entry.active && !entry.windowId.isEmpty()) {
+        const QString safeId = sanitizeKWinId(entry.windowId);
+        if (!safeId.isEmpty()) {
+            const QString js = QStringLiteral(
+                "(function(){"
+                "var wins=workspace.windowList();"
+                "for(var i=0;i<wins.length;++i){"
+                "  var w=wins[i];"
+                "  if(w && String(w.internalId)==='%1'){"
+                "    w.minimized=true;"
+                "    break;"
+                "  }"
+                "}"
+                "})();").arg(safeId);
+            runOneShotKWinScript(QStringLiteral("floatingball_min_win"), js);
+            return {true, QStringLiteral("✓ 已最小化 ") + entry.name};
+        }
+    }
+#endif
+    return activateOrLaunch(entry);
+}
+
+DesktopActions::Outcome AppDockModel::minimizeAllWindows() const
+{
+#ifdef Q_OS_LINUX
+    const QString js = QStringLiteral(
+        "(function(){"
+        "var cur=workspace.currentDesktop;"
+        "var wins=workspace.windowList();"
+        "for(var i=0;i<wins.length;++i){"
+        "  var w=wins[i];"
+        "  if(!w||w.desktopWindow||w.dock||w.skipTaskbar||!w.minimizable) continue;"
+        "  if(w.onAllDesktops||(w.desktops&&w.desktops.indexOf(cur)>=0)){"
+        "    w.minimized=true;"
+        "  }"
+        "}"
+        "})();");
+    runOneShotKWinScript(QStringLiteral("floatingball_min_all"), js);
+    return {true, QStringLiteral("✓ 已隐藏全部窗口，仅显示桌面")};
+#else
+    return DesktopActions::showDesktop();
+#endif
+}
+
 DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry) const
 {
 #ifdef Q_OS_MACOS

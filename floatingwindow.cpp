@@ -3,6 +3,11 @@
 #include <QApplication>
 #include <QDynamicPropertyChangeEvent>
 #include <QGuiApplication>
+#include <QLinearGradient>
+#include <QPainter>
+#include <QPen>
+#include <QRadialGradient>
+#include <QRectF>
 #include <QSettings>
 #include <QWidget>
 
@@ -211,4 +216,61 @@ void FloatingWindow::setPanelBlurEnabled(bool enabled)
         if (w->property("panelOpacityManaged").toBool())
             PanelBackdrop::setEnabled(w, enabled);
     }
+}
+
+void FloatingWindow::paintLiquidGlass(QPainter &p, const QRect &widgetRect, double inset, double radius)
+{
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+
+    const QRectF base = QRectF(widgetRect).adjusted(inset, inset, -inset, -inset);
+
+    // 1. Borderless feathered outer ambient gradient (no hard outer stroke)
+    struct FeatherStep { qreal expand; int alpha; };
+    static const FeatherStep kFeather[] = {
+        {10.0, 5}, {7.5, 10}, {5.0, 16}, {2.5, 24}
+    };
+    for (const FeatherStep &s : kFeather) {
+        if (s.expand > inset + 0.5) continue;
+        p.setBrush(QColor(10, 16, 28, s.alpha));
+        p.drawRoundedRect(base.adjusted(-s.expand, -s.expand, s.expand, s.expand),
+                          radius + s.expand * 0.45, radius + s.expand * 0.45);
+    }
+
+    // 2. High-clarity translucent Liquid Glass body over compositor Gaussian blur
+    QLinearGradient glass(base.topLeft(), base.bottomRight());
+    glass.setColorAt(0.0, QColor(52, 66, 98, 92));
+    glass.setColorAt(0.38, QColor(24, 32, 52, 96));
+    glass.setColorAt(1.0, QColor(14, 19, 34, 114));
+    p.setBrush(glass);
+    p.drawRoundedRect(base, radius, radius);
+
+    // 3. Dual-angle optical specular refraction bloom (top-left warm/white catch-light
+    //    + bottom-right cool glass counter-refraction)
+    QRadialGradient topSheen(base.topLeft() + QPointF(base.width() * 0.24, 0.0), base.width() * 0.88);
+    topSheen.setColorAt(0.0, QColor(255, 255, 255, 36));
+    topSheen.setColorAt(0.45, QColor(196, 224, 255, 10));
+    topSheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+    p.setBrush(topSheen);
+    p.drawRoundedRect(base, radius, radius);
+
+    QRadialGradient botRefract(base.bottomRight() - QPointF(base.width() * 0.2, 0.0), base.width() * 0.72);
+    botRefract.setColorAt(0.0, QColor(125, 211, 252, 18));
+    botRefract.setColorAt(1.0, QColor(125, 211, 252, 0));
+    p.setBrush(botRefract);
+    p.drawRoundedRect(base, radius, radius);
+
+    // 4. Delicate 1px optical specular inner rim (fades through midtones so it reads
+    //    as light refraction on liquid glass rather than a solid border)
+    QLinearGradient rimGrad(base.topLeft(), base.bottomRight());
+    rimGrad.setColorAt(0.0, QColor(255, 255, 255, 52));
+    rimGrad.setColorAt(0.35, QColor(255, 255, 255, 10));
+    rimGrad.setColorAt(0.7, QColor(255, 255, 255, 6));
+    rimGrad.setColorAt(1.0, QColor(165, 216, 255, 28));
+    p.setPen(QPen(QBrush(rimGrad), 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(base.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5);
+
+    p.restore();
 }

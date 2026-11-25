@@ -2,6 +2,7 @@
 #include "desktopactions.h"
 #include "floatingwindow.h"
 #include "screenshotstore.h"
+#include "touchscroll.h"
 #include "uiicons.h"
 
 #include <QApplication>
@@ -15,6 +16,7 @@
 #include <QListWidget>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPropertyAnimation>
 #include <QScreen>
 #include <QSettings>
@@ -54,34 +56,45 @@ ClipboardBubble::ClipboardBubble(QWidget *parent) : QWidget(parent)
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
-    resize(380, 440);
+    setProperty("panelBlurInset", 10);
+    setProperty("panelBlurRadius", 24);
+    resize(372, 444);
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 8);
+    outer->setContentsMargins(10, 10, 10, 10);
     auto *card = new QWidget(this);
     card->setObjectName(QStringLiteral("clipCard"));
     outer->addWidget(card);
 
     FloatingWindow::setPanelStyleSheet(
         card,
-        "QWidget#clipCard { background:@panelTint@; border:1px solid rgba(255,255,255,40); border-radius:20px; }"
-        "QLabel { color:#bac5d4; font-size:12px; background:transparent; }"
-        "QLabel#clipTitle { color:#f5f8fd; font-size:15px; font-weight:600; }"
-        "QCheckBox { color:#dce5f2; font-size:12px; spacing:5px; }"
-        "QLineEdit { background:rgba(10,13,19,170); color:#eef3fb; border:1px solid rgba(255,255,255,28);"
-        "            border-radius:11px; padding:8px 10px; font-size:13px; }"
-        "QListWidget { background:rgba(10,13,19,130); color:#eef3fb; border:1px solid rgba(255,255,255,22);"
-        "              border-radius:14px; padding:4px; outline:0; font-size:13px; }"
-        "QListWidget::item { padding:10px 8px; border-radius:10px; margin:2px 0; }"
-        "QListWidget::item:selected { background:rgba(66,142,240,72); color:#ffffff; }"
-        "QListWidget::item:hover { background:rgba(255,255,255,14); }"
-        "QToolButton { background:rgba(255,255,255,15); color:#f2f6fc; border:1px solid rgba(255,255,255,20);"
-        "              border-radius:12px; padding:6px 10px; font-size:13px; font-weight:500; }"
-        "QToolButton:hover { background:rgba(255,255,255,26); }"
-        "QToolButton:pressed { background:rgba(255,255,255,38); }"
-        "QToolButton#pastePrimary { background:#2a7de1; border:1px solid #59a2ff; color:#ffffff; font-weight:600; }"
-        "QToolButton#pastePrimary:hover { background:#388cf0; }"
-        "QToolButton#clipClose { background:transparent; border:0; border-radius:15px; }");
+        "QWidget#clipCard { background:transparent; border:none; }"
+        "QLabel { color:rgba(226,232,240,195); font-size:12px; background:transparent; }"
+        "QLabel#clipTitle { color:#ffffff; font-size:15px; font-weight:700; }"
+        "QLabel#clipStatus { color:rgba(226,232,240,165); font-size:11px; }"
+        "QCheckBox { color:#e2e8f0; font-size:12px; spacing:6px; }"
+        "QCheckBox::indicator { width:16px; height:16px; border-radius:6px;"
+        "                       border:1px solid rgba(255,255,255,56); background:rgba(255,255,255,16); }"
+        "QCheckBox::indicator:checked { background:rgba(59,130,246,215); border:1px solid rgba(147,197,253,225); }"
+        "QLineEdit { background:rgba(255,255,255,18); color:#ffffff; border:1px solid rgba(255,255,255,28);"
+        "            border-radius:12px; padding:7px 10px; font-size:12.5px; }"
+        "QLineEdit:focus { border:1px solid rgba(125,211,252,185); }"
+        "QListWidget { background:rgba(255,255,255,14); color:#f8fafc; border:1px solid rgba(255,255,255,24);"
+        "              border-radius:16px; padding:4px; outline:0; font-size:12.5px; }"
+        "QListWidget::item { padding:10px 9px; border-radius:11px; margin:2px 0; }"
+        "QListWidget::item:selected { background:rgba(59,130,246,84); color:#ffffff; }"
+        "QListWidget::item:hover { background:rgba(255,255,255,18); }"
+        "QScrollBar:vertical { width:5px; background:transparent; margin:4px 0; }"
+        "QScrollBar::handle:vertical { background:rgba(255,255,255,54); border-radius:2px; min-height:24px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }"
+        "QScrollBar:horizontal { height:0px; background:transparent; }"
+        "QToolButton { background:rgba(255,255,255,20); color:#f8fafc; border:1px solid rgba(255,255,255,28);"
+        "              border-radius:13px; padding:6px 10px; font-size:12.5px; font-weight:600; }"
+        "QToolButton:hover { background:rgba(255,255,255,32); }"
+        "QToolButton:pressed { background:rgba(255,255,255,44); }"
+        "QToolButton#pastePrimary { background:rgba(59,130,246,185); border:1px solid rgba(147,197,253,200); color:#ffffff; font-weight:600; }"
+        "QToolButton#pastePrimary:hover { background:rgba(59,130,246,220); }"
+        "QToolButton#clipClose { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:16px; }");
 
     auto *layout = new QVBoxLayout(card);
     layout->setContentsMargins(14, 12, 14, 12);
@@ -172,6 +185,15 @@ ClipboardBubble::ClipboardBubble(QWidget *parent) : QWidget(parent)
     m_list = new QListWidget(card);
     m_list->setObjectName(QStringLiteral("clipHistoryList"));
     m_list->setIconSize(QSize(56, 40));
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_list->setTextElideMode(Qt::ElideRight);
+    m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    if (auto *ts = TouchScrollController::install(m_list)) {
+        ts->onHorizontalSwipe = [this](int delta) {
+            if (delta < 0) togglePinSelected();
+            else removeSelected();
+        };
+    }
     layout->addWidget(m_list, 1);
 
     // Bottom touch action bar
@@ -193,7 +215,7 @@ ClipboardBubble::ClipboardBubble(QWidget *parent) : QWidget(parent)
     for (QToolButton *b : {copyBtn, pinBtn, delBtn, clearBtn}) bottomRow->addWidget(b);
     layout->addLayout(bottomRow);
 
-    m_status = new QLabel(QStringLiteral("轻点条目复制 · 双击直接贴入当前窗口"), card);
+    m_status = new QLabel(QStringLiteral("上下滑动浏览 · 轻点复制 · 双击粘贴 · 右划置顶 / 左划删除"), card);
     m_status->setObjectName(QStringLiteral("clipStatus"));
     layout->addWidget(m_status);
 
@@ -434,6 +456,12 @@ void ClipboardBubble::addQuickScratch()
     m_internalCopy = false;
     m_scratchEdit->clear();
     m_status->setText(QStringLiteral("✓ 已固定速记并复制到剪贴板"));
+}
+
+void ClipboardBubble::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 24.0);
 }
 
 void ClipboardBubble::keyPressEvent(QKeyEvent *event)

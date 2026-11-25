@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractButton>
+#include <QAbstractScrollArea>
 #include <QEasingCurve>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -14,41 +15,45 @@
 #include <cmath>
 #include <functional>
 
-// Finger-locked 1:1 touch/drag vertical scrolling with smooth iOS-style kinetic
-// momentum AND axis-locked horizontal swipe detection (e.g. swipe left/right to
-// switch AppLauncher categories, or swipe right in a subpage to navigate back).
-// Works cleanly on Wayland touchscreens (via Qt's synthesized mouse events using
-// window-local scenePosition()) as well as direct mouse/trackpad drag, while
-// preventing accidental child button clicks whenever a drag/swipe occurs.
+// Finger-locked 1:1 touch/drag vertical scrolling with smooth kinetic momentum
+// AND axis-locked horizontal swipe detection across any QAbstractScrollArea
+// (QScrollArea, QListWidget) or standalone swipe-back container widget.
+// Uses window-local scenePosition() for Wayland LayerShellQt stability.
 class TouchScrollController final : public QObject
 {
 public:
-    explicit TouchScrollController(QScrollArea *area)
+    explicit TouchScrollController(QAbstractScrollArea *area)
         : QObject(area), m_area(area)
     {
         if (!area) return;
         if (QWidget *vp = area->viewport()) {
             vp->installEventFilter(this);
         }
-        if (QWidget *w = area->widget()) {
-            w->installEventFilter(this);
+        if (auto *sa = qobject_cast<QScrollArea *>(area)) {
+            if (QWidget *w = sa->widget()) {
+                w->installEventFilter(this);
+            }
         }
     }
 
-    // Call on every dynamically added interactive child (e.g. AppGridTile, rowBtn)
-    // so starting a finger swipe directly on top of a button still scrolls/swipes smoothly.
+    explicit TouchScrollController(QWidget *swipeSurface)
+        : QObject(swipeSurface)
+    {
+        if (swipeSurface) swipeSurface->installEventFilter(this);
+    }
+
     void attachWidget(QWidget *child)
     {
         if (!child) return;
         child->installEventFilter(this);
     }
 
-    // Optional horizontal swipe callback:
-    //   delta = +1 -> finger swiped RIGHT-to-LEFT (dx < 0, advance to next tab/category)
-    //   delta = -1 -> finger swiped LEFT-to-RIGHT (dx > 0, go to previous tab / navigate back)
+    // Horizontal swipe callback:
+    //   delta = +1 -> swiped RIGHT-to-LEFT (dx < 0, next tab / delete)
+    //   delta = -1 -> swiped LEFT-to-RIGHT (dx > 0, prev tab / swipe back / pin)
     std::function<void(int delta)> onHorizontalSwipe;
 
-    static TouchScrollController *install(QScrollArea *area)
+    static TouchScrollController *install(QAbstractScrollArea *area)
     {
         if (!area) return nullptr;
         if (auto *existing = static_cast<TouchScrollController *>(
@@ -60,11 +65,19 @@ public:
         return ctrl;
     }
 
+    static TouchScrollController *installSwipeOnly(QWidget *surface, std::function<void(int)> callback)
+    {
+        if (!surface) return nullptr;
+        auto *ctrl = new TouchScrollController(surface);
+        ctrl->setObjectName(QStringLiteral("floatingballTouchSwipeOnly"));
+        ctrl->onHorizontalSwipe = std::move(callback);
+        return ctrl;
+    }
+
 protected:
     bool eventFilter(QObject *watched, QEvent *ev) override
     {
-        if (!m_area) return false;
-        QScrollBar *sb = m_area->verticalScrollBar();
+        QScrollBar *sb = m_area ? m_area->verticalScrollBar() : nullptr;
 
         switch (ev->type()) {
         case QEvent::MouseButtonPress: {
@@ -123,7 +136,7 @@ protected:
             if (m_axis == AxisVertical && sb) {
                 const qreal dt = qMax<qreal>(1.0, m_sampleTimer.elapsed());
                 const qreal stepDy = cur.y() - m_lastPos.y();
-                const qreal instantV = -stepDy / dt; // positive = scroll down
+                const qreal instantV = -stepDy / dt;
                 m_velocityY = m_velocityY * 0.45 + instantV * 0.55;
                 m_lastPos = cur;
                 m_sampleTimer.restart();
@@ -149,7 +162,6 @@ protected:
                 const bool fastFlick = m_sampleTimer.isValid() && m_sampleTimer.elapsed() < 110 &&
                                        std::abs(totalDx) >= 24.0 && std::abs(m_velocityX) >= 0.30;
                 if (onHorizontalSwipe && (std::abs(totalDx) >= 48.0 || fastFlick)) {
-                    // Swipe left (dx < 0) -> next (+1); Swipe right (dx > 0) -> prev (-1)
                     onHorizontalSwipe(totalDx < 0.0 ? 1 : -1);
                 }
                 return true;
@@ -162,7 +174,7 @@ protected:
                     std::abs(m_velocityY) > 0.14) {
                     startMomentum(m_velocityY);
                 }
-                return true; // Swallow release so button never misfires clicked()
+                return true;
             }
             return false;
         }
@@ -180,9 +192,7 @@ private:
 
     void stopMomentum()
     {
-        if (m_momentumAnim) {
-            m_momentumAnim->stop();
-        }
+        if (m_momentumAnim) m_momentumAnim->stop();
     }
 
     void startMomentum(qreal pxPerMs)
@@ -215,7 +225,7 @@ private:
         m_momentumAnim->start();
     }
 
-    QPointer<QScrollArea> m_area;
+    QPointer<QAbstractScrollArea> m_area;
     QVariantAnimation *m_momentumAnim = nullptr;
     QElapsedTimer m_sampleTimer;
     QPointF m_pressPos;

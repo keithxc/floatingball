@@ -133,7 +133,7 @@ protected:
 
         QPainterPath track;
         track.addRoundedRect(r, radius, radius);
-        p.fillPath(track, QColor(255, 255, 255, 14));
+        p.fillPath(track, QColor(255, 255, 255, m_dragging ? 28 : 20));
 
         const qreal frac = isEnabled()
             ? qBound(0.0, qreal(m_value - m_min) / qreal(m_max - m_min), 1.0)
@@ -145,29 +145,42 @@ protected:
             p.save();
             p.setClipPath(track);
             QRectF fillRect(r.left(), fillTop, r.width(), fillH + 1.0);
-            const QColor fill = m_muted ? QColor(148, 163, 184, 96) : m_fillColor;
+            const QColor fill = m_muted ? QColor(148, 163, 184, 108) : m_fillColor;
             p.setPen(Qt::NoPen);
             p.setBrush(fill);
             p.drawRect(fillRect);
             p.restore();
         }
 
-        // Subtle glass rim (tinted rose when muted)
-        p.setPen(QPen(m_muted ? QColor(251, 113, 133, 125) : QColor(255, 255, 255, 26), 1.0));
+        // Optical specular Liquid Glass rim (brightens softly while actively dragging)
+        QLinearGradient rim(r.topLeft(), r.bottomRight());
+        if (m_muted) {
+            rim.setColorAt(0.0, QColor(251, 113, 133, 165));
+            rim.setColorAt(1.0, QColor(251, 113, 133, 95));
+        } else if (m_dragging) {
+            rim.setColorAt(0.0, QColor(255, 255, 255, 160));
+            rim.setColorAt(1.0, QColor(147, 197, 253, 120));
+        } else {
+            rim.setColorAt(0.0, QColor(255, 255, 255, 58));
+            rim.setColorAt(0.5, QColor(255, 255, 255, 18));
+            rim.setColorAt(1.0, QColor(186, 230, 253, 38));
+        }
+        p.setPen(QPen(QBrush(rim), m_dragging ? 1.4 : 1.0));
         p.setBrush(Qt::NoBrush);
         p.drawPath(track);
 
-        // Top numeric / status readout with automatic contrast over fill
+        // Top numeric / status readout (enlarges & highlights during touch drag for blind-drag accuracy)
         if (!m_badgeText.isEmpty()) {
-            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 24.0);
+            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 26.0);
             QFont f = font();
-            f.setPointSize(9);
-            f.setWeight(QFont::DemiBold);
+            f.setPointSize(m_dragging ? 11 : 9);
+            f.setWeight(m_dragging ? QFont::Bold : QFont::DemiBold);
             p.setFont(f);
             p.setPen(m_muted
                          ? QColor("#fda4af")
-                         : (overLightFill ? QColor("#0f172a") : QColor(226, 232, 240, 210)));
-            p.drawText(QRectF(r.left() + 3.0, r.top() + 8.0, r.width() - 6.0, 16.0),
+                         : (overLightFill ? QColor("#0f172a")
+                                          : (m_dragging ? QColor("#ffffff") : QColor(241, 245, 249, 225))));
+            p.drawText(QRectF(r.left() + 2.0, r.top() + 7.0, r.width() - 4.0, 20.0),
                        Qt::AlignCenter, m_badgeText);
         }
 
@@ -199,6 +212,7 @@ protected:
             if (!m_pressedIconZone) {
                 updateFromY(e->position().y());
             }
+            update();
             e->accept();
         }
     }
@@ -224,6 +238,7 @@ protected:
             m_dragging = false;
             m_moved = false;
             m_pressedIconZone = false;
+            update();
             if (shouldToggleIcon) {
                 onIconTapped();
             }
@@ -490,9 +505,25 @@ void styleCircleBadge(QLabel *badge, FloatingIcons::Icon icon, const QColor &bg,
     badge->setFixedSize(size, size);
     badge->setAlignment(Qt::AlignCenter);
     badge->setPixmap(FloatingIcons::make(icon, fg, size - 16).pixmap(size - 16, size - 16));
-    badge->setStyleSheet(QStringLiteral("background:%1; border-radius:%2px; border:none;")
+    badge->setStyleSheet(QStringLiteral("background:%1; border-radius:%2px; border:1px solid rgba(255,255,255,34);")
                              .arg(bg.name(QColor::HexArgb))
                              .arg(size / 2));
+}
+
+void styleCircleOrbBtn(QToolButton *btn, FloatingIcons::Icon icon, const QColor &bg, const QColor &fg,
+                       bool active, int size = 32)
+{
+    if (!btn) return;
+    btn->setFixedSize(size, size);
+    btn->setIcon(FloatingIcons::make(icon, fg, size - 15));
+    btn->setIconSize(QSize(size - 15, size - 15));
+    const QString rim = active ? QStringLiteral("rgba(255,255,255,82)") : QStringLiteral("rgba(255,255,255,34)");
+    btn->setStyleSheet(QStringLiteral(
+                           "QToolButton { background:%1; border-radius:%2px; border:1px solid %3; }"
+                           "QToolButton:hover { border:1px solid rgba(255,255,255,140); }")
+                           .arg(bg.name(QColor::HexArgb))
+                           .arg(size / 2)
+                           .arg(rim));
 }
 
 QString elideText(const QString &text, int maxChars)
@@ -536,7 +567,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     FloatingWindow::setPanelStyleSheet(
         card,
         "QWidget#ccCard { background:transparent; border:none; }"
-        "QWidget#bentoGroup { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:18px; }"
+        "QWidget#bentoGroup { background:rgba(255,255,255,22); border:1px solid rgba(255,255,255,34); border-radius:18px; }"
         "QLabel { color:#e2e8f0; font-size:12px; background:transparent; }"
         "QLabel#ccTitle { color:#ffffff; font-size:14px; font-weight:700; }"
         "QLabel#ccMeta { color:#cbd5e1; font-size:11px; font-weight:600; }"
@@ -746,68 +777,96 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     connCol->setSpacing(2);
 
     auto makeConnRow = [&](const QString &title, const QString &initSub, FloatingIcons::Icon icon,
-                           const QColor &badgeBg, QLabel **outBadge, QLabel **outSub,
-                           bool hasChevron, std::function<void()> onClick) {
-        auto *rowBtn = new QPushButton(connCard);
-        rowBtn->setObjectName(QStringLiteral("connRow"));
-        rowBtn->setCursor(Qt::PointingHandCursor);
-        rowBtn->setMinimumHeight(40);
-        auto *hl = new QHBoxLayout(rowBtn);
-        hl->setContentsMargins(6, 3, 5, 3);
-        hl->setSpacing(8);
+                           const QColor &badgeBg, QToolButton **outBadge, QLabel **outSub,
+                           const QString &orbTip, std::function<void()> onOrbToggle,
+                           std::function<void()> onOpenDetail) {
+        auto *rowHost = new QWidget(connCard);
+        rowHost->setMinimumHeight(40);
+        auto *hl = new QHBoxLayout(rowHost);
+        hl->setContentsMargins(4, 2, 2, 2);
+        hl->setSpacing(6);
 
-        auto *badge = new QLabel(rowBtn);
-        badge->setAttribute(Qt::WA_TransparentForMouseEvents);
-        styleCircleBadge(badge, icon, badgeBg, QColor("#ffffff"), 30);
-        hl->addWidget(badge);
+        // Left circular Liquid Glass orb: direct 1-tap toggle!
+        auto *orbBtn = new QToolButton(rowHost);
+        orbBtn->setCursor(Qt::PointingHandCursor);
+        orbBtn->setToolTip(orbTip);
+        styleCircleOrbBtn(orbBtn, icon, badgeBg, QColor("#ffffff"), false, 32);
+        connect(orbBtn, &QToolButton::clicked, this, [onOrbToggle] { onOrbToggle(); });
+        hl->addWidget(orbBtn);
+
+        // Right text + chevron area: drill smoothly into dedicated detail subpage!
+        auto *detailBtn = new QPushButton(rowHost);
+        detailBtn->setObjectName(QStringLiteral("connRow"));
+        detailBtn->setCursor(Qt::PointingHandCursor);
+        detailBtn->setMinimumHeight(36);
+        auto *dl = new QHBoxLayout(detailBtn);
+        dl->setContentsMargins(4, 2, 4, 2);
+        dl->setSpacing(4);
 
         auto *textCol = new QVBoxLayout();
         textCol->setContentsMargins(0, 0, 0, 0);
         textCol->setSpacing(0);
-        auto *tLbl = new QLabel(title, rowBtn);
+        auto *tLbl = new QLabel(title, detailBtn);
         tLbl->setObjectName(QStringLiteral("rowTitle"));
         tLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-        auto *sLbl = new QLabel(initSub, rowBtn);
+        auto *sLbl = new QLabel(initSub, detailBtn);
         sLbl->setObjectName(QStringLiteral("rowSub"));
         sLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
         textCol->addWidget(tLbl);
         textCol->addWidget(sLbl);
-        hl->addLayout(textCol, 1);
+        dl->addLayout(textCol, 1);
 
-        if (hasChevron) {
-            auto *chev = new QLabel(rowBtn);
-            chev->setPixmap(FloatingIcons::make(FloatingIcons::ChevronRight, QColor("#64748b"), 13).pixmap(13, 13));
-            chev->setAttribute(Qt::WA_TransparentForMouseEvents);
-            hl->addWidget(chev);
-        }
+        auto *chev = new QLabel(detailBtn);
+        chev->setPixmap(FloatingIcons::make(FloatingIcons::ChevronRight, QColor(226, 232, 240, 140), 13).pixmap(13, 13));
+        chev->setAttribute(Qt::WA_TransparentForMouseEvents);
+        dl->addWidget(chev);
 
-        connect(rowBtn, &QPushButton::clicked, this, [onClick] { onClick(); });
-        if (outBadge) *outBadge = badge;
+        connect(detailBtn, &QPushButton::clicked, this, [onOpenDetail] { onOpenDetail(); });
+        hl->addWidget(detailBtn, 1);
+
+        if (outBadge) *outBadge = orbBtn;
         if (outSub) *outSub = sLbl;
-        return rowBtn;
+        return rowHost;
     };
 
     connCol->addWidget(makeConnRow(QStringLiteral("Wi-Fi"), QStringLiteral("检测中…"),
                                    FloatingIcons::Wifi, QColor("#2563eb"),
-                                   &m_homeWifiBadge, &m_homeWifiSub, true,
+                                   &m_homeWifiBadge, &m_homeWifiSub,
+                                   QStringLiteral("点击圆标一键开关 Wi-Fi"),
+                                   [this] { toggleWifiRadio(); },
                                    [this] { showPage(PageWifi); }));
     m_homeWwanRow = makeConnRow(QStringLiteral("4G 网络"), QStringLiteral("已关闭"),
-                                FloatingIcons::Cellular, QColor(255, 255, 255, 26),
-                                &m_homeWwanBadge, &m_homeWwanSub, true,
+                                FloatingIcons::Cellular, QColor(255, 255, 255, 28),
+                                &m_homeWwanBadge, &m_homeWwanSub,
+                                QStringLiteral("点击圆标一键开关 4G 网络"),
+                                [this] { toggleWwanRadio(); },
                                 [this] { showPage(PageCellular); });
     m_homeWwanRow->hide();
     connCol->addWidget(m_homeWwanRow);
     connCol->addWidget(makeConnRow(QStringLiteral("个人热点"), m_hsSsid + QStringLiteral(" · WPA3"),
-                                   FloatingIcons::Hotspot, QColor(255, 255, 255, 26),
-                                   &m_homeHotspotBadge, &m_homeHotspotSub, true,
+                                   FloatingIcons::Hotspot, QColor(255, 255, 255, 28),
+                                   &m_homeHotspotBadge, &m_homeHotspotSub,
+                                   QStringLiteral("点击圆标一键开关个人热点"),
+                                   [this] { toggleHotspot(); },
                                    [this] { showPage(PageHotspot); }));
     connCol->addWidget(makeConnRow(QStringLiteral("蓝牙"), QStringLiteral("检测中…"),
                                    FloatingIcons::Bluetooth, QColor("#3b82f6"),
-                                   &m_homeBtBadge, &m_homeBtSub, true,
+                                   &m_homeBtBadge, &m_homeBtSub,
+                                   QStringLiteral("点击圆标一键开关蓝牙"),
+                                   [this] { toggleBluetoothPower(); },
                                    [this] { showPage(PageBluetooth); }));
-    connCol->addWidget(makeConnRow(QStringLiteral("Mihomo"), QStringLiteral("RULE · 检测中"),
+    connCol->addWidget(makeConnRow(QStringLiteral("Mihomo"), QStringLiteral("规则 · 检测中"),
                                    FloatingIcons::Proxy, QColor("#10b981"),
-                                   &m_homeMhBadge, &m_homeMhSub, true,
+                                   &m_homeMhBadge, &m_homeMhSub,
+                                   QStringLiteral("点击圆标轮切 规则 / 全局 / 直连"),
+                                   [this] {
+                                       const QString next = (m_mhMode == QLatin1String("rule"))
+                                           ? QStringLiteral("global")
+                                           : (m_mhMode == QLatin1String("global")
+                                                  ? QStringLiteral("direct")
+                                                  : QStringLiteral("rule"));
+                                       setMihomoMode(next);
+                                   },
                                    [this] { showPage(PageMihomo); }));
     upper->addWidget(connCard, 168);
 
@@ -1034,6 +1093,9 @@ QWidget *SystemPopover::buildCellularPage(QWidget *parent)
 
     v->addWidget(infoCard);
     v->addStretch(1);
+    if (auto *sw = TouchScrollController::installSwipeOnly(page, [this](int d) { if (d < 0) showPage(PageHome); })) {
+        sw->attachWidget(infoCard);
+    }
     return page;
 }
 
@@ -1348,43 +1410,7 @@ void SystemPopover::hideEvent(QHideEvent *event)
 void SystemPopover::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-
-    // Borderless iPadOS / macOS Liquid Glass edge feathering (smooth alpha gradient
-    // fading outward into the desktop with ZERO hard border line)
-    const QRectF base = QRectF(rect()).adjusted(10.0, 10.0, -10.0, -10.0);
-    struct FeatherStep {
-        qreal expand;
-        int alpha;
-    };
-    static const FeatherStep kFeather[] = {
-        {10.0, 7},
-        {7.5, 13},
-        {5.0, 21},
-        {2.5, 32},
-    };
-    for (const FeatherStep &s : kFeather) {
-        const QRectF hr = base.adjusted(-s.expand, -s.expand, s.expand, s.expand);
-        p.setBrush(QColor(14, 19, 32, s.alpha));
-        p.drawRoundedRect(hr, 26.0 + s.expand * 0.5, 26.0 + s.expand * 0.5);
-    }
-
-    // Translucent frosted glass tint over real Wayland Gaussian blur
-    QLinearGradient glass(base.topLeft(), base.bottomRight());
-    glass.setColorAt(0.0, QColor(36, 46, 70, 126));
-    glass.setColorAt(0.45, QColor(19, 25, 40, 132));
-    glass.setColorAt(1.0, QColor(12, 16, 28, 144));
-    p.setBrush(glass);
-    p.drawRoundedRect(base, 26.0, 26.0);
-
-    // Subtle iPadOS / macOS frosted top-left specular sheen gradient
-    QRadialGradient sheen(base.topLeft() + QPointF(base.width() * 0.25, 0.0), base.width() * 0.9);
-    sheen.setColorAt(0.0, QColor(255, 255, 255, 28));
-    sheen.setColorAt(0.55, QColor(255, 255, 255, 7));
-    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-    p.setBrush(sheen);
-    p.drawRoundedRect(base, 26.0, 26.0);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 26.0);
 }
 
 void SystemPopover::showStatusBanner(const QString &msg, bool isError)
@@ -1577,9 +1603,9 @@ void SystemPopover::syncHomeFromSnapshot()
 
     // Home Wi-Fi row
     const bool wifiOn = !m_cachedWifiSsid.isEmpty() && m_wifiRadioEnabled && !m_hsActive;
-    styleCircleBadge(m_homeWifiBadge, FloatingIcons::Wifi,
-                     wifiOn ? QColor("#2563eb") : QColor(255, 255, 255, 28),
-                     wifiOn ? QColor("#ffffff") : QColor("#94a3b8"), 30);
+    styleCircleOrbBtn(m_homeWifiBadge, FloatingIcons::Wifi,
+                      wifiOn ? QColor("#2563eb") : QColor(255, 255, 255, 28),
+                      wifiOn ? QColor("#ffffff") : QColor("#cbd5e1"), wifiOn, 32);
     if (m_hsActive) {
         m_homeWifiSub->setText(QStringLiteral("热点共享中"));
     } else if (wifiOn) {
@@ -1591,9 +1617,9 @@ void SystemPopover::syncHomeFromSnapshot()
     // Home 4G WWAN row
     if (m_homeWwanRow) {
         m_homeWwanRow->setVisible(m_wwanAvailable);
-        styleCircleBadge(m_homeWwanBadge, FloatingIcons::Cellular,
-                         m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 28),
-                         m_wwanEnabled ? QColor("#ffffff") : QColor("#94a3b8"), 30);
+        styleCircleOrbBtn(m_homeWwanBadge, FloatingIcons::Cellular,
+                          m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 28),
+                          m_wwanEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), m_wwanEnabled, 32);
         if (!m_wwanEnabled) m_homeWwanSub->setText(QStringLiteral("已关闭"));
         else if (m_wwanConnected) {
             const QString tech = m_cellTech.isEmpty() ? QStringLiteral("4G") : m_cellTech;
@@ -1604,9 +1630,9 @@ void SystemPopover::syncHomeFromSnapshot()
     }
 
     // Home Hotspot row
-    styleCircleBadge(m_homeHotspotBadge, FloatingIcons::Hotspot,
-                     m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 28),
-                     m_hsActive ? QColor("#ffffff") : QColor("#94a3b8"), 30);
+    styleCircleOrbBtn(m_homeHotspotBadge, FloatingIcons::Hotspot,
+                      m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 28),
+                      m_hsActive ? QColor("#ffffff") : QColor("#cbd5e1"), m_hsActive, 32);
     if (m_hsActive) {
         const QString sec = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
         const QString sub = m_hsClients.isEmpty()
@@ -1619,18 +1645,19 @@ void SystemPopover::syncHomeFromSnapshot()
 
     // Home Bluetooth row
     const bool btOn = st.bluetoothPowered || m_btPowered;
-    styleCircleBadge(m_homeBtBadge, FloatingIcons::Bluetooth,
-                     btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 28),
-                     btOn ? QColor("#ffffff") : QColor("#94a3b8"), 30);
+    styleCircleOrbBtn(m_homeBtBadge, FloatingIcons::Bluetooth,
+                      btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 28),
+                      btOn ? QColor("#ffffff") : QColor("#cbd5e1"), btOn, 32);
     if (!btOn) m_homeBtSub->setText(QStringLiteral("已关闭"));
     else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 13));
     else m_homeBtSub->setText(QStringLiteral("已开启"));
 
     // Home Mihomo row
     const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 28)
-                        : (m_mhMode == QLatin1String("direct") ? QColor("#f59e0b") : QColor("#10b981"));
-    styleCircleBadge(m_homeMhBadge, FloatingIcons::Proxy, mhBg,
-                     m_mhReachable ? QColor("#ffffff") : QColor("#94a3b8"), 30);
+                        : (m_mhMode == QLatin1String("direct") ? QColor("#f59e0b")
+                           : (m_mhMode == QLatin1String("global") ? QColor("#3b82f6") : QColor("#10b981")));
+    styleCircleOrbBtn(m_homeMhBadge, FloatingIcons::Proxy, mhBg,
+                      m_mhReachable ? QColor("#ffffff") : QColor("#cbd5e1"), m_mhReachable, 32);
     if (m_mhReachable) {
         const QString modeCn = (m_mhMode == QLatin1String("global")) ? QStringLiteral("全局")
                              : (m_mhMode == QLatin1String("direct") ? QStringLiteral("直连") : QStringLiteral("规则"));

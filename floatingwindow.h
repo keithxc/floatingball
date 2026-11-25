@@ -1,4 +1,6 @@
 #pragma once
+class QPainter;
+class QRect;
 class QWidget;
 class QString;
 
@@ -13,4 +15,7 @@ void setPanelStyleSheet(QWidget *widget, const QString &styleTemplate);
 bool panelBlurEnabled();
 bool panelBlurSupported();
 void setPanelBlurEnabled(bool enabled);
+// Paint a 2026 Liquid Glass borderless feathered translucent backdrop with
+// optical specular refraction over the compositor Gaussian blur region.
+void paintLiquidGlass(QPainter &painter, const QRect &widgetRect, double inset = 10.0, double radius = 26.0);
 }

@@ -62,7 +62,7 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("back")) return FloatingIcons::Back;
     if (id == QLatin1String("forward")) return FloatingIcons::Forward;
     if (id == QLatin1String("overview")) return FloatingIcons::Overview;
-    if (id == QLatin1String("desktop")) return FloatingIcons::Desktop;
+    if (id == QLatin1String("desktop") || id == QLatin1String("minimize_all")) return FloatingIcons::Desktop;
     if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return FloatingIcons::Crosshair;
     if (id == QLatin1String("clipboard")) return FloatingIcons::Clipboard;
     if (id == QLatin1String("deck")) return FloatingIcons::Deck;
@@ -228,7 +228,7 @@ void RadialFanOverlay::recomputeFanLayout()
         QList<RadialSlotItem> children;
 
         if (top.key == QLatin1String("windows")) {
-            const QList<DockAppEntry> apps = m_owner->dockModel()->dockApps(12, false, true);
+            const QList<DockAppEntry> apps = m_owner->dockModel()->dockApps(11, false, true);
             for (const DockAppEntry &app : apps) {
                 if (!app.running) continue;
                 RadialSlotItem item;
@@ -240,6 +240,17 @@ void RadialFanOverlay::recomputeFanLayout()
                 item.isBranchItem = true;
                 item.accentColor = app.active ? QColor("#7cc8ff") : QColor("#38bdf8");
                 children.append(item);
+            }
+            // Dedicated true-minimize-all orb right in the Level-2 Windows ring!
+            {
+                RadialSlotItem hideAll;
+                hideAll.kind = RadialSlotItem::ActionSlot;
+                hideAll.id = QStringLiteral("minimize_all");
+                hideAll.label = QStringLiteral("隐藏全部窗口（真正显示桌面）");
+                hideAll.shortLabel = QStringLiteral("全收桌面");
+                hideAll.isBranchItem = true;
+                hideAll.accentColor = QColor("#34d399");
+                children.append(hideAll);
             }
             if (children.isEmpty()) {
                 for (const DockAppEntry &app : apps) {
@@ -344,14 +355,15 @@ void RadialFanOverlay::recomputeFanLayout()
         } else if (top.key == QLatin1String("tools")) {
             struct ToolDef { const char *id; const char *shortLbl; const char *color; };
             static const ToolDef kTools[]{
-                {"crosshair",   "准星截图", "#7cc8ff"},
-                {"clipboard",   "剪贴板",   "#e2e8f0"},
-                {"downloads",   "下载",     "#86e0b8"},
-                {"trash",       "废纸篓",   "#ff9dad"},
-                {"screenshots", "截图库",   "#93c5fd"},
-                {"record",      "录屏",     "#fb7185"},
-                {"back",        "返回",     "#cbd5e1"},
-                {"overview",    "全览",     "#a5b4fc"}
+                {"crosshair",    "准星截图", "#7cc8ff"},
+                {"clipboard",    "剪贴板",   "#e2e8f0"},
+                {"minimize_all", "全收桌面", "#34d399"},
+                {"downloads",    "下载",     "#86e0b8"},
+                {"trash",        "废纸篓",   "#ff9dad"},
+                {"screenshots",  "截图库",   "#93c5fd"},
+                {"record",       "录屏",     "#fb7185"},
+                {"back",         "返回",     "#cbd5e1"},
+                {"overview",     "全览",     "#a5b4fc"}
             };
             for (const ToolDef &td : kTools) {
                 RadialSlotItem item;
@@ -2314,6 +2326,7 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("forward")) return tr("全局前进");
     if (id == QLatin1String("overview")) return tr("多任务全览");
     if (id == QLatin1String("desktop")) return tr("显示桌面");
+    if (id == QLatin1String("minimize_all")) return tr("全收桌面（隐藏所有窗口）");
     if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return tr("准星圈选");
     if (id == QLatin1String("clipboard")) return tr("触控剪贴板");
     if (id == QLatin1String("deck")) return tr("触控甲板");
@@ -2849,7 +2862,7 @@ void FloatingBall::executeSlotItem(const RadialSlotItem &item)
 {
     const QPoint anchor = anchorCenterGlobal().toPoint();
     if (item.kind == RadialSlotItem::AppSlot) {
-        const auto outcome = dockModel()->activateOrLaunch(item.app);
+        const auto outcome = dockModel()->toggleOrActivate(item.app);
         if (!outcome.message.isEmpty())
             DesktopActions::showToast(outcome.message, anchor);
         return;
@@ -3011,6 +3024,7 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("forward")) toastOutcome(DesktopActions::navigateForward());
     else if (id == QLatin1String("overview")) toastOutcome(DesktopActions::showOverview());
     else if (id == QLatin1String("desktop")) toastOutcome(DesktopActions::showDesktop());
+    else if (id == QLatin1String("minimize_all")) toastOutcome(dockModel()->minimizeAllWindows());
     else if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) captureRegion();
     else if (id == QLatin1String("clipboard")) toggleClipboardBubble();
     else if (id == QLatin1String("deck")) toggleQuickDeck();

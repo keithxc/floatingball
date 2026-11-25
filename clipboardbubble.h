@@ -32,6 +32,7 @@ public:
     void setRecordingEnabled(bool enabled);
 
 protected:
+    void paintEvent(QPaintEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 

@@ -16,6 +16,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
+#include <QPropertyAnimation>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -277,7 +278,9 @@ void AppLauncherPopover::reveal(const QPoint &anchorGlobal, bool toggle)
     show();
     raise();
     activateWindow();
-    m_searchEdit->setFocus(Qt::ActiveWindowFocusReason);
+    // Avoid auto-popping touch virtual keyboards; physical typing is captured
+    // seamlessly in keyPressEvent() and forwarded into m_searchEdit.
+    setFocus(Qt::ActiveWindowFocusReason);
 }
 
 void AppLauncherPopover::positionCenteredOnScreen(const QPoint &anchorGlobal)
@@ -296,36 +299,7 @@ void AppLauncherPopover::positionCenteredOnScreen(const QPoint &anchorGlobal)
 void AppLauncherPopover::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-
-    const QRectF base = QRectF(rect()).adjusted(10.0, 10.0, -10.0, -10.0);
-    // Soft feathered outer edge fade (macOS/iPadOS frosted glass, zero hard border)
-    struct FeatherStep { qreal expand; int alpha; };
-    static const FeatherStep kFeather[] = {
-        {10.0, 8}, {7.5, 14}, {5.0, 22}, {2.5, 34}
-    };
-    for (const FeatherStep &s : kFeather) {
-        p.setBrush(QColor(12, 17, 29, s.alpha));
-        p.drawRoundedRect(base.adjusted(-s.expand, -s.expand, s.expand, s.expand),
-                          26.0 + s.expand * 0.5, 26.0 + s.expand * 0.5);
-    }
-
-    // Translucent frosted liquid glass gradient over KWin Gaussian blur
-    QLinearGradient glass(base.topLeft(), base.bottomRight());
-    glass.setColorAt(0.0, QColor(34, 44, 66, 134));
-    glass.setColorAt(0.45, QColor(18, 24, 38, 138));
-    glass.setColorAt(1.0, QColor(12, 16, 28, 150));
-    p.setBrush(glass);
-    p.drawRoundedRect(base, 26.0, 26.0);
-
-    // Subtle top-left iPadOS/macOS specular sheen
-    QRadialGradient sheen(base.topLeft() + QPointF(base.width() * 0.25, 0.0), base.width() * 0.85);
-    sheen.setColorAt(0.0, QColor(255, 255, 255, 22));
-    sheen.setColorAt(0.6, QColor(255, 255, 255, 5));
-    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-    p.setBrush(sheen);
-    p.drawRoundedRect(base, 26.0, 26.0);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 26.0);
 }
 
 void AppLauncherPopover::keyPressEvent(QKeyEvent *event)
@@ -336,6 +310,27 @@ void AppLauncherPopover::keyPressEvent(QKeyEvent *event)
         } else {
             hide();
         }
+        return;
+    }
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        if (!m_filteredApps.isEmpty()) {
+            activateApp(m_filteredApps.first(), (event->modifiers() & Qt::ShiftModifier) != 0);
+            return;
+        }
+    }
+    if (m_searchEdit->text().isEmpty() &&
+        (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right ||
+         event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab)) {
+        const int delta = (event->key() == Qt::Key_Left || event->key() == Qt::Key_Backtab) ? -1 : 1;
+        stepCategory(delta);
+        return;
+    }
+    // Instant physical-keyboard search without requiring an explicit tap on the input box
+    const QString txt = event->text();
+    if (!txt.isEmpty() && txt.at(0).isPrint() &&
+        !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+        m_searchEdit->setFocus(Qt::ActiveWindowFocusReason);
+        m_searchEdit->insert(txt);
         return;
     }
     QWidget::keyPressEvent(event);
@@ -519,6 +514,17 @@ void AppLauncherPopover::stepCategory(int delta)
         m_gridScroll->verticalScrollBar()->setValue(0);
     rebuildCategoryBar();
     applyFilter();
+    if (m_gridScroll && m_gridScroll->widget()) {
+        QWidget *content = m_gridScroll->widget();
+        const QPoint targetPos = content->pos();
+        const QPoint startPos(targetPos.x() + (delta > 0 ? 28 : -28), targetPos.y());
+        auto *slide = new QPropertyAnimation(content, "pos", this);
+        slide->setDuration(145);
+        slide->setStartValue(startPos);
+        slide->setEndValue(targetPos);
+        slide->setEasingCurve(QEasingCurve::OutCubic);
+        slide->start(QAbstractAnimation::DeleteWhenStopped);
+    }
 }
 
 void AppLauncherPopover::applyFilter()
