@@ -352,8 +352,12 @@ void RadialFanOverlay::recomputeFanLayout()
         } else if (top.key == QLatin1String("tools")) {
             struct ToolDef { const char *id; const char *shortLbl; const char *color; };
             static const ToolDef kTools[]{
+#ifdef Q_OS_LINUX
+                {"crosshair",    "截屏/录屏", "#7cc8ff"},
+#else
                 {"crosshair",    "截图",     "#7cc8ff"},
                 {"record",       "录屏",     "#fb7185"},
+#endif
                 {"clipboard",    "剪贴板",   "#e2e8f0"},
                 {"minimize_all", "全收桌面", "#34d399"},
                 {"deck",         "触控甲板", "#60a5fa"},
@@ -686,7 +690,6 @@ void RadialFanOverlay::recomputeFanLayout()
         QStringLiteral("clipboard"),
         QStringLiteral("downloads"),
         QStringLiteral("trash"),
-        QStringLiteral("record"),
         QStringLiteral("back"),
         QStringLiteral("overview"),
         QStringLiteral("ime"),
@@ -2332,7 +2335,11 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("overview")) return tr("多任务全览");
     if (id == QLatin1String("desktop")) return tr("显示桌面");
     if (id == QLatin1String("minimize_all")) return tr("全收桌面（隐藏所有窗口）");
+#ifdef Q_OS_LINUX
+    if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return tr("截屏 / 录屏");
+#else
     if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return tr("区域截图");
+#endif
     if (id == QLatin1String("clipboard")) return tr("触控剪贴板");
     if (id == QLatin1String("deck")) return tr("触控甲板");
     if (id == QLatin1String("paste")) return tr("一键粘贴");
@@ -4123,8 +4130,12 @@ void FloatingBall::initTray()
         const QSignalBlocker b(visibility);
         visibility->setChecked(isVisible());
     });
+#ifdef Q_OS_LINUX
+    menu->addAction(tr("截屏 / 录屏"), this, &FloatingBall::captureRegion);
+#else
     menu->addAction(tr("区域截图"), this, &FloatingBall::captureRegion);
     menu->addAction(tr("屏幕录制"), this, &FloatingBall::recordScreen);
+#endif
     menu->addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
     menu->addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
 
@@ -4202,8 +4213,12 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
     m_menuOpen = true;
     refreshBallOpacity();
     QMenu menu(this);
+#ifdef Q_OS_LINUX
+    menu.addAction(tr("截屏 / 录屏"), this, &FloatingBall::captureRegion);
+#else
     menu.addAction(tr("区域截图"), this, &FloatingBall::captureRegion);
     menu.addAction(tr("屏幕录制"), this, &FloatingBall::recordScreen);
+#endif
     menu.addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
     menu.addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
     menu.addSeparator();

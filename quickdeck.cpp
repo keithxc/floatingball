@@ -249,6 +249,18 @@ QuickDeck::QuickDeck(QWidget *parent) : QWidget(parent)
     auto *utilRow = new QHBoxLayout();
     utilRow->setSpacing(8);
     auto *imeBtn = makeTile(QStringLiteral("切输入法"), FloatingIcons::Globe, "deckIme");
+#ifdef Q_OS_LINUX
+    auto *shotsBtn = makeTile(QStringLiteral("截屏 / 录屏"), FloatingIcons::Crosshair, "deckCapture");
+    auto *deskBtn = makeTile(QStringLiteral("显示桌面"), FloatingIcons::Desktop, "deckDesktop");
+    auto *setBtn = makeTile(QStringLiteral("悬浮球设置"), FloatingIcons::Settings, "deckSettings");
+    for (QToolButton *b : {imeBtn, shotsBtn, deskBtn, setBtn}) utilRow->addWidget(b);
+    layout->addLayout(utilRow);
+
+    connect(imeBtn, &QToolButton::clicked, this, [runAndFeedback] { runAndFeedback(DesktopActions::switchInputMethod, false); });
+    connect(shotsBtn, &QToolButton::clicked, this, [this] { hide(); emit captureRequested(); });
+    connect(deskBtn, &QToolButton::clicked, this, [runAndFeedback] { runAndFeedback(DesktopActions::showDesktop, true); });
+    connect(setBtn, &QToolButton::clicked, this, [this] { hide(); emit settingsRequested(); });
+#else
     auto *shotsBtn = makeTile(QStringLiteral("区域截图"), FloatingIcons::Crosshair, "deckCapture");
     auto *recBtn = makeTile(QStringLiteral("屏幕录制"), FloatingIcons::Record, "deckRecord");
     auto *setBtn = makeTile(QStringLiteral("悬浮球设置"), FloatingIcons::Settings, "deckSettings");
@@ -259,6 +271,7 @@ QuickDeck::QuickDeck(QWidget *parent) : QWidget(parent)
     connect(shotsBtn, &QToolButton::clicked, this, [this] { hide(); emit captureRequested(); });
     connect(recBtn, &QToolButton::clicked, this, [this] { hide(); emit recordRequested(); });
     connect(setBtn, &QToolButton::clicked, this, [this] { hide(); emit settingsRequested(); });
+#endif
 
     FloatingWindow::prepare(this, false);
 }
