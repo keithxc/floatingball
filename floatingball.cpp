@@ -553,7 +553,7 @@ void RadialFanOverlay::recomputeFanLayout()
             {"launcher",  "开始",   "",        "",     "#7cc8ff"},
             {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
             {"tray_hub",  "托盘 ›", "tray",    "托盘", "#66d9ff"},
-            {"sys_hub",   "控制 ›", "control", "控制", "#9aa8ff"},
+            {"sys_hub",   "控制",   "",        "",     "#9aa8ff"},
             {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
         };
         const qreal outerProg = (m_mode == FlickFanMode) ? 1.0 : qBound(0.0, (prog - 0.08) / 0.92, 1.0);
@@ -698,7 +698,7 @@ void RadialFanOverlay::recomputeFanLayout()
             item.isBranchHub = true;
             item.accentColor = QColor("#66d9ff");
         } else if (actId == QLatin1String("sys_hub")) {
-            item.isBranchHub = true;
+            item.isBranchHub = false;
             item.accentColor = QColor("#9aa8ff");
         }
         ring2ActionQueue.append(item);
@@ -951,6 +951,8 @@ QString RadialFanOverlay::activeLabelText() const
             else if (item.id == QLatin1String("sys_dnd") || item.id == QLatin1String("sys_power") ||
                      item.id == QLatin1String("sys_audio"))
                 text += QStringLiteral(" · 右键更多设置");
+        } else if (item.id == QLatin1String("sys_hub")) {
+            text += QStringLiteral(" · 松手/点按打开控制中心 / 右键 KDE 设置");
         } else if (item.isBranchHub) {
             text += QStringLiteral(" · 划入或点按进入");
         } else if (item.id == QLatin1String("launcher")) {
@@ -2804,6 +2806,11 @@ SystemPopover *FloatingBall::systemPopover()
     if (m_primaryPeer) return m_primaryPeer->systemPopover();
     if (!m_systemPopover) {
         m_systemPopover = new SystemPopover(statusMonitor(), nullptr);
+        connect(m_systemPopover, &SystemPopover::audioStateChanged, this, &FloatingBall::setSystemAudioState);
+        connect(m_systemPopover, &SystemPopover::brightnessStateChanged, this, [this](int pct) {
+            if (m_statusMonitor) m_statusMonitor->updateBrightness(pct, true);
+        });
+        connect(m_systemPopover, &SystemPopover::quickDeckRequested, this, &FloatingBall::toggleQuickDeck);
     }
     return m_systemPopover;
 }
@@ -2812,7 +2819,7 @@ void FloatingBall::openSystemPopover(int tab)
 {
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
-    const int clamped = qBound(0, tab, 2);
+    const int clamped = qBound(0, tab, 3);
     systemPopover()->revealTab(static_cast<SystemPopover::Tab>(clamped), anchorCenterGlobal().toPoint());
 }
 
@@ -2911,6 +2918,11 @@ void FloatingBall::showSlotContextMenu(int slotIndex, const QPoint &globalPos)
         statusMonitor()->openKRunner();
         return;
     }
+    if (item.id == QLatin1String("sys_hub")) {
+        closeFan(true);
+        statusMonitor()->openKdeModule(QString());
+        return;
+    }
     if (item.kind != RadialSlotItem::AppSlot) {
         showContextMenu(globalPos);
         return;
@@ -2988,6 +3000,7 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("downloads")) toastOutcome(DesktopActions::openDownloadsFolder());
     else if (id == QLatin1String("trash")) toastOutcome(DesktopActions::openTrash());
     else if (id == QLatin1String("launcher")) statusMonitor()->openAppLauncher();
+    else if (id == QLatin1String("sys_hub")) openSystemPopover(SystemPopover::TabHome);
 }
 
 void FloatingBall::showScreenshots()

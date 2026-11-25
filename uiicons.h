@@ -55,7 +55,15 @@ enum Icon {
     Bolt,
     Lock,
     Power,
-    Proxy
+    Proxy,
+    Sun,
+    Music,
+    MediaPrev,
+    MediaPlay,
+    MediaPause,
+    MediaNext,
+    ChevronRight,
+    ChevronLeft
 };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color)
@@ -431,6 +439,70 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         p.drawEllipse(QPointF(12.0, 12.0), 2.3, 2.3);
         p.restore();
         return;
+    }
+    case Sun: {
+        p.drawEllipse(QPointF(12.0, 12.0), 4.0, 4.0);
+        for (int i = 0; i < 8; ++i) {
+            const qreal a = i * M_PI / 4.0;
+            path.moveTo(12.0 + qCos(a) * 6.4, 12.0 + qSin(a) * 6.4);
+            path.lineTo(12.0 + qCos(a) * 8.9, 12.0 + qSin(a) * 8.9);
+        }
+        break;
+    }
+    case Music: {
+        path.moveTo(9.5, 16.8); path.lineTo(9.5, 6.2); path.lineTo(18.5, 4.5); path.lineTo(18.5, 14.8);
+        p.drawPath(path);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(QPointF(7.3, 17.0), 2.5, 2.0);
+        p.drawEllipse(QPointF(16.3, 15.0), 2.5, 2.0);
+        p.restore();
+        return;
+    }
+    case MediaPrev: {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawRoundedRect(QRectF(5.0, 6.0, 2.4, 12.0), 1.0, 1.0);
+        QPolygonF tri;
+        tri << QPointF(18.2, 6.0) << QPointF(18.2, 18.0) << QPointF(8.6, 12.0);
+        p.drawPolygon(tri);
+        p.restore();
+        return;
+    }
+    case MediaPlay: {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        QPolygonF tri;
+        tri << QPointF(7.5, 5.4) << QPointF(7.5, 18.6) << QPointF(19.0, 12.0);
+        p.drawPolygon(tri);
+        p.restore();
+        return;
+    }
+    case MediaPause: {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawRoundedRect(QRectF(6.5, 5.5, 3.8, 13.0), 1.4, 1.4);
+        p.drawRoundedRect(QRectF(13.7, 5.5, 3.8, 13.0), 1.4, 1.4);
+        p.restore();
+        return;
+    }
+    case MediaNext: {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        QPolygonF tri;
+        tri << QPointF(5.8, 6.0) << QPointF(5.8, 18.0) << QPointF(15.4, 12.0);
+        p.drawPolygon(tri);
+        p.drawRoundedRect(QRectF(16.6, 6.0, 2.4, 12.0), 1.0, 1.0);
+        p.restore();
+        return;
+    }
+    case ChevronRight: {
+        path.moveTo(9.2, 6.0); path.lineTo(15.2, 12.0); path.lineTo(9.2, 18.0);
+        break;
+    }
+    case ChevronLeft: {
+        path.moveTo(14.8, 6.0); path.lineTo(8.8, 12.0); path.lineTo(14.8, 18.0);
+        break;
     }
     }
 

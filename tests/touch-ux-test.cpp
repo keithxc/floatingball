@@ -634,19 +634,11 @@ int main(int argc, char **argv)
         check(ball.orbitSlotGlobalRects().size() == 4 && ball.allOrbitSlotGlobalRects().size() == 9,
               "Linux Duo Orb root displays clean 4 virtual desktops + 5 drill hubs (9 total)");
 #endif
-        ball.fanOverlay()->drillInto(QStringLiteral("control"), QStringLiteral("控制"),
-                                     QColor("#9aa8ff"), QPointF(bounds.center()));
+        ball.fanOverlay()->drillInto(QStringLiteral("tools"), QStringLiteral("工具"),
+                                     QColor("#86e0b8"), QPointF(bounds.center()));
         app.processEvents();
-        check(ball.fanOverlay()->isDrilled() && ball.fanOverlay()->slotsData().size() >= 11,
-              "drilling into Control hub opens clean single ring with ← backtrack orb");
-        bool hasWifi = false, hasBt = false, hasMihomo = false;
-        for (const RadialSlotItem &s : ball.fanOverlay()->slotsData()) {
-            if (s.id == QLatin1String("sys_wifi")) hasWifi = true;
-            else if (s.id == QLatin1String("sys_bluetooth")) hasBt = true;
-            else if (s.id == QLatin1String("sys_mihomo")) hasMihomo = true;
-        }
-        check(hasWifi && hasBt && hasMihomo,
-              "Control ring exposes Wi-Fi, Bluetooth, and Mihomo popover entries");
+        check(ball.fanOverlay()->isDrilled() && ball.fanOverlay()->slotsData().size() >= 9,
+              "drilling into Tools hub opens clean single ring with ← backtrack orb");
         // Wait past anti-bounce cooldown then drag finger onto ← backtrack orb to pop back!
         waitMs(230);
         QPointF backCenter;
@@ -659,15 +651,26 @@ int main(int argc, char **argv)
               "sliding continuously onto ← backtrack orb returns cleanly to root level without releasing");
         ball.closeFan(true);
 
-        // Verify SystemPopover opens cleanly on Wi-Fi / Bluetooth / Mihomo tabs and hides on re-tap
-        ball.openSystemPopover(2);
+        // Verify sys_hub directly reveals macOS/iOS-style Control Center (PageHome)
+        // with inline Wi-Fi / Bluetooth / Mihomo subpages and auto-hiding MPRIS bar
+        ball.executeAction(QStringLiteral("sys_hub"));
         app.processEvents();
-        check(ball.systemPopover() != nullptr && ball.systemPopover()->isVisible(),
-              "SystemPopover reveals cleanly on Mihomo tab");
-        ball.openSystemPopover(2);
+        check(ball.systemPopover() != nullptr && ball.systemPopover()->isVisible() &&
+                  ball.systemPopover()->currentPage() == SystemPopover::PageHome,
+              "sys_hub opens unified Control Center directly on Bento Home page");
+        ball.systemPopover()->showPage(SystemPopover::PageMihomo);
+        app.processEvents();
+        check(ball.systemPopover()->currentPage() == SystemPopover::PageMihomo,
+              "Control Center drills inline into Mihomo subpage");
+        ball.systemPopover()->showPage(SystemPopover::PageHome);
+        ball.systemPopover()->setMprisPreviewForTest(QStringLiteral("Test Track"), QStringLiteral("Test Artist"), true);
+        app.processEvents();
+        check(ball.systemPopover()->currentPage() == SystemPopover::PageHome,
+              "Control Center returns cleanly to Home page with MPRIS preview active");
+        ball.executeAction(QStringLiteral("sys_hub"));
         app.processEvents();
         check(!ball.systemPopover()->isVisible(),
-              "re-tapping active SystemPopover tab toggles it closed");
+              "re-triggering sys_hub toggles Control Center closed");
     }
 
     // Restore original clipboard
