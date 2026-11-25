@@ -658,6 +658,11 @@ int main(int argc, char **argv)
         check(ball.systemPopover() != nullptr && ball.systemPopover()->isVisible() &&
                   ball.systemPopover()->currentPage() == SystemPopover::PageHome,
               "sys_hub opens unified Control Center directly on Bento Home page");
+        ball.systemPopover()->showPage(SystemPopover::PageHotspot);
+        app.processEvents();
+        check(ball.systemPopover()->currentPage() == SystemPopover::PageHotspot &&
+                  !ball.systemPopover()->defaultHotspotSsid().isEmpty(),
+              "Control Center drills inline into Hotspot subpage with hostname default SSID");
         ball.systemPopover()->showPage(SystemPopover::PageMihomo);
         app.processEvents();
         check(ball.systemPopover()->currentPage() == SystemPopover::PageMihomo,

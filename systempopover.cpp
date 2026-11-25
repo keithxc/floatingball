@@ -5,18 +5,22 @@
 #include "uiicons.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QEvent>
+#include <QFile>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHash>
+#include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -25,8 +29,10 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSettings>
@@ -362,7 +368,10 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QPushButton#rowBtn[connected=\"true\"] { background:rgba(56,189,248,34); border:1px solid rgba(125,211,252,135); color:#ffffff; }"
         "QToolButton#footBtn { background:rgba(255,255,255,10); color:#cbd5e1; border:1px solid rgba(255,255,255,18);"
         "                      border-radius:12px; padding:8px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#footBtn:hover { background:rgba(255,255,255,22); color:#ffffff; }");
+        "QToolButton#footBtn:hover { background:rgba(255,255,255,22); color:#ffffff; }"
+        "QLineEdit#hsInput { background:rgba(15,23,42,160); color:#f8fafc; border:1px solid rgba(255,255,255,28);"
+        "                    border-radius:10px; padding:6px 10px; font-size:12.5px; }"
+        "QLineEdit#hsInput:focus { border:1px solid rgba(96,165,250,200); }");
 
     auto *root = new QVBoxLayout(card);
     root->setContentsMargins(14, 12, 14, 14);
@@ -424,10 +433,13 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_statusBanner->hide();
     root->addWidget(m_statusBanner);
 
-    // ---- Stacked Pages (0 = Bento Home, 1 = Wi-Fi, 2 = Bluetooth, 3 = Mihomo) ----
+    loadHotspotPrefs();
+
+    // ---- Stacked Pages (0 = Bento Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo) ----
     m_stack = new QStackedWidget(card);
     m_stack->addWidget(buildHomePage(m_stack));
     m_stack->addWidget(buildWifiPage(m_stack));
+    m_stack->addWidget(buildHotspotPage(m_stack));
     m_stack->addWidget(buildBluetoothPage(m_stack));
     m_stack->addWidget(buildMihomoPage(m_stack));
     root->addWidget(m_stack, 1);
@@ -457,31 +469,31 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     auto *upper = new QHBoxLayout();
     upper->setSpacing(10);
 
-    // Left Bento Card: Wi-Fi / Bluetooth / Mihomo
+    // Left Bento Card: Wi-Fi / Hotspot / Bluetooth / Mihomo
     auto *connCard = new QWidget(page);
     connCard->setObjectName(QStringLiteral("bentoGroup"));
     auto *connCol = new QVBoxLayout(connCard);
-    connCol->setContentsMargins(8, 8, 8, 8);
-    connCol->setSpacing(4);
+    connCol->setContentsMargins(7, 7, 7, 7);
+    connCol->setSpacing(3);
 
     auto makeConnRow = [&](const QString &title, const QString &initSub, FloatingIcons::Icon icon,
                            const QColor &badgeBg, QLabel **outBadge, QLabel **outSub, Page targetPage) {
         auto *rowBtn = new QPushButton(connCard);
         rowBtn->setObjectName(QStringLiteral("connRow"));
         rowBtn->setCursor(Qt::PointingHandCursor);
-        rowBtn->setMinimumHeight(52);
+        rowBtn->setMinimumHeight(44);
         auto *hl = new QHBoxLayout(rowBtn);
-        hl->setContentsMargins(6, 5, 6, 5);
-        hl->setSpacing(9);
+        hl->setContentsMargins(6, 4, 5, 4);
+        hl->setSpacing(8);
 
         auto *badge = new QLabel(rowBtn);
         badge->setAttribute(Qt::WA_TransparentForMouseEvents);
-        styleCircleBadge(badge, icon, badgeBg, QColor("#ffffff"), 34);
+        styleCircleBadge(badge, icon, badgeBg, QColor("#ffffff"), 32);
         hl->addWidget(badge);
 
         auto *textCol = new QVBoxLayout();
         textCol->setContentsMargins(0, 0, 0, 0);
-        textCol->setSpacing(1);
+        textCol->setSpacing(0);
         auto *tLbl = new QLabel(title, rowBtn);
         tLbl->setObjectName(QStringLiteral("rowTitle"));
         tLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -493,7 +505,7 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
         hl->addLayout(textCol, 1);
 
         auto *chev = new QLabel(rowBtn);
-        chev->setPixmap(FloatingIcons::make(FloatingIcons::ChevronRight, QColor("#64748b"), 14).pixmap(14, 14));
+        chev->setPixmap(FloatingIcons::make(FloatingIcons::ChevronRight, QColor("#64748b"), 13).pixmap(13, 13));
         chev->setAttribute(Qt::WA_TransparentForMouseEvents);
         hl->addWidget(chev);
 
@@ -506,6 +518,9 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     connCol->addWidget(makeConnRow(QStringLiteral("Wi-Fi"), QStringLiteral("检测中…"),
                                    FloatingIcons::Wifi, QColor("#2563eb"),
                                    &m_homeWifiBadge, &m_homeWifiSub, PageWifi));
+    connCol->addWidget(makeConnRow(QStringLiteral("个人热点"), m_hsSsid + QStringLiteral(" · WPA3"),
+                                   FloatingIcons::Hotspot, QColor(255, 255, 255, 26),
+                                   &m_homeHotspotBadge, &m_homeHotspotSub, PageHotspot));
     connCol->addWidget(makeConnRow(QStringLiteral("蓝牙"), QStringLiteral("检测中…"),
                                    FloatingIcons::Bluetooth, QColor("#3b82f6"),
                                    &m_homeBtBadge, &m_homeBtSub, PageBluetooth));
@@ -833,6 +848,168 @@ QWidget *SystemPopover::buildWifiPage(QWidget *parent)
     return page;
 }
 
+QWidget *SystemPopover::buildHotspotPage(QWidget *parent)
+{
+    auto *page = new QWidget(parent);
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(9);
+
+    // Top upstream summary + master hotspot switch
+    auto *bar = new QHBoxLayout();
+    bar->setSpacing(8);
+    m_hsSummaryLbl = new QLabel(QStringLiteral("正在检测 4G / 有线上游与 Wi-Fi 网卡…"), page);
+    m_hsSummaryLbl->setObjectName(QStringLiteral("ccSub"));
+    m_hsSummaryLbl->setWordWrap(true);
+    bar->addWidget(m_hsSummaryLbl, 1);
+
+    m_hsPowerBtn = new QToolButton(page);
+    m_hsPowerBtn->setObjectName(QStringLiteral("powerBtn"));
+    m_hsPowerBtn->setText(QStringLiteral("开启热点"));
+    m_hsPowerBtn->setMinimumHeight(34);
+    m_hsPowerBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_hsPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleHotspot);
+    bar->addWidget(m_hsPowerBtn);
+    v->addLayout(bar);
+
+    // Config glass card: SSID, Password (mask/copy), WPA3/WPA2, Band 2.4G/5G
+    auto *cfgCard = new QWidget(page);
+    cfgCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *cv = new QVBoxLayout(cfgCard);
+    cv->setContentsMargins(12, 10, 12, 12);
+    cv->setSpacing(8);
+
+    // SSID row
+    auto *ssidRow = new QHBoxLayout();
+    ssidRow->setSpacing(8);
+    auto *ssidLbl = new QLabel(QStringLiteral("热点名称"), cfgCard);
+    ssidLbl->setObjectName(QStringLiteral("sliderTag"));
+    ssidLbl->setFixedWidth(56);
+    m_hsSsidEdit = new QLineEdit(m_hsSsid, cfgCard);
+    m_hsSsidEdit->setObjectName(QStringLiteral("hsInput"));
+    m_hsSsidEdit->setPlaceholderText(defaultHotspotSsid());
+    ssidRow->addWidget(ssidLbl);
+    ssidRow->addWidget(m_hsSsidEdit, 1);
+    cv->addLayout(ssidRow);
+
+    // Password row + Show/Hide + Copy
+    auto *passRow = new QHBoxLayout();
+    passRow->setSpacing(6);
+    auto *passLbl = new QLabel(QStringLiteral("连接密码"), cfgCard);
+    passLbl->setObjectName(QStringLiteral("sliderTag"));
+    passLbl->setFixedWidth(56);
+    m_hsPassEdit = new QLineEdit(m_hsPassword, cfgCard);
+    m_hsPassEdit->setObjectName(QStringLiteral("hsInput"));
+    m_hsPassEdit->setEchoMode(QLineEdit::Password);
+    m_hsPassEdit->setPlaceholderText(QStringLiteral("至少 8 位密码"));
+    passRow->addWidget(passLbl);
+    passRow->addWidget(m_hsPassEdit, 1);
+
+    m_hsEyeBtn = new QToolButton(cfgCard);
+    m_hsEyeBtn->setObjectName(QStringLiteral("tabBtn"));
+    m_hsEyeBtn->setText(QStringLiteral("显示"));
+    m_hsEyeBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_hsEyeBtn, &QToolButton::clicked, this, [this] {
+        const bool hidden = (m_hsPassEdit->echoMode() == QLineEdit::Password);
+        m_hsPassEdit->setEchoMode(hidden ? QLineEdit::Normal : QLineEdit::Password);
+        m_hsEyeBtn->setText(hidden ? QStringLiteral("隐藏") : QStringLiteral("显示"));
+    });
+    passRow->addWidget(m_hsEyeBtn);
+
+    auto *copyBtn = new QToolButton(cfgCard);
+    copyBtn->setObjectName(QStringLiteral("tabBtn"));
+    copyBtn->setText(QStringLiteral("复制"));
+    copyBtn->setCursor(Qt::PointingHandCursor);
+    connect(copyBtn, &QToolButton::clicked, this, [this] {
+        const QString psk = m_hsPassEdit->text();
+        if (psk.isEmpty()) return;
+        if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(psk);
+        showStatusBanner(QStringLiteral("✓ 已复制热点密码"));
+    });
+    passRow->addWidget(copyBtn);
+    cv->addLayout(passRow);
+
+    // Security pills: WPA3 (default) vs WPA2 compat
+    auto *secRow = new QHBoxLayout();
+    secRow->setSpacing(6);
+    auto *secLbl = new QLabel(QStringLiteral("加密协议"), cfgCard);
+    secLbl->setObjectName(QStringLiteral("sliderTag"));
+    secLbl->setFixedWidth(56);
+    secRow->addWidget(secLbl);
+    static const char *kSecLabels[2]{"WPA3 (推荐)", "WPA2 兼容"};
+    for (int i = 0; i < 2; ++i) {
+        auto *b = new QToolButton(cfgCard);
+        b->setObjectName(QStringLiteral("modeBtn"));
+        b->setText(QString::fromUtf8(kSecLabels[i]));
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        b->setMinimumHeight(30);
+        b->setCursor(Qt::PointingHandCursor);
+        const bool wantWpa3 = (i == 0);
+        connect(b, &QToolButton::clicked, this, [this, wantWpa3] {
+            if (m_hsUseWpa3 == wantWpa3) return;
+            m_hsUseWpa3 = wantWpa3;
+            saveHotspotPrefs();
+            rebuildHotspotView();
+            if (m_hsActive) applyHotspotConfig(true);
+        });
+        secRow->addWidget(b);
+        m_hsSecBtns[i] = b;
+    }
+    cv->addLayout(secRow);
+
+    // Band pills: 2.4GHz (default rock-solid) vs 5GHz
+    auto *bandRow = new QHBoxLayout();
+    bandRow->setSpacing(6);
+    auto *bandLbl = new QLabel(QStringLiteral("无线频段"), cfgCard);
+    bandLbl->setObjectName(QStringLiteral("sliderTag"));
+    bandLbl->setFixedWidth(56);
+    bandRow->addWidget(bandLbl);
+    static const char *kBandLabels[2]{"2.4 GHz (稳)", "5 GHz"};
+    for (int i = 0; i < 2; ++i) {
+        auto *b = new QToolButton(cfgCard);
+        b->setObjectName(QStringLiteral("modeBtn"));
+        b->setText(QString::fromUtf8(kBandLabels[i]));
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        b->setMinimumHeight(30);
+        b->setCursor(Qt::PointingHandCursor);
+        const bool want5g = (i == 1);
+        connect(b, &QToolButton::clicked, this, [this, want5g] {
+            if (m_hsBand5G == want5g) return;
+            m_hsBand5G = want5g;
+            saveHotspotPrefs();
+            rebuildHotspotView();
+            if (m_hsActive) applyHotspotConfig(true);
+        });
+        bandRow->addWidget(b);
+        m_hsBandBtns[i] = b;
+    }
+    cv->addLayout(bandRow);
+
+    // Apply button (saves SSID/Password and restarts AP if active)
+    auto *applyBtn = new QToolButton(cfgCard);
+    applyBtn->setObjectName(QStringLiteral("footBtn"));
+    applyBtn->setText(QStringLiteral("保存热点配置"));
+    applyBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    applyBtn->setMinimumHeight(32);
+    applyBtn->setCursor(Qt::PointingHandCursor);
+    connect(applyBtn, &QToolButton::clicked, this, [this] { applyHotspotConfig(m_hsActive); });
+    cv->addWidget(applyBtn);
+
+    v->addWidget(cfgCard);
+
+    // Connected hotspot clients list
+    auto *cliTag = new QLabel(QStringLiteral("已接入热点的设备"), page);
+    cliTag->setObjectName(QStringLiteral("sliderTag"));
+    v->addWidget(cliTag);
+
+    auto *scroll = makeTouchScrollArea(page, &m_hsClientsLayout);
+    scroll->setMinimumHeight(110);
+    v->addWidget(scroll, 1);
+
+    rebuildHotspotView();
+    return page;
+}
+
 QWidget *SystemPopover::buildBluetoothPage(QWidget *parent)
 {
     auto *page = new QWidget(parent);
@@ -1017,7 +1194,7 @@ void SystemPopover::revealHome(const QPoint &anchorGlobal, bool toggle)
 
 void SystemPopover::revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle)
 {
-    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), 3));
+    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), 4));
     if (isVisible() && toggle && m_currentPage == target) {
         hide();
         return;
@@ -1046,6 +1223,7 @@ void SystemPopover::syncHeaderForPage()
     m_metaLbl->setVisible(isHome);
     if (m_currentPage == PageHome) m_titleLbl->setText(QStringLiteral("控制中心"));
     else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi 网络"));
+    else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
     else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙设备"));
     else m_titleLbl->setText(QStringLiteral("Mihomo 代理"));
 }
@@ -1057,12 +1235,15 @@ void SystemPopover::refreshCurrentPage()
         syncVolume();
         syncBrightness();
         refreshMpris();
-        // Prefetch lightweight connectivity summaries so all 3 Bento rows stay live!
+        // Prefetch lightweight connectivity summaries so all 4 Bento rows stay live!
         refreshWifi(false);
+        refreshHotspot();
         refreshBluetooth();
         refreshMihomo();
     } else if (m_currentPage == PageWifi) {
         refreshWifi(false);
+    } else if (m_currentPage == PageHotspot) {
+        refreshHotspot();
     } else if (m_currentPage == PageBluetooth) {
         refreshBluetooth();
     } else {
@@ -1087,30 +1268,48 @@ void SystemPopover::syncHomeFromSnapshot()
     // Home Wi-Fi row
     const bool wifiOn = st.networkConnected || m_wifiRadioEnabled;
     styleCircleBadge(m_homeWifiBadge, FloatingIcons::Wifi,
-                     st.networkConnected ? QColor("#2563eb") : QColor(255, 255, 255, 26),
-                     st.networkConnected ? QColor("#ffffff") : QColor("#94a3b8"), 34);
-    if (!m_cachedWifiSsid.isEmpty() && m_wifiRadioEnabled) {
-        m_homeWifiSub->setText(elideText(QStringLiteral("%1 · %2%").arg(m_cachedWifiSsid).arg(m_cachedWifiSignal), 18));
+                     (st.networkConnected && !m_hsActive) ? QColor("#2563eb") : QColor(255, 255, 255, 26),
+                     (st.networkConnected && !m_hsActive) ? QColor("#ffffff") : QColor("#94a3b8"), 32);
+    if (m_hsActive) {
+        m_homeWifiSub->setText(QStringLiteral("热点共享中"));
+    } else if (!m_cachedWifiSsid.isEmpty() && m_wifiRadioEnabled) {
+        m_homeWifiSub->setText(elideText(QStringLiteral("%1 · %2%").arg(m_cachedWifiSsid).arg(m_cachedWifiSignal), 13));
     } else if (st.networkConnected) {
-        m_homeWifiSub->setText(elideText(st.networkText.isEmpty() ? QStringLiteral("已连接") : st.networkText, 18));
+        m_homeWifiSub->setText(elideText(st.networkText.isEmpty() ? QStringLiteral("已连接") : st.networkText, 13));
     } else {
         m_homeWifiSub->setText(wifiOn ? QStringLiteral("未连接") : QStringLiteral("已关闭"));
+    }
+
+    // Home Hotspot row
+    styleCircleBadge(m_homeHotspotBadge, FloatingIcons::Hotspot,
+                     m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 26),
+                     m_hsActive ? QColor("#ffffff") : QColor("#94a3b8"), 32);
+    if (m_hsActive) {
+        const QString sec = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
+        const QString sub = m_hsClients.isEmpty()
+            ? QStringLiteral("%1 · %2").arg(m_hsSsid, sec)
+            : QStringLiteral("%1 · %2台").arg(m_hsSsid).arg(m_hsClients.size());
+        m_homeHotspotSub->setText(elideText(sub, 13));
+    } else if (m_hsHasUpstream) {
+        m_homeHotspotSub->setText(elideText(QStringLiteral("%1 · 可共享").arg(m_hsSsid), 13));
+    } else {
+        m_homeHotspotSub->setText(QStringLiteral("已关闭"));
     }
 
     // Home Bluetooth row
     const bool btOn = st.bluetoothPowered || m_btPowered;
     styleCircleBadge(m_homeBtBadge, FloatingIcons::Bluetooth,
                      btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 26),
-                     btOn ? QColor("#ffffff") : QColor("#94a3b8"), 34);
+                     btOn ? QColor("#ffffff") : QColor("#94a3b8"), 32);
     if (!btOn) m_homeBtSub->setText(QStringLiteral("已关闭"));
-    else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 18));
+    else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 13));
     else m_homeBtSub->setText(QStringLiteral("已开启"));
 
     // Home Mihomo row
     const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 26)
                         : (m_mhMode == QLatin1String("direct") ? QColor("#f59e0b") : QColor("#10b981"));
     styleCircleBadge(m_homeMhBadge, FloatingIcons::Proxy, mhBg,
-                     m_mhReachable ? QColor("#ffffff") : QColor("#94a3b8"), 34);
+                     m_mhReachable ? QColor("#ffffff") : QColor("#94a3b8"), 32);
     if (m_mhReachable) {
         const QString tunTxt = m_mhTunEnabled ? QStringLiteral("TUN 开") : QStringLiteral("无TUN");
         m_homeMhSub->setText(QStringLiteral("%1 · %2").arg(m_mhMode.toUpper(), tunTxt));
@@ -2020,4 +2219,379 @@ void SystemPopover::testMihomoGroupDelay(const QString &group)
             self->showStatusBanner(QStringLiteral("测速超时或失败"), true);
         }
     });
+}
+
+// ============================================================================
+// Personal Hotspot Implementation (NM AP shared mode: WPA3-SAE + 4G/Ethernet)
+// ============================================================================
+
+QString SystemPopover::defaultHotspotSsid() const
+{
+    QString host = QHostInfo::localHostName().section(QLatin1Char('.'), 0, 0).trimmed();
+    if (host.isEmpty()) host = QStringLiteral("Hotspot");
+    return host;
+}
+
+void SystemPopover::loadHotspotPrefs()
+{
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    m_hsSsid = s.value(QStringLiteral("hotspot/ssid"), defaultHotspotSsid()).toString().trimmed();
+    if (m_hsSsid.isEmpty()) m_hsSsid = defaultHotspotSsid();
+    m_hsPassword = s.value(QStringLiteral("hotspot/password")).toString();
+    if (m_hsPassword.size() < 8) {
+        // Auto-generate an unambiguous 10-character passphrase on first run (never hardcoded)
+        static const QString kAlphabet = QStringLiteral("abcdefghjkmnpqrstuvwxyz23456789ABCDEFGHJKLMNPQRSTUVWXYZ");
+        QString gen;
+        gen.reserve(10);
+        for (int i = 0; i < 10; ++i) {
+            gen.append(kAlphabet.at(QRandomGenerator::system()->bounded(kAlphabet.size())));
+        }
+        m_hsPassword = gen;
+        s.setValue(QStringLiteral("hotspot/password"), m_hsPassword);
+    }
+    m_hsUseWpa3 = s.value(QStringLiteral("hotspot/wpa3"), true).toBool();
+    m_hsBand5G = s.value(QStringLiteral("hotspot/band5g"), false).toBool();
+}
+
+void SystemPopover::saveHotspotPrefs()
+{
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    s.setValue(QStringLiteral("hotspot/ssid"), m_hsSsid);
+    s.setValue(QStringLiteral("hotspot/password"), m_hsPassword);
+    s.setValue(QStringLiteral("hotspot/wpa3"), m_hsUseWpa3);
+    s.setValue(QStringLiteral("hotspot/band5g"), m_hsBand5G);
+}
+
+void SystemPopover::refreshHotspot()
+{
+#ifdef Q_OS_LINUX
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) {
+        if (m_hsSummaryLbl) m_hsSummaryLbl->setText(QStringLiteral("未找到 nmcli"));
+        return;
+    }
+
+    auto *proc = new QProcess(this);
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc](int, QProcess::ExitStatus) {
+        const QString out = QString::fromUtf8(proc->readAllStandardOutput());
+        proc->deleteLater();
+        if (!self) return;
+
+        QString wifiDev;
+        QString wifiActiveCon;
+        QStringList upstreams;
+        bool apActive = false;
+        QString apSsid;
+        QHash<QString, QString> macToHost;
+        QList<HotspotClient> clients;
+
+        int section = 0;
+        for (const QString &raw : out.split(QLatin1Char('\n'))) {
+            const QString line = raw.trimmed();
+            if (line == QLatin1String("---AP---")) { section = 1; continue; }
+            if (line == QLatin1String("---LEASES---")) { section = 2; continue; }
+            if (line == QLatin1String("---NEIGH---")) { section = 3; continue; }
+            if (line.isEmpty()) continue;
+
+            if (section == 0) {
+                // DEVICE:TYPE:STATE:CONNECTION
+                const QStringList p = line.split(QLatin1Char(':'));
+                if (p.size() < 4) continue;
+                const QString dev = p[0];
+                const QString type = p[1];
+                const QString state = p[2];
+                const QString con = p.mid(3).join(QLatin1Char(':'));
+                if (type == QLatin1String("wifi") && wifiDev.isEmpty()) {
+                    wifiDev = dev;
+                    if (state == QLatin1String("connected")) wifiActiveCon = con;
+                } else if (type == QLatin1String("gsm") && state == QLatin1String("connected")) {
+                    upstreams.append(QStringLiteral("4G (%1)").arg(dev));
+                } else if (type == QLatin1String("ethernet") && state == QLatin1String("connected")) {
+                    upstreams.append(QStringLiteral("有线 (%1)").arg(dev));
+                }
+            } else if (section == 1) {
+                if (line.startsWith(QLatin1String("MODE="))) {
+                    apActive = (line.mid(5).trimmed() == QLatin1String("ap"));
+                } else if (line.startsWith(QLatin1String("SSID="))) {
+                    apSsid = line.mid(5).trimmed();
+                }
+            } else if (section == 2) {
+                // dnsmasq lease: <ts> <mac> <ip> <hostname> <clientid>
+                const QStringList p = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                if (p.size() >= 4) {
+                    const QString mac = p[1].toLower();
+                    const QString host = (p[3] == QLatin1String("*")) ? QString() : p[3];
+                    if (!host.isEmpty()) macToHost.insert(mac, host);
+                }
+            } else if (section == 3) {
+                // ip -4 neigh show dev <dev>: <ip> lladdr <mac> <STATE>
+                const QStringList p = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                if (p.size() >= 4 && p[1] == QLatin1String("lladdr")) {
+                    const QString state = p.last().toUpper();
+                    if (state == QLatin1String("FAILED") || state == QLatin1String("INCOMPLETE"))
+                        continue;
+                    HotspotClient c;
+                    c.ip = p[0];
+                    c.mac = p[2].toLower();
+                    c.host = macToHost.value(c.mac);
+                    clients.append(c);
+                }
+            }
+        }
+
+        self->m_hsWifiDev = wifiDev;
+        self->m_hsHasUpstream = !upstreams.isEmpty();
+        self->m_hsUpstreamSummary = upstreams.join(QStringLiteral(" + "));
+        self->m_hsActive = apActive;
+        if (apActive && !apSsid.isEmpty()) self->m_hsSsid = apSsid;
+        self->m_hsClients = apActive ? clients : QList<HotspotClient>{};
+        self->rebuildHotspotView();
+        self->syncHomeFromSnapshot();
+    });
+
+    proc->start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"),
+                 QStringLiteral(
+                     "nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status; "
+                     "WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
+                     "ACTIVE_CON=$(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status | awk -F: '$2==\"wifi\" && $3==\"connected\"{print $4; exit}'); "
+                     "echo '---AP---'; "
+                     "if [ -n \"$ACTIVE_CON\" ]; then "
+                     "  echo \"MODE=$(nmcli -g 802-11-wireless.mode connection show \"$ACTIVE_CON\" 2>/dev/null)\"; "
+                     "  echo \"SSID=$(nmcli -g 802-11-wireless.ssid connection show \"$ACTIVE_CON\" 2>/dev/null)\"; "
+                     "fi; "
+                     "echo '---LEASES---'; "
+                     "[ -n \"$WIFI_DEV\" ] && [ -r \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" ] && cat \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" || true; "
+                     "echo '---NEIGH---'; "
+                     "[ -n \"$WIFI_DEV\" ] && ip -4 neigh show dev \"$WIFI_DEV\" 2>/dev/null || true")});
+#endif
+}
+
+void SystemPopover::rebuildHotspotView()
+{
+    if (!m_hsPowerBtn || !m_hsSummaryLbl) return;
+
+    m_hsPowerBtn->setEnabled(!m_hsBusy);
+    if (m_hsBusy) {
+        m_hsPowerBtn->setText(m_hsActive ? QStringLiteral("关闭中…") : QStringLiteral("启动中…"));
+    } else {
+        m_hsPowerBtn->setText(m_hsActive ? QStringLiteral("热点已开") : QStringLiteral("开启热点"));
+    }
+    m_hsPowerBtn->setProperty("on", m_hsActive);
+    repolish(m_hsPowerBtn);
+
+    const QString secTxt = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
+    const QString bandTxt = m_hsBand5G ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz");
+    QString summary;
+    if (m_hsActive) {
+        summary = QStringLiteral("运行中 · %1 (%2 / %3)").arg(m_hsSsid, secTxt, bandTxt);
+        if (m_hsHasUpstream) summary += QStringLiteral("\n共享上游: %1").arg(m_hsUpstreamSummary);
+    } else if (m_hsHasUpstream) {
+        summary = QStringLiteral("就绪 · 共享上游: %1").arg(m_hsUpstreamSummary);
+    } else {
+        summary = QStringLiteral("当前未检测到 4G 或有线上游（仍可开启本地热点）");
+    }
+    m_hsSummaryLbl->setText(summary);
+
+    if (m_hsSsidEdit && !m_hsSsidEdit->hasFocus()) m_hsSsidEdit->setText(m_hsSsid);
+    if (m_hsPassEdit && !m_hsPassEdit->hasFocus()) m_hsPassEdit->setText(m_hsPassword);
+
+    if (m_hsSecBtns[0] && m_hsSecBtns[1]) {
+        m_hsSecBtns[0]->setProperty("active", m_hsUseWpa3);
+        m_hsSecBtns[1]->setProperty("active", !m_hsUseWpa3);
+        repolish(m_hsSecBtns[0]);
+        repolish(m_hsSecBtns[1]);
+    }
+    if (m_hsBandBtns[0] && m_hsBandBtns[1]) {
+        m_hsBandBtns[0]->setProperty("active", !m_hsBand5G);
+        m_hsBandBtns[1]->setProperty("active", m_hsBand5G);
+        repolish(m_hsBandBtns[0]);
+        repolish(m_hsBandBtns[1]);
+    }
+
+    clearLayout(m_hsClientsLayout);
+    if (!m_hsActive) {
+        auto *lbl = new QLabel(QStringLiteral("开启热点后，接入设备（4G/有线经 Mihomo 分流）将显示在这里"), this);
+        lbl->setWordWrap(true);
+        lbl->setAlignment(Qt::AlignCenter);
+        m_hsClientsLayout->addWidget(lbl);
+        m_hsClientsLayout->addStretch(1);
+        return;
+    }
+    if (m_hsClients.isEmpty()) {
+        auto *lbl = new QLabel(QStringLiteral("热点已广播（10.42.0.1/24），等待设备接入…"), this);
+        lbl->setAlignment(Qt::AlignCenter);
+        m_hsClientsLayout->addWidget(lbl);
+        m_hsClientsLayout->addStretch(1);
+        return;
+    }
+    for (const HotspotClient &c : m_hsClients) {
+        auto *row = new QPushButton(this);
+        row->setObjectName(QStringLiteral("rowBtn"));
+        row->setProperty("connected", true);
+        row->setMinimumHeight(40);
+        const QString title = c.host.isEmpty() ? c.ip : QStringLiteral("%1 (%2)").arg(c.host, c.ip);
+        row->setText(QStringLiteral("📱 %1   [%2]").arg(title, c.mac));
+        connect(row, &QPushButton::clicked, this, [this, c] {
+            if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(c.ip);
+            showStatusBanner(QStringLiteral("✓ 已复制设备 IP: %1").arg(c.ip));
+        });
+        m_hsClientsLayout->addWidget(row);
+    }
+    m_hsClientsLayout->addStretch(1);
+}
+
+void SystemPopover::applyHotspotConfig(bool restartIfActive)
+{
+    const QString nextSsid = m_hsSsidEdit ? m_hsSsidEdit->text().trimmed() : m_hsSsid;
+    const QString nextPass = m_hsPassEdit ? m_hsPassEdit->text() : m_hsPassword;
+    if (nextSsid.isEmpty()) {
+        showStatusBanner(QStringLiteral("热点名称不能为空"), true);
+        return;
+    }
+    if (nextPass.size() < 8) {
+        showStatusBanner(QStringLiteral("WPA2/WPA3 密码至少需要 8 位"), true);
+        return;
+    }
+    m_hsSsid = nextSsid;
+    m_hsPassword = nextPass;
+    saveHotspotPrefs();
+    syncHomeFromSnapshot();
+    if (restartIfActive) {
+        startHotspotAsync();
+    } else {
+        showStatusBanner(QStringLiteral("✓ 热点配置已保存（%1 · %2）")
+                             .arg(m_hsSsid, m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2")));
+        rebuildHotspotView();
+    }
+}
+
+void SystemPopover::toggleHotspot()
+{
+    if (m_hsBusy) return;
+    if (m_hsActive) {
+        stopHotspotAsync();
+    } else {
+        // Persist any unsaved SSID/password edits before starting
+        const QString editSsid = m_hsSsidEdit ? m_hsSsidEdit->text().trimmed() : m_hsSsid;
+        const QString editPass = m_hsPassEdit ? m_hsPassEdit->text() : m_hsPassword;
+        if (!editSsid.isEmpty()) m_hsSsid = editSsid;
+        if (editPass.size() < 8) {
+            showStatusBanner(QStringLiteral("请先设置至少 8 位热点密码"), true);
+            return;
+        }
+        m_hsPassword = editPass;
+        saveHotspotPrefs();
+        startHotspotAsync();
+    }
+}
+
+void SystemPopover::startHotspotAsync()
+{
+#ifdef Q_OS_LINUX
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) {
+        showStatusBanner(QStringLiteral("未找到 nmcli"), true);
+        return;
+    }
+    m_hsBusy = true;
+    rebuildHotspotView();
+    showStatusBanner(QStringLiteral("正在启动 %1 热点 (%2)…")
+                         .arg(m_hsSsid, m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2")));
+
+    auto *proc = new QProcess(this);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("FB_HS_CON"), QStringLiteral("FloatingBall-Hotspot"));
+    env.insert(QStringLiteral("FB_HS_SSID"), m_hsSsid);
+    env.insert(QStringLiteral("FB_HS_PSK"), m_hsPassword);
+    env.insert(QStringLiteral("FB_HS_BAND"), m_hsBand5G ? QStringLiteral("a") : QStringLiteral("bg"));
+    env.insert(QStringLiteral("FB_HS_SEC"), m_hsUseWpa3 ? QStringLiteral("sae") : QStringLiteral("wpa-psk"));
+    proc->setProcessEnvironment(env);
+
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc](int code, QProcess::ExitStatus st) {
+        const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
+        const QString out = QString::fromUtf8(proc->readAllStandardOutput()).trimmed();
+        proc->deleteLater();
+        if (!self) return;
+        self->m_hsBusy = false;
+        if (st == QProcess::NormalExit && code == 0) {
+            self->m_hsActive = true;
+            self->showStatusBanner(QStringLiteral("✓ 热点已开启 · %1 (%2)")
+                                       .arg(self->m_hsSsid, self->m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2")));
+        } else {
+            QString msg = err.isEmpty() ? out : err;
+            if (msg.size() > 80) msg = msg.left(80) + QStringLiteral("…");
+            self->showStatusBanner(QStringLiteral("开启热点失败: %1").arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡/频段") : msg), true);
+        }
+        self->refreshHotspot();
+        self->refreshWifi(false);
+    });
+
+    // Safe env-driven NM WPA3-SAE / WPA2-PSK shared AP startup:
+    // Enables Wi-Fi radio if off, waits for device readiness, recreates profile cleanly
+    // with mandatory RSN/CCMP/PMF=3 for WPA3-SAE, and activates shared 10.42.0.1/24 AP.
+    proc->start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"),
+                 QStringLiteral(
+                     "set -e; "
+                     "if [ \"$(nmcli radio wifi)\" != \"enabled\" ]; then "
+                     "  nmcli radio wifi on; sleep 1.2; "
+                     "fi; "
+                     "WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
+                     "if [ -z \"$WIFI_DEV\" ]; then echo '未找到可用 Wi-Fi 网卡' >&2; exit 2; fi; "
+                     "nmcli connection down \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
+                     "nmcli connection delete \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
+                     "if [ \"$FB_HS_SEC\" = \"sae\" ]; then "
+                     "  nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
+                     "    ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$FB_HS_BAND\" "
+                     "    ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
+                     "    wifi-sec.key-mgmt sae wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.pmf 3 "
+                     "    wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
+                     "else "
+                     "  nmcli connection add type wifi ifname \"$WIFI_DEV\" con-name \"$FB_HS_CON\" autoconnect no "
+                     "    ssid \"$FB_HS_SSID\" 802-11-wireless.mode ap 802-11-wireless.band \"$FB_HS_BAND\" "
+                     "    ipv4.method shared ipv4.addresses 10.42.0.1/24 ipv6.method ignore "
+                     "    wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp "
+                     "    wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
+                     "fi; "
+                     "nmcli connection up \"$FB_HS_CON\"")});
+#endif
+}
+
+void SystemPopover::stopHotspotAsync()
+{
+#ifdef Q_OS_LINUX
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) return;
+    m_hsBusy = true;
+    rebuildHotspotView();
+    showStatusBanner(QStringLiteral("正在关闭热点…"));
+
+    auto *proc = new QProcess(this);
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc](int, QProcess::ExitStatus) {
+        proc->deleteLater();
+        if (!self) return;
+        self->m_hsBusy = false;
+        self->m_hsActive = false;
+        self->showStatusBanner(QStringLiteral("✓ 热点已关闭"));
+        self->refreshHotspot();
+        self->refreshWifi(false);
+    });
+    proc->start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"),
+                 QStringLiteral(
+                     "ACTIVE_CON=$(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status | awk -F: '$2==\"wifi\" && $3==\"connected\"{print $4; exit}'); "
+                     "if [ -n \"$ACTIVE_CON\" ] && [ \"$(nmcli -g 802-11-wireless.mode connection show \"$ACTIVE_CON\" 2>/dev/null)\" = \"ap\" ]; then "
+                     "  nmcli connection down \"$ACTIVE_CON\" >/dev/null 2>&1 || true; "
+                     "else "
+                     "  nmcli connection down FloatingBall-Hotspot >/dev/null 2>&1 || true; "
+                     "fi")});
+#endif
 }

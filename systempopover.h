@@ -9,6 +9,7 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 class QNetworkAccessManager;
 class QPushButton;
 class QStackedWidget;
@@ -20,7 +21,7 @@ class CapsuleSlider;
 
 // Unified macOS / iOS-style floating Control Center (LayerShellQt overlay,
 // never tiled by Krohnkite, auto-dismisses when clicking outside).
-// Home page presents a tactile Bento grid (Wi-Fi / Bluetooth / Mihomo
+// Home page presents a tactile Bento grid (Wi-Fi / Hotspot / Bluetooth / Mihomo
 // connectivity stack, DND / Night Light / Power / Display / Settings tiles,
 // thick Apple-style brightness & volume capsule sliders, auto-showing MPRIS
 // Now Playing bar, and quick Deck / Lock / Power footer). Tapping any
@@ -33,13 +34,15 @@ public:
     enum Page {
         PageHome = 0,
         PageWifi = 1,
-        PageBluetooth = 2,
-        PageMihomo = 3
+        PageHotspot = 2,
+        PageBluetooth = 3,
+        PageMihomo = 4
     };
     // Compatibility aliases for direct tab callers
     enum Tab {
         TabHome = PageHome,
         TabWifi = PageWifi,
+        TabHotspot = PageHotspot,
         TabBluetooth = PageBluetooth,
         TabMihomo = PageMihomo
     };
@@ -52,9 +55,10 @@ public:
     Page currentPage() const { return m_currentPage; }
     void refreshCurrentPage();
 
-    // Optional hook for automated tests / preview rendering
+    // Optional hooks for automated tests / preview rendering
     void setMprisPreviewForTest(const QString &title, const QString &artist, bool playing);
     void setAutoDismissEnabled(bool enabled) { m_autoDismissEnabled = enabled; }
+    QString defaultHotspotSsid() const;
 
 signals:
     void audioStateChanged(int percent, bool muted);
@@ -71,6 +75,11 @@ private:
         int signal = 0;
         QString security;
         bool active = false;
+    };
+    struct HotspotClient {
+        QString ip;
+        QString mac;
+        QString host;
     };
     struct BluetoothDevice {
         QString address;
@@ -92,6 +101,7 @@ private:
 
     QWidget *buildHomePage(QWidget *parent);
     QWidget *buildWifiPage(QWidget *parent);
+    QWidget *buildHotspotPage(QWidget *parent);
     QWidget *buildBluetoothPage(QWidget *parent);
     QWidget *buildMihomoPage(QWidget *parent);
 
@@ -115,6 +125,16 @@ private:
     void rebuildWifiList(bool wifiEnabled, const QStringList &vpnLinks, const QList<WifiEntry> &entries);
     void toggleWifiRadio();
     void connectWifi(const WifiEntry &entry);
+
+    // Hotspot (Wi-Fi AP sharing 4G / Ethernet, default WPA3-SAE + local hostname)
+    void loadHotspotPrefs();
+    void saveHotspotPrefs();
+    void refreshHotspot();
+    void rebuildHotspotView();
+    void toggleHotspot();
+    void applyHotspotConfig(bool restartIfActive);
+    void startHotspotAsync();
+    void stopHotspotAsync();
 
     // Bluetooth async actions
     void refreshBluetooth();
@@ -146,9 +166,11 @@ private:
     QLabel *m_statusBanner = nullptr;
     QStackedWidget *m_stack = nullptr;
 
-    // Home Bento connectivity rows
+    // Home Bento connectivity rows (Wi-Fi / Hotspot / Bluetooth / Mihomo)
     QLabel *m_homeWifiBadge = nullptr;
     QLabel *m_homeWifiSub = nullptr;
+    QLabel *m_homeHotspotBadge = nullptr;
+    QLabel *m_homeHotspotSub = nullptr;
     QLabel *m_homeBtBadge = nullptr;
     QLabel *m_homeBtSub = nullptr;
     QLabel *m_homeMhBadge = nullptr;
@@ -192,6 +214,26 @@ private:
     bool m_wifiRadioEnabled = true;
     QString m_cachedWifiSsid;
     int m_cachedWifiSignal = 0;
+
+    // Hotspot subpage widgets & state
+    QToolButton *m_hsPowerBtn = nullptr;
+    QLabel *m_hsSummaryLbl = nullptr;
+    QLineEdit *m_hsSsidEdit = nullptr;
+    QLineEdit *m_hsPassEdit = nullptr;
+    QToolButton *m_hsEyeBtn = nullptr;
+    QToolButton *m_hsSecBtns[2]{};  // 0 = WPA3 (sae), 1 = WPA2 (wpa-psk)
+    QToolButton *m_hsBandBtns[2]{}; // 0 = 2.4GHz (bg), 1 = 5GHz (a)
+    QVBoxLayout *m_hsClientsLayout = nullptr;
+    QString m_hsWifiDev;
+    QString m_hsUpstreamSummary;
+    bool m_hsHasUpstream = false;
+    bool m_hsActive = false;
+    bool m_hsBusy = false;
+    QString m_hsSsid;
+    QString m_hsPassword;
+    bool m_hsUseWpa3 = true; // default WPA3-Personal (SAE)
+    bool m_hsBand5G = false; // default 2.4GHz (reliable on Intel AX210 LAR)
+    QList<HotspotClient> m_hsClients;
 
     // Bluetooth subpage widgets
     QToolButton *m_btPowerBtn = nullptr;

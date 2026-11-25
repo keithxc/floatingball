@@ -63,7 +63,8 @@ enum Icon {
     MediaPause,
     MediaNext,
     ChevronRight,
-    ChevronLeft
+    ChevronLeft,
+    Hotspot
 };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color)
@@ -502,6 +503,12 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
     }
     case ChevronLeft: {
         path.moveTo(14.8, 6.0); path.lineTo(8.8, 12.0); path.lineTo(14.8, 18.0);
+        break;
+    }
+    case Hotspot: {
+        // Apple Personal Hotspot twin interlocking rings
+        p.drawEllipse(QPointF(9.0, 12.0), 5.0, 5.0);
+        p.drawEllipse(QPointF(15.0, 12.0), 5.0, 5.0);
         break;
     }
     }
