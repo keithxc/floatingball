@@ -435,6 +435,7 @@ void RadialFanOverlay::recomputeFanLayout()
             const QPointF pt = top.centerGlobal + QPointF(qCos(rad), qSin(rad)) * ringR;
             RadialSlotItem item = children[i];
             item.ringIndex = 1;
+            item.finalCenterGlobal = pt;
             item.centerGlobal = pt;
             item.rectGlobal = QRectF(pt.x() - itemHalf, pt.y() - itemHalf, itemDiam, itemDiam);
             m_slots.append(item);
@@ -446,15 +447,15 @@ void RadialFanOverlay::recomputeFanLayout()
         return;
     }
 
-    const int targetRings = qBound(FloatingBall::kMinRingCount, m_owner->ringCount(), FloatingBall::kMaxRingCount);
-
-    // Compact, thumb-friendly ring 0 size close to the main sphere; gently scales
-    // when user opens very high ring counts so everything stays breathable inside bounds.
-    const qreal ringTighten = targetRings <= 4 ? 0.0 : qMin(10.0, (targetRings - 4) * 0.9);
-    m_slotDiameter = qBound(38.0, (48.0 - ringTighten) * scale, 54.0);
-    const qreal ballRadius = m_owner->width() / 2.0;
-    // Pull ring 0 close to the main ball (~14px air gap instead of a wide void)
-    m_fanRadius = qMax(ballRadius + m_slotDiameter * 0.5 + 14.0 * scale, 64.0 * scale);
+    // ========================================================================
+    // UNIFIED PC DESKTOP + TOUCH MULTI-RING LAYOUT:
+    //   • Ring 0 (Innermost): Fixed system action buttons (muscle memory!)
+    //   • Ring 1..K (Outer): ALL currently open windows, clustered by app,
+    //     automatically expanding across concentric arcs to fit 0..100+ windows!
+    // ========================================================================
+    m_slotDiameter = qBound(40.0, 46.0 * scale, 50.0);
+    const qreal ballRadius = qMax(m_owner->width(), m_owner->height()) / 2.0;
+    m_fanRadius = qMax(ballRadius + m_slotDiameter * 0.5 + 15.0 * scale, 66.0 * scale);
 
     const qreal reach = m_fanRadius + m_slotDiameter * 0.5 + 8.0;
     const bool nearLeft = (m_ballCenterGlobal.x() - reach) < bounds.left();
@@ -464,7 +465,7 @@ void RadialFanOverlay::recomputeFanLayout()
 
     const bool onLeftHalf = nearLeft ? true : (nearRight ? false : (m_ballCenterGlobal.x() <= bounds.center().x()));
     double centerDeg = onLeftHalf ? 0.0 : 180.0;
-    double sweepDeg = 160.0;
+    double sweepDeg = 156.0;
     bool cornerQuadrant = false;
 
     if ((nearLeft || nearRight) && (nearTop || nearBottom)) {
@@ -483,152 +484,32 @@ void RadialFanOverlay::recomputeFanLayout()
     }
 
     // ------------------------------------------------------------------------
-    // Ring 0 (Inner Ring 1): Classic 5-slot Xiaomi Mi 5 core touch actions (odd -> centered)
+    // Ring 0 (Innermost Fixed Ring): 5 core system buttons
     // ------------------------------------------------------------------------
     const QStringList innerActions = m_owner->orbitActions();
     const int count0 = innerActions.size();
     const double step0 = count0 > 1 ? sweepDeg / (count0 - 1) : 36.0;
-    // True circular disjointness radius (no redundant sqrt(2) bloat!)
     const double minDisjointRadius =
         (m_slotDiameter + 6.5 * scale) / (2.0 * qSin(qDegreesToRadians(qMax(12.0, step0 * 0.5))));
     const double maxScreenRadius = qMax(m_fanRadius, qMin(bounds.width(), bounds.height()) * 0.44);
     m_fanRadius = qMin(maxScreenRadius, qMax(m_fanRadius, minDisjointRadius));
 
     const bool rightSide = qCos(qDegreesToRadians(centerDeg)) < -0.01;
-    // Dynamic iPad-style button ordering:
-    // - Horizontal fans (Top / Bottom edges): always sweep strictly Left -> Right (e.g. 広 栞 発 伝)
-    // - Vertical fans (Left / Right edges): always sweep strictly Top -> Bottom
-    // - Corners: align both Left->Right & Top->Bottom where they agree, or follow the docked edge
     bool reverseSweep = false;
     if (cornerQuadrant) {
-        if (nearRight && nearTop) reverseSweep = true;         // top-left -> bottom-right
-        else if (nearLeft && nearBottom) reverseSweep = false; // top-left -> bottom-right
+        if (nearRight && nearTop) reverseSweep = true;
+        else if (nearLeft && nearBottom) reverseSweep = false;
         else if (nearLeft && nearTop) reverseSweep = (m_owner->dockSide() == FloatingBall::DockTop);
         else reverseSweep = (m_owner->dockSide() != FloatingBall::DockBottom);
     } else if (nearTop && !nearLeft && !nearRight) {
-        reverseSweep = true;  // Top edge: left (+166 deg) -> right (+14 deg)
+        reverseSweep = true;
     } else if (nearBottom && !nearLeft && !nearRight) {
-        reverseSweep = false; // Bottom edge: left (-166 deg) -> right (-14 deg)
+        reverseSweep = false;
     } else {
-        reverseSweep = rightSide; // Left/Right edges: top -> bottom
+        reverseSweep = rightSide;
     }
     const double startDeg0 = reverseSweep ? (centerDeg + sweepDeg * 0.5) : (centerDeg - sweepDeg * 0.5);
     const double dir0 = reverseSweep ? -1.0 : 1.0;
-
-    // ------------------------------------------------------------------------
-    // Duo-Orb Root Layout (Linux & macOS): Clean 4 Inner Orbs + 5 Drill Hubs (Outer)
-    // Total: ONLY 9 spacious orbs! Zero clutter; press-drag into any › hub to drill!
-    // ------------------------------------------------------------------------
-#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
-    const bool useDuoHubRoot = m_owner->statusOrbMode() &&
-        !m_owner->orbitActions().isEmpty() &&
-#ifdef Q_OS_LINUX
-        m_owner->orbitActions().first().startsWith(QLatin1String("vdesk"));
-#else
-        (m_owner->orbitActions() == FloatingBall::defaultOrbitActions());
-#endif
-    if (useDuoHubRoot) {
-        const qreal prog = qBound(0.0, m_progress, 1.0);
-        const qreal dInner = qBound(40.0, 46.0 * scale, 50.0);
-        const qreal dOuter = qBound(42.0, 48.0 * scale, 52.0);
-        const qreal rInner = qMax(ballRadius + dInner * 0.5 + 16.0 * scale, 72.0 * scale);
-        const qreal rOuter = rInner + (dInner + dOuter) * 0.5 + 18.0 * scale;
-
-        const double innerSpan = cornerQuadrant ? 84.0 : 120.0;
-        const double outerSpan = cornerQuadrant ? 96.0 : 152.0;
-        const double innerStep = innerSpan / 3.0;
-        const double outerStep = outerSpan / 4.0;
-        const double innerStart = reverseSweep ? (centerDeg + innerSpan * 0.5) : (centerDeg - innerSpan * 0.5);
-        const double outerStart = reverseSweep ? (centerDeg + outerSpan * 0.5) : (centerDeg - outerSpan * 0.5);
-        const double dir = reverseSweep ? -1.0 : 1.0;
-
-#ifdef Q_OS_LINUX
-        static const char *kInnerIds[4]{"vdesk1", "vdesk2", "vdesk3", "vdesk4"};
-        static const char *kInnerShort[4]{"", "", "", ""};
-#else
-        static const char *kInnerIds[4]{"overview", "minimize_all", "crosshair", "ime"};
-        static const char *kInnerShort[4]{"调度", "全收", "截图", "中/英"};
-#endif
-        const qreal d0Anim = (m_mode == FlickFanMode) ? dInner : (dInner * (0.35 + 0.65 * prog));
-        for (int i = 0; i < 4; ++i) {
-            const double deg = innerStart + dir * innerStep * i;
-            const double rad = qDegreesToRadians(deg);
-            const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * rInner;
-            RadialSlotItem item;
-            item.kind = RadialSlotItem::ActionSlot;
-            item.ringIndex = 0;
-            item.id = QString::fromLatin1(kInnerIds[i]);
-            item.label = m_owner->actionLabel(item.id);
-            item.shortLabel = QString::fromUtf8(kInnerShort[i]);
-            item.centerGlobal = (m_mode == FlickFanMode)
-                ? finalCenter
-                : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * prog);
-            item.rectGlobal = QRectF(item.centerGlobal.x() - d0Anim * 0.5,
-                                     item.centerGlobal.y() - d0Anim * 0.5,
-                                     d0Anim, d0Anim);
-            m_slots.append(item);
-        }
-
-        struct RootHubDef {
-            const char *id;
-            const char *shortLbl;
-            const char *drillKey;
-            const char *drillTitle;
-            const char *color;
-        };
-#ifdef Q_OS_LINUX
-        static const RootHubDef kRootHubs[5]{
-            {"launcher",  "开始",   "",        "",     "#7cc8ff"},
-            {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
-            {"tray_hub",  "托盘 ›", "tray",    "托盘", "#66d9ff"},
-            {"sys_hub",   "控制",   "",        "",     "#9aa8ff"},
-            {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
-        };
-#else
-        static const RootHubDef kRootHubs[5]{
-            {"launcher",  "开始",   "",        "",     "#7cc8ff"},
-            {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
-            {"clipboard", "剪贴板", "",        "",     "#66d9ff"},
-            {"sys_hub",   "控制",   "",        "",     "#9aa8ff"},
-            {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
-        };
-#endif
-        const qreal outerProg = (m_mode == FlickFanMode) ? 1.0 : qBound(0.0, (prog - 0.08) / 0.92, 1.0);
-        const qreal d1Anim = (m_mode == FlickFanMode) ? dOuter : (dOuter * (0.35 + 0.65 * outerProg));
-        const QRectF safeOuter = QRectF(bounds).adjusted(dOuter * 0.5 + 4, dOuter * 0.5 + 4,
-                                                         -dOuter * 0.5 - 4, -dOuter * 0.5 - 4);
-        for (int i = 0; i < 5; ++i) {
-            const double deg = outerStart + dir * outerStep * i;
-            const double rad = qDegreesToRadians(deg);
-            QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * rOuter;
-            finalCenter.setX(qBound(safeOuter.left(), finalCenter.x(), safeOuter.right()));
-            finalCenter.setY(qBound(safeOuter.top(), finalCenter.y(), safeOuter.bottom()));
-
-            RadialSlotItem item;
-            item.kind = RadialSlotItem::ActionSlot;
-            item.ringIndex = 1;
-            item.id = QString::fromLatin1(kRootHubs[i].id);
-            item.label = m_owner->actionLabel(item.id);
-            item.shortLabel = QString::fromUtf8(kRootHubs[i].shortLbl);
-            item.drillKey = QString::fromLatin1(kRootHubs[i].drillKey);
-            item.isBranchHub = !item.drillKey.isEmpty();
-            item.accentColor = QColor(QString::fromLatin1(kRootHubs[i].color));
-            item.centerGlobal = (m_mode == FlickFanMode)
-                ? finalCenter
-                : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * outerProg);
-            item.rectGlobal = QRectF(item.centerGlobal.x() - d1Anim * 0.5,
-                                     item.centerGlobal.y() - d1Anim * 0.5,
-                                     d1Anim, d1Anim);
-            m_slots.append(item);
-        }
-
-        m_ringRadii.append(rInner);
-        m_ringRadii.append(rOuter);
-        m_outermostRadius = rOuter + dOuter * 0.5;
-        m_activeRingCount = 2;
-        return;
-    }
-#endif
 
     QRectF group0;
     QList<QPointF> rawCenters0;
@@ -648,18 +529,67 @@ void RadialFanOverlay::recomputeFanLayout()
     if (group0.top() < bounds.top() + 2) clampShift0.setY(bounds.top() + 2 - group0.top());
     else if (group0.bottom() > bounds.bottom() - 2) clampShift0.setY(bounds.bottom() - 2 - group0.bottom());
 
-    const qreal prog = qBound(0.0, m_progress, 1.0);
-    const qreal d0Anim = m_slotDiameter * (0.35 + 0.65 * prog);
+    const qreal prog = (m_mode == FlickFanMode) ? 1.0 : qBound(0.0, m_progress, 1.0);
+    const qreal d0Anim = (m_mode == FlickFanMode) ? m_slotDiameter : (m_slotDiameter * (0.35 + 0.65 * prog));
     QList<QPointF> finalCentersPlaced;
     QList<qreal> finalDiametersPlaced;
+
+    auto populateFixedActionMeta = [](RadialSlotItem *item) {
+        const QString &id = item->id;
+        if (id == QLatin1String("launcher")) {
+            item->shortLabel = QStringLiteral("开始");
+            item->accentColor = QColor("#7cc8ff");
+        } else if (id == QLatin1String("sys_hub")) {
+            item->shortLabel = QStringLiteral("控制");
+            item->accentColor = QColor("#9aa8ff");
+        } else if (id == QLatin1String("tray_hub")) {
+            item->shortLabel = QStringLiteral("托盘 ›");
+            item->drillKey = QStringLiteral("tray");
+            item->isBranchHub = true;
+            item->accentColor = QColor("#66d9ff");
+        } else if (id == QLatin1String("tools_hub")) {
+            item->shortLabel = QStringLiteral("工具 ›");
+            item->drillKey = QStringLiteral("tools");
+            item->isBranchHub = true;
+            item->accentColor = QColor("#86e0b8");
+        } else if (id == QLatin1String("win_hub")) {
+            item->shortLabel = QStringLiteral("窗口 ›");
+            item->drillKey = QStringLiteral("windows");
+            item->isBranchHub = true;
+            item->accentColor = QColor("#38bdf8");
+        } else if (id == QLatin1String("overview")) {
+            item->shortLabel = QStringLiteral("全览");
+            item->accentColor = QColor("#a5b4fc");
+        } else if (id == QLatin1String("minimize_all") || id == QLatin1String("desktop")) {
+            item->shortLabel = QStringLiteral("桌面");
+            item->accentColor = QColor("#34d399");
+        } else if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) {
+            item->shortLabel = QStringLiteral("截屏");
+            item->accentColor = QColor("#7cc8ff");
+        } else if (id == QLatin1String("clipboard")) {
+            item->shortLabel = QStringLiteral("剪贴");
+            item->accentColor = QColor("#e2e8f0");
+        } else if (id == QLatin1String("deck")) {
+            item->shortLabel = QStringLiteral("甲板");
+            item->accentColor = QColor("#60a5fa");
+        } else if (id == QLatin1String("ime")) {
+            item->shortLabel = QStringLiteral("输入法");
+            item->accentColor = QColor("#7dd3fc");
+        }
+    };
+
     for (int i = 0; i < count0; ++i) {
         RadialSlotItem item;
         item.kind = RadialSlotItem::ActionSlot;
         item.ringIndex = 0;
         item.id = innerActions[i];
         item.label = m_owner->actionLabel(item.id);
+        populateFixedActionMeta(&item);
         const QPointF finalCenter = rawCenters0[i] + clampShift0;
-        item.centerGlobal = m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * m_progress;
+        item.finalCenterGlobal = finalCenter;
+        item.centerGlobal = (m_mode == FlickFanMode)
+            ? finalCenter
+            : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * prog);
         item.rectGlobal = QRectF(item.centerGlobal.x() - d0Anim * 0.5,
                                  item.centerGlobal.y() - d0Anim * 0.5,
                                  d0Anim, d0Anim);
@@ -672,285 +602,205 @@ void RadialFanOverlay::recomputeFanLayout()
     m_outermostRadius = m_fanRadius + m_slotDiameter * 0.5;
     m_activeRingCount = 1;
 
-    if (targetRings <= 1) return;
+    if (!m_owner->dockModeEnabled()) return;
 
     // ------------------------------------------------------------------------
-    // Ring 1 (Inner Ring 2): Second quick-action ring (Downloads, Record,
-    // IME, Trash, etc.), honeycomb-staggered into Ring 0 gaps!
-    // Ring 2+ (Ring 3..30): Open/running desktop apps first, then pinned Dock &
-    // installed apps, strictly alternating odd/even staggered honeycomb rings.
+    // Ring 1..K: Auto-Expanding All Currently Open Windows (0..100+ windows!)
+    // Pure open windows only — zero unopened filler apps, zero manual ring count!
     // ------------------------------------------------------------------------
-    QList<RadialSlotItem> ring2ActionQueue;
-#ifdef Q_OS_LINUX
-    static const QStringList preferredRing2Actions{
-        QStringLiteral("launcher"),
-        QStringLiteral("tray_hub"),
-        QStringLiteral("sys_hub"),
-        QStringLiteral("crosshair"),
-        QStringLiteral("clipboard"),
-        QStringLiteral("downloads"),
-        QStringLiteral("trash"),
-        QStringLiteral("back"),
-        QStringLiteral("overview"),
-        QStringLiteral("ime"),
-        QStringLiteral("desktop"),
-        QStringLiteral("forward"),
-        QStringLiteral("paste"),
-        QStringLiteral("copy"),
-        QStringLiteral("terminal"),
-        QStringLiteral("browser"),
-        QStringLiteral("home")
+    const QList<DockAppEntry> openWins = m_owner->dockModel()->openWindows();
+    if (openWins.isEmpty()) return;
+
+    auto extractWindowMicroTag = [](const DockAppEntry &app) -> QString {
+        QString cap = app.caption.trimmed();
+        if (!cap.isEmpty()) {
+            for (const QString &sep : {QStringLiteral(" — "), QStringLiteral(" - "), QStringLiteral(" – "), QStringLiteral(" | ")}) {
+                const int pos = cap.lastIndexOf(sep);
+                if (pos > 0) {
+                    const QString tail = cap.mid(pos + sep.size()).trimmed();
+                    const QString head = cap.left(pos).trimmed();
+                    // Strip trailing app-name suffix (e.g. "nvim ball.cpp — Kitty" -> "nvim ball.cpp")
+                    if (!app.name.isEmpty() && tail.contains(app.name, Qt::CaseInsensitive)) {
+                        cap = head;
+                    } else if (head.size() <= 16) {
+                        cap = head;
+                    }
+                    break;
+                }
+            }
+            // Extract concise distinguishing token (filename / host / site)
+            cap.remove(QStringLiteral("https://")).remove(QStringLiteral("http://"));
+            if (cap.contains(QLatin1Char('/'))) {
+                const QString base = cap.section(QLatin1Char('/'), -1).trimmed();
+                if (!base.isEmpty()) cap = base;
+            }
+            if (cap.size() > 5) cap = cap.left(4) + QStringLiteral("…");
+            if (!cap.isEmpty()) return cap;
+        }
+        QString nm = app.name.trimmed();
+        if (nm.size() > 5) nm = nm.left(4) + QStringLiteral("…");
+        return nm;
     };
-#else
-    static const QStringList preferredRing2Actions{
-        QStringLiteral("crosshair"),
-        QStringLiteral("clipboard"),
-        QStringLiteral("downloads"),
-        QStringLiteral("record"),
-        QStringLiteral("trash"),
-        QStringLiteral("back"),
-        QStringLiteral("overview"),
-        QStringLiteral("ime"),
-        QStringLiteral("desktop"),
-        QStringLiteral("forward"),
-        QStringLiteral("paste"),
-        QStringLiteral("copy"),
-        QStringLiteral("terminal"),
-        QStringLiteral("browser"),
-        QStringLiteral("home")
-    };
-#endif
-    for (const QString &actId : preferredRing2Actions) {
-        if (innerActions.contains(actId)) continue;
+
+    QList<RadialSlotItem> windowQueue;
+    windowQueue.reserve(openWins.size());
+    for (const DockAppEntry &win : openWins) {
         RadialSlotItem item;
-        item.kind = RadialSlotItem::ActionSlot;
-        item.id = actId;
-        item.label = m_owner->actionLabel(actId);
-        if (actId == QLatin1String("tray_hub")) {
-            item.isBranchHub = true;
-            item.accentColor = QColor("#66d9ff");
-        } else if (actId == QLatin1String("sys_hub")) {
-            item.isBranchHub = false;
-            item.accentColor = QColor("#9aa8ff");
+        item.kind = RadialSlotItem::AppSlot;
+        item.id = QStringLiteral("app:") + (!win.windowId.isEmpty() ? win.windowId
+                                           : (!win.launchTarget.isEmpty() ? win.launchTarget : win.id));
+        if (!win.caption.isEmpty() && win.caption.compare(win.name, Qt::CaseInsensitive) != 0) {
+            item.label = win.name + QStringLiteral(" — ") + win.caption;
+        } else {
+            item.label = win.name;
         }
-        ring2ActionQueue.append(item);
+        item.shortLabel = extractWindowMicroTag(win);
+        item.app = win;
+        item.toggleActive = win.demandsAttention;
+        windowQueue.append(item);
     }
 
-    QList<RadialSlotItem> runningAppQueue;
-    QList<RadialSlotItem> otherAppQueue;
-    if (m_owner->dockModeEnabled()) {
-        // Split currently open/running apps (dedicated to Ring 3!) from non-running
-        // pinned/installed apps (placed in Ring 4+ when user opens more layers!).
-        const QList<DockAppEntry> apps = m_owner->dockModel()->dockApps(320, true, true);
-        for (const DockAppEntry &app : apps) {
-            RadialSlotItem item;
-            item.kind = RadialSlotItem::AppSlot;
-            item.id = QStringLiteral("app:") + (!app.windowId.isEmpty() ? app.windowId
-                                               : (!app.launchTarget.isEmpty() ? app.launchTarget : app.id));
-            item.label = app.name;
-            item.app = app;
-            if (app.running) runningAppQueue.append(item);
-            else otherAppQueue.append(item);
-        }
-    }
-    // If at least one desktop app is open, Ring 3 shows ONLY open/running apps (clean Dock!),
-    // while Ring 4+ flows any remaining running apps followed by pinned & installed apps.
-    // If zero apps are open, gracefully fall back to pinned/installed apps so Ring 3 isn't empty.
-    QList<RadialSlotItem> appOuterQueue = runningAppQueue;
-    appOuterQueue.append(otherAppQueue);
-    const bool isolateRunningInRing3 = !runningAppQueue.isEmpty();
+    const int totalWins = windowQueue.size();
+    const double halfScanSweep = cornerQuadrant ? 47.0 : 87.0;
 
-    // Determine available depth from ball center into the desktop
-    const qreal horizAvail = rightSide
-        ? (m_ballCenterGlobal.x() - bounds.left() - 18.0)
-        : (bounds.right() - m_ballCenterGlobal.x() - 18.0);
-    const qreal vertAvail = qMax(bounds.bottom() - m_ballCenterGlobal.y(),
-                                 m_ballCenterGlobal.y() - bounds.top()) - 18.0;
-    const qreal maxDepth = (qAbs(qCos(qDegreesToRadians(centerDeg))) > 0.25) ? horizAvail : vertAvail;
-
-    const int outerRingsRequested = targetRings - 1;
-    const qreal minOuterDiameter = qBound(34.0, 38.0 * scale, 42.0);
-    // Larger app/action outer items (especially for borderless app icons!)
-    const qreal preferredOuterDiameter = qBound(minOuterDiameter,
-        (targetRings <= 3 ? 52.0 : (targetRings <= 6 ? 48.0 : (targetRings <= 12 ? 44.0 : 40.0))) * scale, 54.0);
-    // Honeycomb staggered packing allows snug, crisp radial steps (~0.95 * D + 6)
-    // while keeping guaranteed circular clearance between every pair of adjacent balls.
-    const qreal idealStep = preferredOuterDiameter * 0.96 + qMax(6.0, 8.5 * scale);
-    const qreal minSafeStep = minOuterDiameter * 0.94 + 6.5;
-    const int maxPhysicalOuterRings = qMax(1, static_cast<int>(qFloor((maxDepth - m_fanRadius - 12.0) / minSafeStep)));
-    const int plannedOuterRings = qMin(outerRingsRequested, maxPhysicalOuterRings);
-    const qreal rawStep = (plannedOuterRings > 0 && maxDepth > m_fanRadius + 36.0)
-        ? qMin(idealStep, (maxDepth - m_fanRadius - 18.0) / plannedOuterRings)
-        : idealStep;
-    const qreal ringStep = qMax(minSafeStep, rawStep);
-    const qreal outerDiameter = qBound(minOuterDiameter, qMin(preferredOuterDiameter, ringStep + 1.0), 54.0);
-    const qreal actionRing2Diameter = qBound(36.0, qMin(m_slotDiameter - 2.0, outerDiameter - 2.0), 48.0);
-    const qreal firstRingGap = qMax(ringStep, (m_slotDiameter + actionRing2Diameter) * 0.5 + 4.5);
-
-    const double halfScanSweep = cornerQuadrant ? 47.0 : 82.0;
-
-    auto fitsWithoutOverlap = [&](const QPointF &candidate, qreal candDiam) {
-        if (QLineF(candidate, m_ballCenterGlobal).length() < ballRadius + candDiam * 0.5 + 5.0)
-            return false;
-        for (int k = 0; k < finalCentersPlaced.size(); ++k) {
-            const qreal minDist = (candDiam + finalDiametersPlaced[k]) * 0.5 + 4.5;
-            if (QLineF(candidate, finalCentersPlaced[k]).length() < minDist)
-                return false;
-        }
-        return true;
-    };
-
-    int ring2Cursor = 0;
-    int appCursor = 0;
-    // Append leftover ring-2 actions after apps so even without apps, extra rings have items
-    QList<RadialSlotItem> fallbackActions;
-
-    for (int r = 1; r <= outerRingsRequested; ++r) {
-        const bool isSecondActionRing = (r == 1);
-        const qreal itemDiameter = isSecondActionRing ? actionRing2Diameter : outerDiameter;
-        const qreal halfItem = itemDiameter * 0.5;
-        const qreal edgePad = isSecondActionRing ? (halfItem + 4.0) : (halfItem + 6.0);
-        const QRectF safeBounds = QRectF(bounds).adjusted(edgePad, edgePad, -edgePad, -edgePad);
-        const qreal radius = m_fanRadius + firstRingGap + (r - 1) * ringStep;
-
-        bool centerInside = false;
-        {
-            const double rad = qDegreesToRadians(centerDeg);
-            const QPointF pCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
-            centerInside = safeBounds.contains(pCenter);
-        }
-
-        // Scan longest continuous valid arc inside safeBounds (1-deg resolution)
-        double bestStart = 0.0, bestEnd = 0.0;
+    auto scanArcSegments = [&](qreal radius, const QRectF &safeBounds) -> QList<QPair<double, double>> {
+        QList<QPair<double, double>> runs;
         double curStart = 0.0;
         bool inRun = false;
         const int steps = qRound(halfScanSweep * 2.0);
         for (int s = 0; s <= steps; ++s) {
             const double offset = -halfScanSweep + s;
-            const double deg = centerDeg + offset;
-            const double rad = qDegreesToRadians(deg);
+            const double rad = qDegreesToRadians(centerDeg + offset);
             const QPointF pt = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
             const bool ok = safeBounds.contains(pt);
             if (ok && !inRun) {
                 curStart = offset;
                 inRun = true;
             } else if (!ok && inRun) {
-                const double curEnd = offset - 1.0;
-                if ((curEnd - curStart) > (bestEnd - bestStart)) {
-                    bestStart = curStart;
-                    bestEnd = curEnd;
-                }
+                if ((offset - 1.0) - curStart >= 4.0)
+                    runs.append({curStart, offset - 1.0});
                 inRun = false;
             }
         }
-        if (inRun) {
-            const double curEnd = halfScanSweep;
-            if ((curEnd - curStart) > (bestEnd - bestStart)) {
-                bestStart = curStart;
-                bestEnd = curEnd;
+        if (inRun && (halfScanSweep - curStart) >= 4.0) {
+            runs.append({curStart, halfScanSweep});
+        }
+        return runs;
+    };
+
+    // Adaptive diameter solver: keeps spacious 48-50pt orbs for everyday window counts,
+    // and smoothly tightens down only when 40..100+ windows are open so every window fits on-screen!
+    qreal outerDiameter = (totalWins <= 8 ? 50.0
+        : (totalWins <= 20 ? 46.0
+           : (totalWins <= 40 ? 42.0
+              : (totalWins <= 65 ? 37.0 : 33.0)))) * scale;
+    outerDiameter = qBound(22.0, outerDiameter, 52.0);
+
+    while (outerDiameter > 22.5) {
+        const qreal halfD = outerDiameter * 0.5;
+        const qreal stepR = outerDiameter * 0.95 + qMax(4.2, 6.0 * scale);
+        const qreal firstGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(6.0, 9.0 * scale);
+        const QRectF safe = QRectF(bounds).adjusted(halfD + 5.0, halfD + 5.0, -halfD - 5.0, -halfD - 5.0);
+        int estCap = 0;
+        for (int r = 1; r <= 36 && estCap < totalWins; ++r) {
+            const qreal radius = m_fanRadius + firstGap + (r - 1) * stepR;
+            const auto segs = scanArcSegments(radius, safe);
+            if (segs.isEmpty()) {
+                if (radius > qMax(bounds.width(), bounds.height())) break;
+                continue;
+            }
+            const double chordRatio = qMin(0.95, (outerDiameter + 4.5 * scale) / (2.0 * radius));
+            const double minStep = qMax(3.6, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
+            for (const auto &seg : segs) {
+                estCap += qMax(1, static_cast<int>(qFloor((seg.second - seg.first) / minStep)) + 1);
             }
         }
+        if (estCap >= totalWins) break;
+        outerDiameter = qMax(22.0, outerDiameter - 2.5);
+    }
 
-        const double arcSpanDeg = bestEnd - bestStart;
-        if (!centerInside && arcSpanDeg < 14.0) break;
-        if (arcSpanDeg < 8.0) continue;
+    const qreal halfItem = outerDiameter * 0.5;
+    const qreal ringStep = outerDiameter * 0.95 + qMax(4.2, 6.0 * scale);
+    const qreal firstRingGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(6.0, 9.0 * scale);
+    const QRectF safeBounds = QRectF(bounds).adjusted(halfItem + 5.0, halfItem + 5.0,
+                                                      -halfItem - 5.0, -halfItem - 5.0);
 
-        const double chordRatio = qMin(0.95, (itemDiameter + 6.0 * scale) / (2.0 * radius));
-        const double minAngleStep = qMax(5.5, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
-        const int maxCapacity = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
+    auto fitsWithoutOverlap = [&](const QPointF &candidate, qreal candDiam) {
+        if (QLineF(candidate, m_ballCenterGlobal).length() < ballRadius + candDiam * 0.5 + 4.0)
+            return false;
+        for (int k = 0; k < finalCentersPlaced.size(); ++k) {
+            const qreal minDist = (candDiam + finalDiametersPlaced[k]) * 0.5 + 3.0;
+            if (QLineF(candidate, finalCentersPlaced[k]).length() < minDist)
+                return false;
+        }
+        return true;
+    };
 
-        // Select source queue for this ring:
-        // Ring 1 (r==1) = 2nd quick-action ring (Crosshair/Clipboard/Downloads/Screenshots/OCR/Trash)
-        // Ring 2 (r==2, 3rd ring) = ONLY currently open/running apps when any are open!
-        // Ring 3+ (r>=3, 4th..30th ring) = remaining running apps + pinned Dock & installed apps
-        QList<RadialSlotItem> *srcQueue = nullptr;
-        int *srcCursor = nullptr;
-        int remaining = 0;
-        if (isSecondActionRing) {
-            srcQueue = &ring2ActionQueue;
-            srcCursor = &ring2Cursor;
-            remaining = srcQueue->size() - *srcCursor;
-        } else {
-            if (r == 2 && isolateRunningInRing3) {
-                srcQueue = &appOuterQueue;
-                srcCursor = &appCursor;
-                remaining = qMax(0, runningAppQueue.size() - *srcCursor);
-            } else if (appCursor < appOuterQueue.size()) {
-                srcQueue = &appOuterQueue;
-                srcCursor = &appCursor;
-                remaining = srcQueue->size() - *srcCursor;
-            } else {
-                if (fallbackActions.isEmpty() && ring2Cursor < ring2ActionQueue.size()) {
-                    fallbackActions = ring2ActionQueue.mid(ring2Cursor);
-                    ring2Cursor = ring2ActionQueue.size();
-                }
-                if (fallbackActions.isEmpty()) break;
-                srcQueue = &fallbackActions;
-                static int fbCursor = 0;
-                fbCursor = 0;
-                srcCursor = &fbCursor;
-                remaining = srcQueue->size();
-            }
+    int winCursor = 0;
+    for (int r = 1; r <= 42 && winCursor < totalWins; ++r) {
+        const qreal radius = m_fanRadius + firstRingGap + (r - 1) * ringStep;
+        auto segs = scanArcSegments(radius, safeBounds);
+        if (segs.isEmpty()) {
+            if (radius > std::hypot(bounds.width(), bounds.height())) break;
+            continue;
+        }
+        if (reverseSweep) {
+            std::reverse(segs.begin(), segs.end());
         }
 
-        if (remaining <= 0) {
-            if (isSecondActionRing) continue;
-            break;
-        }
-
-        // Honeycomb staggering:
-        // r=0 (Ring 1): 5 items (ODD -> 1 centered on axis)
-        // r=1 (Ring 2): EVEN count (e.g., 6 actions) -> staggered half-step into Ring 1 gaps!
-        // r=2 (Ring 3): ODD count (e.g., 7-9 open apps) -> staggered half-step into Ring 2 gaps!
-        // r=3 (Ring 4): EVEN count -> staggered half-step into Ring 3 gaps!
-        const bool wantEven = (r % 2 == 1);
-        const int targetCap = isSecondActionRing ? qMin(maxCapacity, 8) : qMin(maxCapacity, 6 + r * 2);
-        int count = qMin(targetCap, remaining);
-        if (count > 1 && ((count % 2 == 0) != wantEven)) {
-            if (count + 1 <= maxCapacity && count + 1 <= remaining && !isSecondActionRing) {
-                ++count;
-            } else if (count - 1 >= 2 && remaining > count) {
-                --count;
-            }
-        }
-        if (count <= 0) continue;
-
-        // Compute angular step aligned to interleave smoothly with previous ring
-        const double arcMid = centerDeg + (bestStart + bestEnd) * 0.5;
-        const double desiredStep = qMax(minAngleStep, (r == 1) ? qMin(step0 * 0.92, arcSpanDeg / qMax(1, count - 1))
-                                                               : (minAngleStep * 1.08));
-        const double effectiveSpan = (count > 1) ? qMin(arcSpanDeg, (count - 1) * desiredStep) : 0.0;
-        const double stepDeg = (count > 1) ? (effectiveSpan / (count - 1)) : 0.0;
-        const double startDeg = reverseSweep ? (arcMid + effectiveSpan * 0.5) : (arcMid - effectiveSpan * 0.5);
-        const double dir = reverseSweep ? -1.0 : 1.0;
-
-        const qreal ringDelay = qMin(0.35, r * 0.04);
+        const double chordRatio = qMin(0.95, (outerDiameter + 4.5 * scale) / (2.0 * radius));
+        const double minAngleStep = qMax(3.5, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
+        const qreal ringDelay = qMin(0.32, r * 0.035);
         const qreal ringProg = qBound(0.0, (m_progress - ringDelay) / qMax(0.25, 1.0 - ringDelay), 1.0);
         const qreal effProg = (m_mode == FlickFanMode) ? 1.0 : ringProg;
 
         int placedInRing = 0;
-        for (int i = 0; i < count && *srcCursor < srcQueue->size(); ++i) {
-            const double deg = startDeg + dir * stepDeg * i;
-            const double rad = qDegreesToRadians(deg);
-            const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
-            if (!safeBounds.contains(finalCenter)) continue;
-            if (!fitsWithoutOverlap(finalCenter, itemDiameter)) continue;
+        for (const auto &seg : segs) {
+            if (winCursor >= totalWins) break;
+            const double arcSpanDeg = seg.second - seg.first;
+            const int segMaxCap = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
+            const int remaining = totalWins - winCursor;
+            int count = qMin(segMaxCap, remaining);
 
-            RadialSlotItem item = (*srcQueue)[(*srcCursor)++];
-            item.ringIndex = r;
-            item.centerGlobal = m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * effProg;
-            const qreal dNow = (m_mode == FlickFanMode) ? itemDiameter : (itemDiameter * (0.35 + 0.65 * effProg));
-            item.rectGlobal = QRectF(item.centerGlobal.x() - dNow * 0.5,
-                                     item.centerGlobal.y() - dNow * 0.5,
-                                     dNow, dNow);
-            m_slots.append(item);
-            finalCentersPlaced.append(finalCenter);
-            finalDiametersPlaced.append(itemDiameter);
-            ++placedInRing;
+            // Stagger odd/even parity gently when multiple rings exist so honeycombs interleave cleanly
+            if (segs.size() == 1 && count > 1 && remaining > count) {
+                const bool wantEven = (r % 2 == 1);
+                if (((count % 2 == 0) != wantEven) && count - 1 >= 2) {
+                    --count;
+                }
+            }
+
+            const double arcMid = centerDeg + (seg.first + seg.second) * 0.5;
+            const double desiredStep = qMax(minAngleStep, qMin(22.0, minAngleStep * 1.08));
+            const double effectiveSpan = (count > 1) ? qMin(arcSpanDeg, (count - 1) * desiredStep) : 0.0;
+            const double stepDeg = (count > 1) ? (effectiveSpan / (count - 1)) : 0.0;
+            const double startDeg = reverseSweep ? (arcMid + effectiveSpan * 0.5) : (arcMid - effectiveSpan * 0.5);
+            const double dir = reverseSweep ? -1.0 : 1.0;
+
+            for (int i = 0; i < count && winCursor < totalWins; ++i) {
+                const double deg = (count == 1) ? arcMid : (startDeg + dir * stepDeg * i);
+                const double rad = qDegreesToRadians(deg);
+                const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
+                if (!safeBounds.contains(finalCenter)) continue;
+                if (!fitsWithoutOverlap(finalCenter, outerDiameter)) continue;
+
+                RadialSlotItem item = windowQueue[winCursor++];
+                item.ringIndex = r;
+                item.finalCenterGlobal = finalCenter;
+                item.centerGlobal = (m_mode == FlickFanMode)
+                    ? finalCenter
+                    : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * effProg);
+                const qreal dNow = (m_mode == FlickFanMode) ? outerDiameter : (outerDiameter * (0.35 + 0.65 * effProg));
+                item.rectGlobal = QRectF(item.centerGlobal.x() - dNow * 0.5,
+                                         item.centerGlobal.y() - dNow * 0.5,
+                                         dNow, dNow);
+                m_slots.append(item);
+                finalCentersPlaced.append(finalCenter);
+                finalDiametersPlaced.append(outerDiameter);
+                ++placedInRing;
+            }
         }
-        if (srcQueue == &fallbackActions) {
-            fallbackActions.erase(fallbackActions.begin(), fallbackActions.begin() + *srcCursor);
-        }
+
         if (placedInRing > 0) {
             m_ringRadii.append(radius);
             m_outermostRadius = qMax(m_outermostRadius, radius + halfItem);
@@ -959,14 +809,75 @@ void RadialFanOverlay::recomputeFanLayout()
     }
 }
 
+QList<qreal> RadialFanOverlay::computeAttentionAnglesRad()
+{
+    QList<qreal> angles;
+    if (!m_owner) return angles;
+
+    // Ensure root layout target positions match the exact current screen & open windows
+    const QList<DrillFrame> savedDrill = m_drillStack;
+    const qreal savedProg = m_progress;
+    m_drillStack.clear();
+    m_progress = 1.0;
+    recomputeFanLayout();
+
+    const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
+    bool hasWindowAttention = false;
+    qreal trayHubAngle = 0.0;
+    bool hasTrayHub = false;
+
+    auto addUniqueAngle = [&](qreal rad) {
+        for (qreal existing : angles) {
+            const double diff = angularDistanceDeg(qRadiansToDegrees(existing), qRadiansToDegrees(rad));
+            if (diff < 6.0) return;
+        }
+        angles.append(rad);
+    };
+
+    for (const RadialSlotItem &s : m_slots) {
+        const QPointF target = s.finalCenterGlobal.isNull() ? s.centerGlobal : s.finalCenterGlobal;
+        const qreal rad = std::atan2(target.y() - m_ballCenterGlobal.y(),
+                                     target.x() - m_ballCenterGlobal.x());
+        if (s.kind == RadialSlotItem::AppSlot && s.app.demandsAttention) {
+            hasWindowAttention = true;
+            addUniqueAngle(rad);
+        } else if (s.ringIndex == 0 && s.id == QLatin1String("tray_hub")) {
+            hasTrayHub = true;
+            trayHubAngle = rad;
+        }
+    }
+
+    if (st.trayNeedsAttention || (st.unreadNotifications > 0 && !hasWindowAttention)) {
+        if (hasTrayHub) {
+            addUniqueAngle(trayHubAngle);
+        } else {
+            // Fallback: point directly inward from the docked screen edge
+            double fallbackDeg = 180.0;
+            if (m_owner->dockSide() == FloatingBall::DockLeft) fallbackDeg = 0.0;
+            else if (m_owner->dockSide() == FloatingBall::DockTop) fallbackDeg = 90.0;
+            else if (m_owner->dockSide() == FloatingBall::DockBottom) fallbackDeg = -90.0;
+            addUniqueAngle(qDegreesToRadians(fallbackDeg));
+        }
+    }
+
+    m_drillStack = savedDrill;
+    m_progress = savedProg;
+    if (m_mode == TapFanMode || m_mode == FlickFanMode) {
+        recomputeFanLayout();
+    }
+    return angles;
+}
+
 QString RadialFanOverlay::activeLabelText() const
 {
     if (m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
         const RadialSlotItem &item = m_slots[m_highlightedSlot];
         QString text = item.label;
         if (item.kind == RadialSlotItem::AppSlot) {
-            if (item.app.active) text += QStringLiteral(" · 当前前台");
-            else if (item.app.running) text += QStringLiteral(" · 运行中");
+            if (item.app.demandsAttention) text += QStringLiteral(" · 🔴 有新消息");
+            else if (item.app.active) text += QStringLiteral(" · 当前前台");
+            else if (item.app.minimized) text += QStringLiteral(" · 已最小化");
+            if (m_mode == TapFanMode) text += QStringLiteral("  [左键切换 · 中键关闭]");
         } else if (item.kind == RadialSlotItem::TraySlot) {
             if (item.id != QLatin1String("tray:empty")) {
                 text += (item.trayItem.menuPath.isEmpty() || item.trayItem.menuPath == QLatin1String("/NO_DBUSMENU"))
@@ -1028,8 +939,19 @@ QRectF RadialFanOverlay::labelPillRectLocal() const
     f.setPointSize(12);
     f.setWeight(QFont::DemiBold);
     const QFontMetrics fm(f);
-    const int pw = fm.horizontalAdvance(text) + 28;
+    const int pw = qMin(width() - 20, fm.horizontalAdvance(text) + 28);
     const QPointF origin = geometry().topLeft();
+
+    // In FlickFanMode on touchscreen, float the title pill 54px ABOVE the finger so
+    // the user's hand never blocks the window caption!
+    if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
+        const QPointF fingerLocal = m_fingerGlobal - origin;
+        const qreal aboveY = fingerLocal.y() > 64.0 ? (fingerLocal.y() - 56.0) : (fingerLocal.y() + 34.0);
+        return QRectF(qBound(8.0, fingerLocal.x() - pw * 0.5, width() - pw - 8.0),
+                      qBound(8.0, aboveY, height() - 38.0),
+                      pw, 32.0);
+    }
+
     QRectF fanGroup(m_ballCenterGlobal - origin, QSizeF(1, 1));
     for (const RadialSlotItem &s : m_slots) fanGroup = fanGroup.united(s.rectGlobal.translated(-origin));
 
@@ -1464,6 +1386,12 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
             event->accept();
             return;
         }
+        if (event->button() == Qt::MiddleButton && slot >= 0 && slot < m_slots.size() &&
+            m_slots[slot].kind == RadialSlotItem::AppSlot) {
+            m_pressedTapSlot = slot;
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton) {
             m_pressedTapSlot = slot;
             m_highlightedSlot = m_pressedTapSlot;
@@ -1478,6 +1406,16 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
 
 void RadialFanOverlay::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_mode == TapFanMode && event->button() == Qt::MiddleButton) {
+        const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
+        const int slot = hitSlotAtGlobal(globalPt, false);
+        m_pressedTapSlot = -1;
+        if (slot >= 0 && slot < m_slots.size() && m_slots[slot].kind == RadialSlotItem::AppSlot) {
+            emit slotMiddleClicked(slot);
+        }
+        event->accept();
+        return;
+    }
     if (m_mode == TapFanMode && event->button() == Qt::LeftButton) {
         if (m_trayDwellTimer) m_trayDwellTimer->stop();
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
@@ -1668,20 +1606,52 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             p.drawLine(centerLocal + u * (centerR - 0.5), targetLocal - u * (targetR - 0.5));
         }
         p.restore();
-    } else if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
-        // Clean glowing tether line at Root in FlickFanMode
-        const QPointF slotLocal = m_slots[m_highlightedSlot].centerGlobal - origin;
+    } else {
+        // Subtle directional bearing rays from main ball toward windows with unread messages/attention!
         p.save();
-        p.setPen(QPen(QColor(102, 188, 255, 175), 2.5, Qt::SolidLine, Qt::RoundCap));
-        p.drawLine(localBallCenter, slotLocal);
+        QPen attnPen(QColor(255, 82, 114, 78), 1.6, Qt::DashLine, Qt::RoundCap);
+        p.setPen(attnPen);
+        const qreal startRim = qMax(m_owner->width(), m_owner->height()) * 0.5 + 2.0;
+        for (const RadialSlotItem &s : m_slots) {
+            if (s.kind == RadialSlotItem::AppSlot && s.app.demandsAttention) {
+                const QPointF targetLocal = s.centerGlobal - origin;
+                const QPointF vec = targetLocal - localBallCenter;
+                const qreal len = std::hypot(vec.x(), vec.y());
+                if (len > startRim + s.rectGlobal.width() * 0.5) {
+                    const QPointF u = vec / len;
+                    p.drawLine(localBallCenter + u * startRim,
+                               targetLocal - u * (s.rectGlobal.width() * 0.52));
+                }
+            }
+        }
+        if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
+            const QPointF slotLocal = m_slots[m_highlightedSlot].centerGlobal - origin;
+            p.setPen(QPen(QColor(102, 188, 255, 175), 2.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(localBallCenter, slotLocal);
+        }
         p.restore();
     }
 
-    // Draw all active ring slots (single clean ring when drilled, or 4+5 root!)
+    // Draw all active ring slots (draw highlighted slot last so dense fisheye magnification never clips!)
+    const bool showAllAppMicroTags = (m_slots.size() <= 38);
+    QList<int> drawOrder;
+    drawOrder.reserve(m_slots.size());
     for (int i = 0; i < m_slots.size(); ++i) {
+        if (i != m_highlightedSlot) drawOrder.append(i);
+    }
+    if (m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
+        drawOrder.append(m_highlightedSlot);
+    }
+
+    for (int i : drawOrder) {
         const RadialSlotItem &item = m_slots[i];
-        const QRectF slotRect = item.rectGlobal.translated(-origin);
+        QRectF slotRect = item.rectGlobal.translated(-origin);
         const bool selected = (i == m_highlightedSlot);
+        if (selected && item.kind == RadialSlotItem::AppSlot && slotRect.width() < 44.0) {
+            const qreal grown = qMin(48.0, slotRect.width() * 1.28);
+            const QPointF sc = slotRect.center();
+            slotRect = QRectF(sc.x() - grown * 0.5, sc.y() - grown * 0.5, grown, grown);
+        }
         const qreal ringAlphaFactor = item.ringIndex == 0 ? 1.0 : qMax(0.90, 0.98 - item.ringIndex * 0.012);
         const qreal alpha = (selected ? 0.99 : m_owner->activeOpacity() * ringAlphaFactor) * reveal;
 
@@ -1871,6 +1841,21 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                 p.setBrush(item.app.active ? QColor("#78ceff") : QColor(244, 248, 255, 240));
                 p.drawEllipse(dotPos, item.app.active ? 2.5 : 2.0, item.app.active ? 2.5 : 2.0);
             }
+
+            // Unread message / demandsAttention badge dot on top-right of window orb!
+            if (item.app.demandsAttention) {
+                const QPointF badgePt(slotRect.right() - slotRect.width() * 0.16,
+                                      slotRect.top() + slotRect.height() * 0.16);
+                QRadialGradient glow(badgePt, 7.5);
+                glow.setColorAt(0.0, QColor(255, 77, 109, 225));
+                glow.setColorAt(1.0, QColor(255, 77, 109, 0));
+                p.setPen(Qt::NoPen);
+                p.setBrush(glow);
+                p.drawEllipse(badgePt, 7.5, 7.5);
+                p.setBrush(QColor("#ff4d6d"));
+                p.setPen(QPen(QColor("#ffffff"), 1.2));
+                p.drawEllipse(badgePt, 4.2, 4.2);
+            }
         } else {
             // Inner rings (Ring 1 & Ring 2): tactile obsidian glass quick-action spheres
             // Special styling for KWin virtual desktop slots (vdesk1..vdesk4 -> 広/栞/発/伝)
@@ -1964,19 +1949,21 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             }
         }
 
-        // Compact crisp micro-label directly beneath Root hubs & Drilled single-ring orbs
-        if (!item.shortLabel.isEmpty() && item.kind != RadialSlotItem::CenterSlot && reveal > 0.72) {
+        // Compact crisp micro-label beneath fixed hubs, drilled items, and window orbs (when spacious or selected)
+        const bool showMicro = !item.shortLabel.isEmpty() && item.kind != RadialSlotItem::CenterSlot &&
+            reveal > 0.72 && (item.kind != RadialSlotItem::AppSlot || showAllAppMicroTags || selected);
+        if (showMicro) {
             QFont mf = font();
-            mf.setPixelSize(11);
+            mf.setPixelSize(10);
             mf.setWeight(selected ? QFont::Bold : QFont::Medium);
             p.setFont(mf);
             const QFontMetrics fm(mf);
             const int tw = fm.horizontalAdvance(item.shortLabel) + 10;
-            const int th = 16;
-            const QRectF tagRect(slotRect.center().x() - tw * 0.5, slotRect.bottom() + 2.5, tw, th);
+            const int th = 15;
+            const QRectF tagRect(slotRect.center().x() - tw * 0.5, slotRect.bottom() + 2.0, tw, th);
             p.setPen(Qt::NoPen);
-            p.setBrush(selected ? QColor(30, 88, 168, 232) : QColor(12, 16, 26, 200));
-            p.drawRoundedRect(tagRect, 8, 8);
+            p.setBrush(selected ? QColor(30, 88, 168, 236) : QColor(12, 16, 26, 204));
+            p.drawRoundedRect(tagRect, 7.5, 7.5);
             p.setPen(selected ? QColor("#ffffff") : QColor("#e2e8f0"));
             p.drawText(tagRect, Qt::AlignCenter, item.shortLabel);
         }
@@ -2041,19 +2028,19 @@ QStringList FloatingBall::defaultOrbitActions()
 {
 #ifdef Q_OS_LINUX
     return {
-        QStringLiteral("vdesk1"),
-        QStringLiteral("vdesk2"),
-        QStringLiteral("vdesk3"),
-        QStringLiteral("vdesk4"),
-        QStringLiteral("deck")
+        QStringLiteral("launcher"),
+        QStringLiteral("sys_hub"),
+        QStringLiteral("tray_hub"),
+        QStringLiteral("overview"),
+        QStringLiteral("tools_hub")
     };
 #elif defined(Q_OS_MACOS)
     return {
+        QStringLiteral("launcher"),
+        QStringLiteral("sys_hub"),
         QStringLiteral("overview"),
-        QStringLiteral("minimize_all"),
-        QStringLiteral("crosshair"),
-        QStringLiteral("ime"),
-        QStringLiteral("deck")
+        QStringLiteral("clipboard"),
+        QStringLiteral("tools_hub")
     };
 #else
     return {
@@ -2159,6 +2146,21 @@ FloatingBall::FloatingBall(QWidget *parent,
         }
     });
 
+    // Live 24H two-line clock refresh + transient IME flash timer
+    m_clockTimer = new QTimer(this);
+    m_clockTimer->setInterval(10000);
+    connect(m_clockTimer, &QTimer::timeout, this, [this] {
+        if (isVisible()) update();
+    });
+    m_clockTimer->start();
+
+    m_imeFlashTimer = new QTimer(this);
+    m_imeFlashTimer->setSingleShot(true);
+    connect(m_imeFlashTimer, &QTimer::timeout, this, [this] {
+        m_imeFlashLabel.clear();
+        update();
+    });
+
     // Live system mute/volume badge synchronization on the ball itself (primary only)
     if (isPrimaryBall()) {
         m_audioPollTimer = new QTimer(this);
@@ -2169,6 +2171,16 @@ FloatingBall::FloatingBall(QWidget *parent,
     }
 
     m_fanOverlay = new RadialFanOverlay(this);
+    connect(m_fanOverlay, &RadialFanOverlay::slotMiddleClicked, this, [this](int slot) {
+        const auto slotsData = m_fanOverlay->slotsData();
+        if (slot < 0 || slot >= slotsData.size()) return;
+        const RadialSlotItem item = slotsData[slot];
+        if (item.kind != RadialSlotItem::AppSlot) return;
+        const auto out = dockModel()->quitApp(item.app);
+        if (!out.message.isEmpty()) DesktopActions::showToast(out.message, anchorCenterGlobal().toPoint());
+        m_fanOverlay->refreshLiveLayout();
+        refreshAttentionBearings();
+    });
     connect(m_fanOverlay, &RadialFanOverlay::slotTapped, this, [this](int slot) {
         const auto slotsData = m_fanOverlay->slotsData();
         if (slot < 0 || slot >= slotsData.size()) return;
@@ -2245,6 +2257,7 @@ FloatingBall::FloatingBall(QWidget *parent,
 
         statusMonitor()->setEnabled(m_statusOrbMode);
         if (m_dockModeEnabled) dockModel();
+        refreshAttentionBearings();
         if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
             refreshSystemAudioState();
             if (m_audioPollTimer) m_audioPollTimer->start();
@@ -2254,16 +2267,27 @@ FloatingBall::FloatingBall(QWidget *parent,
         if (m_assignedScreen) watchScreen(m_assignedScreen);
         if (SystemStatusMonitor *mon = statusMonitor()) {
             connect(mon, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &) {
+                refreshAttentionBearings();
                 update();
                 if (m_orbitVisible && m_fanOverlay) m_fanOverlay->update();
+            });
+            connect(mon, &SystemStatusMonitor::inputMethodActivity, this, [this](const QString &lbl) {
+                triggerImeFlash(lbl);
             });
         }
         if (AppDockModel *dock = dockModel()) {
             connect(dock, &AppDockModel::appsChanged, this, [this] {
+                refreshAttentionBearings();
                 if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+            });
+            connect(dock, &AppDockModel::activeFullscreenChanged, this, [this](bool fs) {
+                m_fullscreenTucked = (m_autoTuckFullscreen && fs);
+                if (m_fullscreenTucked) tuckToEdgeCapsule(false, true);
+                else if (!m_manualTucked) expandFromEdge();
             });
         }
         adaptToScreen();
+        refreshAttentionBearings();
         refreshBallOpacity();
     }
 }
@@ -2280,6 +2304,8 @@ FloatingBall::~FloatingBall()
     removeOutsideDismissMonitor();
     m_idleTimer->stop();
     m_holdTimer->stop();
+    if (m_clockTimer) m_clockTimer->stop();
+    if (m_imeFlashTimer) m_imeFlashTimer->stop();
     if (m_audioPollTimer) m_audioPollTimer->stop();
     m_dwellAnimation->stop();
     m_opacityAnimation->stop();
@@ -2366,7 +2392,24 @@ QString FloatingBall::actionLabel(const QString &id) const
 void FloatingBall::loadPreferences()
 {
     QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    const int layoutVersion = s.value("ball/ringLayoutVersion", 1).toInt();
+
     m_orbitActions = s.value("ball/quickFanActions", defaultOrbitActions()).toStringList();
+    if (layoutVersion < 4) {
+        // v4 migration: Ring 0 holds 5 fixed system hubs; outer rings auto-expand all open windows;
+        // primary circular 24H clock ball stays visible by default (autoHide = false).
+        m_orbitActions = defaultOrbitActions();
+        s.setValue("ball/quickFanActions", m_orbitActions);
+        s.setValue("ball/statusOrbMode", true);
+        if (!s.contains("ball/autoHideV4Migrated")) {
+            s.setValue("ball/autoHide", false);
+            s.setValue("ball/autoHideV4Migrated", true);
+        }
+        if (s.value("ball/idleOpacity", 0.38).toReal() < 0.65) {
+            s.setValue("ball/idleOpacity", 0.82);
+        }
+        s.setValue("ball/ringLayoutVersion", 4);
+    }
     if (m_orbitActions.size() != kOrbitSlotCount ||
         QSet<QString>(m_orbitActions.begin(), m_orbitActions.end()).size() != kOrbitSlotCount) {
         m_orbitActions = defaultOrbitActions();
@@ -2377,14 +2420,8 @@ void FloatingBall::loadPreferences()
             break;
         }
     }
-    const int layoutVersion = s.value("ball/ringLayoutVersion", 1).toInt();
+
     int savedRings = s.value("ball/ringCount", kDefaultRingCount).toInt();
-    if (layoutVersion < 2 && savedRings <= 2) {
-        // Upgrade smoothly to 3 rings: Ring 1 & 2 quick actions + Ring 3 open apps
-        savedRings = kDefaultRingCount;
-        s.setValue("ball/ringCount", savedRings);
-        s.setValue("ball/ringLayoutVersion", 2);
-    }
     m_ringCount = qBound(kMinRingCount, savedRings, kMaxRingCount);
     m_dockModeEnabled = s.value("ball/dockModeEnabled", true).toBool();
 #if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
@@ -2392,26 +2429,14 @@ void FloatingBall::loadPreferences()
 #else
     const bool defaultStatusOrb = false;
 #endif
-#ifdef Q_OS_MACOS
-    if (layoutVersion < 3) {
-        // Upgrade macOS legacy flat 3-ring settings to the 2026 Duo Status Orb + 2-Ring Hub layout
-        m_orbitActions = defaultOrbitActions();
-        m_statusOrbMode = true;
-        s.setValue("ball/quickFanActions", m_orbitActions);
-        s.setValue("ball/statusOrbMode", true);
-        s.setValue("ball/ringLayoutVersion", 3);
-    } else {
-        m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
-    }
-#else
     m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
-#endif
     m_multiScreenEnabled = s.value("ball/multiScreenEnabled", true).toBool();
     m_preferredDiameter = qBound(qreal(kMinDiameter), s.value("ball/diameter", m_statusOrbMode ? 60.0 : 56.0).toReal(), qreal(kMaxDiameter));
-    m_idleOpacity = qBound(0.15, s.value("ball/idleOpacity", 0.38).toReal(), 1.0);
-    m_activeOpacity = qBound(m_idleOpacity, s.value("ball/activeOpacity", 0.88).toReal(), 1.0);
+    m_idleOpacity = qBound(0.15, s.value("ball/idleOpacity", 0.82).toReal(), 1.0);
+    m_activeOpacity = qBound(m_idleOpacity, s.value("ball/activeOpacity", 0.94).toReal(), 1.0);
     m_snapEnabled = s.value("ball/snapToEdge", true).toBool();
-    m_autoHideEnabled = s.value("ball/autoHide", true).toBool();
+    m_autoHideEnabled = s.value("ball/autoHide", false).toBool();
+    m_autoTuckFullscreen = s.value("ball/autoTuckFullscreen", true).toBool();
     m_crosshairPullEnabled = s.value("ball/crosshairPull", true).toBool();
     m_dockSide = s.value("ball/dockSide", DockRight).toInt();
     if (m_dockSide != DockFree && m_dockSide != DockLeft && m_dockSide != DockRight &&
@@ -2430,11 +2455,7 @@ void FloatingBall::savePreferences()
     QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
     s.setValue("ball/quickFanActions", m_orbitActions);
     s.setValue("ball/ringCount", m_ringCount);
-#ifdef Q_OS_MACOS
-    s.setValue("ball/ringLayoutVersion", 3);
-#else
-    s.setValue("ball/ringLayoutVersion", 2);
-#endif
+    s.setValue("ball/ringLayoutVersion", 4);
     s.setValue("ball/dockModeEnabled", m_dockModeEnabled);
     s.setValue("ball/statusOrbMode", m_statusOrbMode);
     s.setValue("ball/multiScreenEnabled", m_multiScreenEnabled);
@@ -2443,6 +2464,7 @@ void FloatingBall::savePreferences()
     s.setValue("ball/activeOpacity", m_activeOpacity);
     s.setValue("ball/snapToEdge", m_snapEnabled);
     s.setValue("ball/autoHide", m_autoHideEnabled);
+    s.setValue("ball/autoTuckFullscreen", m_autoTuckFullscreen);
     s.setValue("ball/crosshairPull", m_crosshairPullEnabled);
     s.setValue("ball/dockSide", m_dockSide);
     s.setValue("ball/verticalFraction", m_verticalFraction);
@@ -2494,12 +2516,14 @@ void FloatingBall::syncSharedPreferencesFrom(const FloatingBall *source)
     m_activeOpacity = source->m_activeOpacity;
     m_snapEnabled = source->m_snapEnabled;
     m_autoHideEnabled = source->m_autoHideEnabled;
+    m_autoTuckFullscreen = source->m_autoTuckFullscreen;
     m_crosshairPullEnabled = source->m_crosshairPullEnabled;
     m_systemMuted = source->m_systemMuted;
     m_systemVolume = source->m_systemVolume;
-    if (m_statusOrbMode) expandFromEdge();
+    if (!m_autoHideEnabled && !m_manualTucked && !m_fullscreenTucked) expandFromEdge();
     if (!m_snapEnabled) m_dockSide = DockFree;
     else if (m_dockSide == DockFree) m_dockSide = DockRight;
+    refreshAttentionBearings();
     update();
     refreshBallOpacity();
     if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
@@ -2684,12 +2708,80 @@ void FloatingBall::setStatusOrbMode(bool enabled)
     }
     if (m_statusOrbMode == enabled) return;
     m_statusOrbMode = enabled;
-    if (m_statusOrbMode) expandFromEdge();
+    if (m_statusOrbMode && !m_manualTucked && !m_fullscreenTucked) expandFromEdge();
     statusMonitor()->setEnabled(m_statusOrbMode);
+    refreshAttentionBearings();
     savePreferences();
     broadcastSharedPreferences();
     update();
     if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+}
+
+void FloatingBall::setAutoHideEnabled(bool enabled)
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->setAutoHideEnabled(enabled);
+        return;
+    }
+    if (m_autoHideEnabled == enabled) return;
+    m_autoHideEnabled = enabled;
+    if (!m_autoHideEnabled && !m_manualTucked && !m_fullscreenTucked) {
+        expandFromEdge();
+    }
+    savePreferences();
+    broadcastSharedPreferences();
+    refreshBallOpacity();
+}
+
+void FloatingBall::setAutoTuckFullscreen(bool enabled)
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->setAutoTuckFullscreen(enabled);
+        return;
+    }
+    if (m_autoTuckFullscreen == enabled) return;
+    m_autoTuckFullscreen = enabled;
+    m_fullscreenTucked = (m_autoTuckFullscreen && dockModel()->activeWindowFullscreen());
+    if (m_fullscreenTucked) tuckToEdgeCapsule(false, true);
+    else if (!m_manualTucked && !m_autoHideEnabled) expandFromEdge();
+    savePreferences();
+    broadcastSharedPreferences();
+}
+
+void FloatingBall::triggerImeFlash(const QString &label, int durationMs)
+{
+    QString clean = label.trimmed();
+    if (clean.isEmpty() && m_statusMonitor) {
+        clean = m_statusMonitor->snapshot().inputLabel;
+    }
+    if (clean.isEmpty()) return;
+    m_imeFlashLabel = clean;
+    if (m_imeFlashTimer) m_imeFlashTimer->start(qMax(300, durationMs));
+    update();
+    if (isPrimaryBall()) {
+        for (FloatingBall *rep : replicaBalls()) {
+            rep->m_imeFlashLabel = clean;
+            if (rep->m_imeFlashTimer) rep->m_imeFlashTimer->start(qMax(300, durationMs));
+            rep->update();
+        }
+    }
+}
+
+QString FloatingBall::activeImeFlashLabel() const
+{
+    if (m_imeFlashTimer && m_imeFlashTimer->isActive() && !m_imeFlashLabel.isEmpty())
+        return m_imeFlashLabel;
+    return {};
+}
+
+void FloatingBall::refreshAttentionBearings()
+{
+    if (!m_fanOverlay) return;
+    const QList<qreal> next = m_fanOverlay->computeAttentionAnglesRad();
+    if (m_attentionAnglesRad != next) {
+        m_attentionAnglesRad = next;
+        update();
+    }
 }
 
 SystemStatusMonitor *FloatingBall::statusMonitor()
@@ -2700,6 +2792,7 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
         connect(m_statusMonitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &st) {
             if (m_statusOrbMode) {
                 QStringList tips;
+                tips.append(QTime::currentTime().toString(QStringLiteral("HH:mm")));
                 if (st.batteryPresent)
                     tips.append(tr("电量 %1%%2").arg(st.batteryPercent).arg(st.batteryPluggedIn ? tr("（充电中）") : QString()));
                 if (!st.networkText.isEmpty()) tips.append(st.networkText);
@@ -2716,13 +2809,25 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
                     for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
                 }
             }
+            refreshAttentionBearings();
             update();
             if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
         });
+        connect(m_statusMonitor, &SystemStatusMonitor::notificationReceived, this,
+                [this](const QString &appName, const QString &desktopEntry, const QString &) {
+            dockModel()->notifyAppAttention(appName, desktopEntry);
+            refreshAttentionBearings();
+        });
+        connect(m_statusMonitor, &SystemStatusMonitor::inputMethodActivity, this,
+                [this](const QString &lbl) {
+            triggerImeFlash(lbl);
+        });
         connect(m_statusMonitor, &SystemStatusMonitor::trayItemsChanged, this, [this] {
+            refreshAttentionBearings();
             if (m_orbitVisible && m_fanOverlay && m_fanOverlay->isDrilled())
                 m_fanOverlay->refreshLiveLayout();
             for (FloatingBall *rep : replicaBalls()) {
+                rep->refreshAttentionBearings();
                 if (rep->isOrbitVisible() && rep->fanOverlay() && rep->fanOverlay()->isDrilled())
                     rep->fanOverlay()->refreshLiveLayout();
             }
@@ -2738,8 +2843,13 @@ void FloatingBall::clearNotificationDot()
         return;
     }
     if (m_statusMonitor) m_statusMonitor->clearNotifications();
+    if (m_dockModel) m_dockModel->clearAllAttention();
+    refreshAttentionBearings();
     update();
-    for (FloatingBall *rep : replicaBalls()) rep->update();
+    for (FloatingBall *rep : replicaBalls()) {
+        rep->refreshAttentionBearings();
+        rep->update();
+    }
 }
 
 void FloatingBall::setSystemAudioState(int percent, bool muted)
@@ -2786,7 +2896,13 @@ AppDockModel *FloatingBall::dockModel()
     if (!m_dockModel) {
         m_dockModel = new AppDockModel(this);
         connect(m_dockModel, &AppDockModel::appsChanged, this, [this] {
+            refreshAttentionBearings();
             if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
+        });
+        connect(m_dockModel, &AppDockModel::activeFullscreenChanged, this, [this](bool fs) {
+            m_fullscreenTucked = (m_autoTuckFullscreen && fs);
+            if (m_fullscreenTucked) tuckToEdgeCapsule(false, true);
+            else if (!m_manualTucked && !m_autoHideEnabled) expandFromEdge();
         });
     }
     return m_dockModel;
@@ -2860,6 +2976,8 @@ void FloatingBall::executeSlotItem(const RadialSlotItem &item)
 {
     const QPoint anchor = anchorCenterGlobal().toPoint();
     if (item.kind == RadialSlotItem::AppSlot) {
+        dockModel()->clearAttentionForApp(item.app);
+        refreshAttentionBearings();
         const auto outcome = dockModel()->toggleOrActivate(item.app);
         if (!outcome.message.isEmpty())
             DesktopActions::showToast(outcome.message, anchor);
@@ -3029,7 +3147,12 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("paste")) toastOutcome(DesktopActions::pasteClipboard());
     else if (id == QLatin1String("copy")) toastOutcome(DesktopActions::copySelection());
     else if (id == QLatin1String("record")) recordScreen();
-    else if (id == QLatin1String("ime")) toastOutcome(DesktopActions::switchInputMethod());
+    else if (id == QLatin1String("ime")) {
+        const auto out = DesktopActions::switchInputMethod();
+        toastOutcome(out);
+        const QString curIm = statusMonitor()->snapshot().inputLabel;
+        triggerImeFlash(curIm == QStringLiteral("双") ? QStringLiteral("EN") : QStringLiteral("双"));
+    }
     else if (id == QLatin1String("terminal")) toastOutcome(DesktopActions::openTerminal());
     else if (id == QLatin1String("browser")) toastOutcome(DesktopActions::openBrowser());
     else if (id == QLatin1String("home")) toastOutcome(DesktopActions::openHomeFolder());
@@ -3183,7 +3306,11 @@ void FloatingBall::stopCrosshairDwell()
 
 void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::KeyboardModifiers modifiers)
 {
-    expandFromEdge();
+    m_startedInteractionTucked = m_edgeTucked;
+    if (m_edgeTucked && !m_manualTucked && !m_fullscreenTucked) {
+        expandFromEdge();
+        m_startedInteractionTucked = false;
+    }
     if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running)
         m_geometryAnimation->stop();
 
@@ -3192,6 +3319,8 @@ void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::Keyboar
     m_idleTimer->stop();
 
     if (modifiers & (Qt::AltModifier | Qt::ControlModifier | Qt::MetaModifier)) {
+        m_manualTucked = false;
+        expandFromEdge();
         closeFan(true);
         m_gestureMode = GestureMoveBall;
         m_dragOffset = globalPos - QPointF(pos());
@@ -3211,8 +3340,31 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
     m_lastGlobalPos = globalPos;
 
     if (m_gestureMode == GesturePressed) {
-        if (QLineF(globalPos, m_pressGlobalPos).length() >= 10.0) {
+        const QPointF delta = globalPos - m_pressGlobalPos;
+        const qreal dist = std::hypot(delta.x(), delta.y());
+        if (dist >= 10.0) {
             m_holdTimer->stop();
+
+            // Outward push toward the docked screen bezel -> morph Primary Round Ball into Edge Capsule!
+            if (!m_edgeTucked && m_dockSide != DockFree) {
+                const bool pushedToBezel =
+                    (m_dockSide == DockRight && delta.x() >= 13.0 && qAbs(delta.x()) > qAbs(delta.y())) ||
+                    (m_dockSide == DockLeft && delta.x() <= -13.0 && qAbs(delta.x()) > qAbs(delta.y())) ||
+                    (m_dockSide == DockTop && delta.y() <= -13.0 && qAbs(delta.y()) > qAbs(delta.x())) ||
+                    (m_dockSide == DockBottom && delta.y() >= 13.0 && qAbs(delta.y()) > qAbs(delta.x()));
+                if (pushedToBezel) {
+                    m_gestureMode = GestureIdle;
+                    tuckToEdgeCapsule(true, true);
+                    return;
+                }
+            }
+
+            // Inward pull (even starting from the tucked Edge Capsule!) -> restore circle & open FlickFan!
+            if (m_edgeTucked) {
+                m_manualTucked = false;
+                expandFromEdge();
+                m_startedInteractionTucked = false;
+            }
             closeOtherFans(this);
             m_gestureMode = GestureFlickFan;
             m_orbitVisible = true;
@@ -3290,6 +3442,13 @@ void FloatingBall::endPointerInteraction(const QPointF &globalPos)
     m_gestureMode = GestureIdle;
 
     if (finishedMode == GesturePressed) {
+        if (m_startedInteractionTucked && m_edgeTucked) {
+            // Clicking / tapping the tucked Edge Capsule restores the Primary Round Ball!
+            m_manualTucked = false;
+            expandFromEdge();
+            refreshBallOpacity();
+            return;
+        }
         openTapFan();
         return;
     }
@@ -3488,7 +3647,12 @@ bool FloatingBall::gestureEvent(QGestureEvent *event)
 void FloatingBall::enterEvent(QEnterEvent *event)
 {
     Q_UNUSED(event);
-    expandFromEdge();
+    // Only auto-expand on passive mouse hover if tucked due to idle auto-hide;
+    // when tucked intentionally (fullscreen video/game or manual bezel push), stay
+    // unobtrusive as a slim capsule until clicked or pulled!
+    if (m_edgeTucked && !m_manualTucked && !m_fullscreenTucked) {
+        expandFromEdge();
+    }
     m_pointerInside = true;
     refreshSystemAudioState();
     refreshBallOpacity();
@@ -3621,13 +3785,19 @@ void FloatingBall::recoverVisibleAfterOutputChange()
         loadScreenPlacement();
     }
 
+    if (screens.size() == 1 && m_hiddenOnThisScreen && !m_userHiddenAll) {
+        // Never leave zero balls visible when docked in single-monitor clamshell mode!
+        m_hiddenOnThisScreen = false;
+    }
+
     adaptToScreen();
 
     if (!m_userHiddenAll && !m_hiddenOnThisScreen && m_assignedScreen) {
         const bool isWayland = QGuiApplication::platformName().startsWith(QStringLiteral("wayland"));
-        const bool needsRemap = !isVisible() ||
+        const bool needsRemap = !isVisible() || assignedMissing || m_waylandSurfaceClosed ||
             (isWayland && windowHandle() && windowHandle()->screen() != m_assignedScreen);
         if (needsRemap) {
+            m_waylandSurfaceClosed = false;
             closeFan(true);
             if (isVisible()) hide();
             if (windowHandle()) windowHandle()->setScreen(m_assignedScreen);
@@ -3793,31 +3963,57 @@ void FloatingBall::snapToEdge(bool animate)
 
     m_expandedDockGeometry = targetRect;
     applyGeometry(targetRect, animate);
+    refreshAttentionBearings();
+}
+
+void FloatingBall::tuckToEdgeCapsule(bool manual, bool animate)
+{
+    if (m_dockSide == DockFree) return;
+    closeFan(true);
+    if (manual) m_manualTucked = true;
+
+    if (!m_edgeTucked) {
+        m_expandedDockGeometry = geometry();
+    }
+    m_edgeTucked = true;
+
+    const QRect bounds = m_screenBounds.isEmpty()
+        ? (screen() ? screen()->availableGeometry() : QRect(0, 0, 1920, 1080))
+        : m_screenBounds;
+    const int d = qMax(m_expandedDockGeometry.width(), m_expandedDockGeometry.height());
+    // Supplement Edge Capsule morph: slim vertical capsule on Left/Right edges (~26x84),
+    // slim horizontal capsule on Top/Bottom edges (~84x26).
+    const int capThick = qBound(24, qRound(d * 0.44), 30);
+    const int capLen = qBound(74, qRound(d * 1.38), 102);
+
+    QRect target;
+    if (m_dockSide == DockTop) {
+        const int cx = m_expandedDockGeometry.center().x();
+        const int x = qBound(bounds.left() + 6, cx - capLen / 2, qMax(bounds.left() + 6, bounds.right() - capLen - 6));
+        target = QRect(x, bounds.top(), capLen, capThick);
+    } else if (m_dockSide == DockBottom) {
+        const int cx = m_expandedDockGeometry.center().x();
+        const int x = qBound(bounds.left() + 6, cx - capLen / 2, qMax(bounds.left() + 6, bounds.right() - capLen - 6));
+        target = QRect(x, bounds.bottom() - capThick + 1, capLen, capThick);
+    } else if (m_dockSide == DockLeft) {
+        const int cy = m_expandedDockGeometry.center().y();
+        const int y = qBound(bounds.top() + 6, cy - capLen / 2, qMax(bounds.top() + 6, bounds.bottom() - capLen - 6));
+        target = QRect(bounds.left(), y, capThick, capLen);
+    } else {
+        const int cy = m_expandedDockGeometry.center().y();
+        const int y = qBound(bounds.top() + 6, cy - capLen / 2, qMax(bounds.top() + 6, bounds.bottom() - capLen - 6));
+        target = QRect(bounds.right() - capThick + 1, y, capThick, capLen);
+    }
+
+    applyGeometry(target, animate);
+    update();
 }
 
 void FloatingBall::collapseToEdge()
 {
-    // In Duo Status Orb mode (designed to replace a hidden top status bar),
-    // keep the full circular status instrument visible at low idle opacity.
-    if (m_statusOrbMode || m_edgeTucked || !m_autoHideEnabled || m_dockSide == DockFree || m_orbitVisible || m_gestureMode != GestureIdle)
+    if (m_edgeTucked || !m_autoHideEnabled || m_dockSide == DockFree || m_orbitVisible || m_gestureMode != GestureIdle)
         return;
-    if (m_geometryAnimation && m_geometryAnimation->state() == QAbstractAnimation::Running)
-        m_geometryAnimation->stop();
-
-    m_expandedDockGeometry = geometry();
-    m_edgeTucked = true;
-    const int d = qMax(m_expandedDockGeometry.width(), m_expandedDockGeometry.height());
-    const int tuck = qMax(26, qRound(d * 0.52));
-    if (m_dockSide == DockTop) {
-        applyGeometry(QRect(m_expandedDockGeometry.x(), m_expandedDockGeometry.top(), d, tuck), false);
-    } else if (m_dockSide == DockBottom) {
-        applyGeometry(QRect(m_expandedDockGeometry.x(), m_expandedDockGeometry.bottom() - tuck + 1, d, tuck), false);
-    } else if (m_dockSide == DockLeft) {
-        applyGeometry(QRect(m_expandedDockGeometry.left(), m_expandedDockGeometry.y(), tuck, d), false);
-    } else {
-        applyGeometry(QRect(m_expandedDockGeometry.right() - tuck + 1, m_expandedDockGeometry.y(), tuck, d), false);
-    }
-    update();
+    tuckToEdgeCapsule(false, false);
 }
 
 void FloatingBall::expandFromEdge()
@@ -3830,19 +4026,12 @@ void FloatingBall::expandFromEdge()
 
 void FloatingBall::updateBallMask()
 {
-    if (m_edgeTucked) {
-        const int d = qMax(width(), height());
-        QRect ellipseRect;
-        if (m_dockSide == DockTop)
-            ellipseRect = QRect(0, -d / 2, d, d);
-        else if (m_dockSide == DockBottom)
-            ellipseRect = QRect(0, height() - d / 2, d, d);
-        else if (m_dockSide == DockLeft)
-            ellipseRect = QRect(-d / 2, 0, d, d);
-        else
-            ellipseRect = QRect(width() - d / 2, 0, d, d);
-        const QRegion halfCircle = QRegion(ellipseRect, QRegion::Ellipse).intersected(QRegion(rect()));
-        setMask(halfCircle.isEmpty() ? QRegion(rect()) : halfCircle);
+    if (width() != height() || m_edgeTucked) {
+        const qreal r = qMin(width(), height()) * 0.5;
+        QPainterPath path;
+        path.addRoundedRect(QRectF(rect()), r, r);
+        const QRegion reg(path.toFillPolygon().toPolygon());
+        setMask(reg.isEmpty() ? QRegion(rect()) : reg);
     } else {
         setMask(QRegion(rect(), QRegion::Ellipse));
     }
@@ -3916,6 +4105,7 @@ void FloatingBall::closeEvent(QCloseEvent *event)
         return;
     }
     event->ignore();
+    m_waylandSurfaceClosed = true;
     FloatingBall *primary = m_primaryPeer ? m_primaryPeer.data() : this;
     QPointer<FloatingBall> pPtr(primary);
     QTimer::singleShot(140, primary, [pPtr] {
@@ -3937,20 +4127,111 @@ void FloatingBall::paintEvent(QPaintEvent *)
     QPainter p(&face);
     p.setRenderHint(QPainter::Antialiasing);
 
-    const qreal d = qMax(width(), height());
-    QPointF sphereCenter = QRectF(rect()).center();
-    if (m_edgeTucked) {
-        if (m_dockSide == DockTop) sphereCenter = QPointF(d * 0.5, 0.0);
-        else if (m_dockSide == DockBottom) sphereCenter = QPointF(d * 0.5, qreal(height()));
-        else if (m_dockSide == DockLeft) sphereCenter = QPointF(0.0, d * 0.5);
-        else sphereCenter = QPointF(qreal(width()), d * 0.5);
+    const SystemStatusSnapshot &st = statusMonitor()->snapshot();
+    const QString imeFlash = activeImeFlashLabel();
+    const QTime now = QTime::currentTime();
+    const QString hh = now.toString(QStringLiteral("HH"));
+    const QString mm = now.toString(QStringLiteral("mm"));
+
+    // ========================================================================
+    // Supplement Morph: Slim Edge Capsule (Vertical on Left/Right, Horizontal on Top/Bottom)
+    // ========================================================================
+    if (m_edgeTucked || width() != height()) {
+        const QRectF capRect = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+        const qreal capR = qMin(capRect.width(), capRect.height()) * 0.5;
+        const bool vertical = capRect.height() >= capRect.width();
+
+        QLinearGradient bg(capRect.topLeft(), capRect.bottomRight());
+        bg.setColorAt(0.0, QColor(34, 40, 52, 238));
+        bg.setColorAt(1.0, QColor(16, 20, 28, 246));
+        p.setBrush(bg);
+        p.setPen(QPen(QColor(124, 200, 255, 92), 1.2));
+        p.drawRoundedRect(capRect, capR, capR);
+
+        if (m_statusOrbMode) {
+            const QPointF c = capRect.center();
+            if (vertical) {
+                // Center 2-line 24H zero-padded clock ("09" / "05") or transient IME flash!
+                if (!imeFlash.isEmpty()) {
+                    QFont f = font();
+                    f.setPixelSize(qRound(capRect.width() * 0.48));
+                    f.setWeight(QFont::Bold);
+                    p.setFont(f);
+                    p.setPen(QColor("#7dd3fc"));
+                    p.drawText(capRect, Qt::AlignCenter, imeFlash);
+                } else {
+                    QFont f = font();
+                    f.setPixelSize(qMax(10, qRound(capRect.width() * 0.44)));
+                    f.setWeight(QFont::Bold);
+                    p.setFont(f);
+                    p.setPen(QColor("#f8fafc"));
+                    p.drawText(QRectF(capRect.left(), c.y() - 16.0, capRect.width(), 16.0), Qt::AlignCenter, hh);
+                    p.setPen(QColor("#cbd5e1"));
+                    p.drawText(QRectF(capRect.left(), c.y() + 0.5, capRect.width(), 16.0), Qt::AlignCenter, mm);
+                }
+
+                // Bottom compact battery bar
+                if (st.batteryPresent) {
+                    const qreal bw = capRect.width() * 0.54;
+                    const QRectF bTrack(c.x() - bw * 0.5, capRect.bottom() - 9.5, bw, 3.2);
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(QColor(242, 246, 252, 52));
+                    p.drawRoundedRect(bTrack, 1.6, 1.6);
+                    const QColor bCol = st.batteryPluggedIn ? QColor("#6edba0")
+                        : (st.batteryPercent < 15 ? QColor("#ef5350")
+                           : (st.batteryPercent < 25 ? QColor("#f4c542") : QColor("#dce8f8")));
+                    p.setBrush(bCol);
+                    p.drawRoundedRect(QRectF(bTrack.left(), bTrack.top(),
+                                             bw * qBound(0, st.batteryPercent, 100) / 100.0, 3.2), 1.6, 1.6);
+                }
+
+                // Project directional message radar dots onto the inner screen-facing edge!
+                const qreal innerX = (m_dockSide == DockLeft) ? (capRect.right() - 3.2) : (capRect.left() + 3.2);
+                for (qreal rad : m_attentionAnglesRad) {
+                    const qreal normY = qBound(-0.82, std::sin(rad), 0.82);
+                    const QPointF dp(innerX, c.y() + normY * (capRect.height() * 0.36));
+                    p.setPen(QPen(QColor("#ffffff"), 0.9));
+                    p.setBrush(QColor("#ff4d6d"));
+                    p.drawEllipse(dp, 3.2, 3.2);
+                }
+            } else {
+                // Horizontal capsule on Top/Bottom screen edges
+                QFont f = font();
+                f.setPixelSize(qMax(10, qRound(capRect.height() * 0.46)));
+                f.setWeight(QFont::Bold);
+                p.setFont(f);
+                p.setPen(!imeFlash.isEmpty() ? QColor("#7dd3fc") : QColor("#f8fafc"));
+                p.drawText(capRect, Qt::AlignCenter, !imeFlash.isEmpty() ? imeFlash : (hh + QLatin1Char(':') + mm));
+
+                const qreal innerY = (m_dockSide == DockTop) ? (capRect.bottom() - 3.2) : (capRect.top() + 3.2);
+                for (qreal rad : m_attentionAnglesRad) {
+                    const qreal normX = qBound(-0.82, std::cos(rad), 0.82);
+                    const QPointF dp(c.x() + normX * (capRect.width() * 0.36), innerY);
+                    p.setPen(QPen(QColor("#ffffff"), 0.9));
+                    p.setBrush(QColor("#ff4d6d"));
+                    p.drawEllipse(dp, 3.2, 3.2);
+                }
+            }
+        }
+
+        p.end();
+        QPainter out(this);
+        out.setOpacity(qMax(0.58, m_ballOpacity));
+        out.drawPixmap(0, 0, face);
+        return;
     }
+
+    // ========================================================================
+    // Primary Hero Form: Circular Status & 2-Line 24H Clock Ball
+    // ========================================================================
+    const qreal d = qMax(width(), height());
+    const QPointF sphereCenter = QRectF(rect()).center();
     const qreal radius = d * 0.5 - 2.2;
     const QRectF sphereRect(sphereCenter.x() - radius, sphereCenter.y() - radius, radius * 2.0, radius * 2.0);
 
     // Subtle soft shadow
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, 46));
+    p.setBrush(QColor(0, 0, 0, 48));
     p.drawEllipse(sphereRect.translated(0, 1.4));
 
     // Obsidian glass sphere body
@@ -3959,30 +4240,29 @@ void FloatingBall::paintEvent(QPaintEvent *)
         surface.setColorAt(0.0, QColor(46, 92, 168, 240));
         surface.setColorAt(1.0, QColor(24, 48, 96, 245));
     } else {
-        surface.setColorAt(0.0, QColor(42, 46, 56, 232));
-        surface.setColorAt(1.0, QColor(20, 23, 30, 240));
+        surface.setColorAt(0.0, QColor(42, 46, 56, 236));
+        surface.setColorAt(1.0, QColor(20, 23, 30, 244));
     }
     p.setBrush(surface);
-    QColor rimColor = (m_gestureMode == GestureMoveBall) ? QColor("#7cc8ff") : QColor(255, 255, 255, 58);
-    qreal rimWidth = (m_gestureMode == GestureMoveBall) ? 1.5 : 1.2;
+    const QColor rimColor = (m_gestureMode == GestureMoveBall || m_orbitVisible)
+        ? QColor("#7cc8ff")
+        : QColor(255, 255, 255, 62);
+    const qreal rimWidth = (m_gestureMode == GestureMoveBall || m_orbitVisible) ? 1.5 : 1.2;
     p.setPen(QPen(rimColor, rimWidth));
     p.drawEllipse(sphereRect);
 
-    // Center emblem: either Duo Combined Status Orb (brightness/volume/battery/network/IM/privacy/notif)
-    // or classic Xiaomi Mi 5 concentric luminous rings
     if (m_orbitVisible) {
         const qreal iconDim = d * 0.34;
         FloatingIcons::draw(p, FloatingIcons::Close,
                             QRectF(sphereCenter.x() - iconDim * 0.5, sphereCenter.y() - iconDim * 0.5,
                                    iconDim, iconDim),
                             QColor("#f5f8fd"));
-    } else if (m_statusOrbMode && !m_edgeTucked) {
-        const SystemStatusSnapshot &st = statusMonitor()->snapshot();
+    } else if (m_statusOrbMode) {
         const QColor ink(QStringLiteral("#f2f6fc"));
         const QColor dimInk(242, 246, 252, 52);
 
         const qreal rOuter = radius * 0.84;
-        const qreal rInner = radius * 0.62;
+        const qreal rInner = radius * 0.65;
         const QRectF outerArcRect(sphereCenter.x() - rOuter, sphereCenter.y() - rOuter, rOuter * 2.0, rOuter * 2.0);
         const QRectF innerArcRect(sphereCenter.x() - rInner, sphereCenter.y() - rInner, rInner * 2.0, rInner * 2.0);
 
@@ -3991,7 +4271,6 @@ void FloatingBall::paintEvent(QPaintEvent *)
             const qreal trackW = qMax(1.6, d * 0.036);
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(dimInk, trackW, Qt::SolidLine, Qt::RoundCap));
-            // Qt drawArc angles: 220 deg (bottom-left) -> 140 deg (top-left), span = -80 deg
             p.drawArc(outerArcRect, qRound(220.0 * 16), qRound(-80.0 * 16));
             if (st.brightnessPercent > 0) {
                 p.setPen(QPen(ink, trackW, Qt::SolidLine, Qt::RoundCap));
@@ -4008,7 +4287,6 @@ void FloatingBall::paintEvent(QPaintEvent *)
             const qreal dotR = qMax(0.95, d * 0.019);
             p.setPen(Qt::NoPen);
             for (int i = 0; i < 13; ++i) {
-                // Canvas angle from +40 deg (bottom-right) up to -40 deg (top-right)
                 const qreal deg = 40.0 - 80.0 * i / 12.0;
                 const qreal rad = qDegreesToRadians(deg);
                 const QPointF pt(sphereCenter.x() + rOuter * qCos(rad),
@@ -4018,15 +4296,14 @@ void FloatingBall::paintEvent(QPaintEvent *)
             }
         }
 
-        // 3. Top 250-deg inner arc: Battery (plugged-in green, <15% red, <25% yellow)
+        // 3. Top 250-deg inner arc: Battery
         if (st.batteryPresent) {
-            const qreal battW = qMax(2.0, d * 0.048);
+            const qreal battW = qMax(2.0, d * 0.046);
             const QColor battColor = st.batteryPluggedIn ? QColor("#6edba0")
                 : (st.batteryPercent < 15 ? QColor("#ef5350")
                    : (st.batteryPercent < 25 ? QColor("#f4c542") : ink));
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(dimInk, battW, Qt::SolidLine, Qt::RoundCap));
-            // 215 deg CCW (bottom-left) clockwise 250 deg across top to -35 deg (bottom-right)
             p.drawArc(innerArcRect, qRound(215.0 * 16), qRound(-250.0 * 16));
             if (st.batteryPercent > 0) {
                 p.setPen(QPen(battColor, battW, Qt::SolidLine, Qt::RoundCap));
@@ -4040,10 +4317,10 @@ void FloatingBall::paintEvent(QPaintEvent *)
             const bool offline = !st.networkConnected;
             const int litSignal = offline ? 5 : qBound(0, static_cast<int>(qCeil(st.signalQuality / 20.0)), 5);
             const QColor sigColor = offline ? QColor("#ef5350") : ink;
-            const qreal sigR = qMax(1.2, d * 0.024);
+            const qreal sigR = qMax(1.15, d * 0.022);
             p.setPen(Qt::NoPen);
             for (int i = 0; i < 5; ++i) {
-                const qreal deg = 130.0 - i * 20.0; // bottom arc: 130..50 deg in canvas coords
+                const qreal deg = 130.0 - i * 20.0;
                 const qreal rad = qDegreesToRadians(deg);
                 const QPointF pt(sphereCenter.x() + rInner * qCos(rad),
                                  sphereCenter.y() + rInner * qSin(rad));
@@ -4052,39 +4329,45 @@ void FloatingBall::paintEvent(QPaintEvent *)
             }
         }
 
-        // 5. Center emblem: Input method ("双" or "EN")
-        if (st.inputPresent && !st.inputLabel.isEmpty()) {
-            QFont f = font();
-            f.setPixelSize(qRound(st.inputLabel == QLatin1String("双") ? d * 0.28 : d * 0.22));
-            f.setWeight(QFont::DemiBold);
-            p.setFont(f);
-            p.setPen(ink);
-            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() - rInner - 1.0,
-                              rInner * 2.0, rInner * 2.0),
-                       Qt::AlignCenter, st.inputLabel);
-        } else {
+        // 5. Center Emblem:
+        //    • Default: 2-Line 24H Zero-Padded Clock ("09" over "05")
+        //    • Transient on keyboard/IME activity: crisp IME badge ("双" or "EN")
+        if (!imeFlash.isEmpty()) {
+            const qreal badgeW = rInner * 1.38;
+            const qreal badgeH = rInner * 1.12;
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(242, 246, 252, 210));
-            p.drawEllipse(sphereCenter, d * 0.065, d * 0.065);
+            p.setBrush(QColor(56, 189, 248, 52));
+            p.drawRoundedRect(QRectF(sphereCenter.x() - badgeW * 0.5, sphereCenter.y() - badgeH * 0.5,
+                                     badgeW, badgeH), 7.0, 7.0);
+            QFont f = font();
+            f.setPixelSize(qRound(imeFlash == QStringLiteral("双") ? d * 0.28 : d * 0.23));
+            f.setWeight(QFont::Bold);
+            p.setFont(f);
+            p.setPen(QColor("#7dd3fc"));
+            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() - rInner - 0.5,
+                              rInner * 2.0, rInner * 2.0),
+                       Qt::AlignCenter, imeFlash);
+        } else {
+            QFont f = font();
+            f.setPixelSize(qMax(10, qRound(d * 0.215)));
+            f.setWeight(QFont::Bold);
+            p.setFont(f);
+            const qreal lineH = d * 0.235;
+            const qreal vShift = d * 0.102;
+            p.setPen(QColor("#f8fafc"));
+            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() - vShift - lineH * 0.5,
+                              rInner * 2.0, lineH),
+                       Qt::AlignCenter, hh);
+            p.setPen(QColor("#cbd5e1"));
+            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() + vShift - lineH * 0.5,
+                              rInner * 2.0, lineH),
+                       Qt::AlignCenter, mm);
         }
 
-        // 6. Corner status dots:
-        //    Top-Left  = Unread notification indicator dot (coral-rose with soft glow)
-        //    Top-Right = Microphone active (orange #ff9f0a)
-        //    Bottom-Right = Camera active (green #34c759)
+        // 6. Privacy indicator micro-dots (Top-Right = Mic, Bottom-Right = Camera)
         const qreal cornerOffset = radius * 0.59;
-        const qreal cornerDotR = qMax(2.2, d * 0.044);
+        const qreal cornerDotR = qMax(2.1, d * 0.042);
         p.setPen(Qt::NoPen);
-        if (st.hasNotificationDot()) {
-            const QPointF pt(sphereCenter.x() - cornerOffset, sphereCenter.y() - cornerOffset);
-            QRadialGradient glow(pt, cornerDotR * 2.3);
-            glow.setColorAt(0.0, QColor(255, 90, 120, 210));
-            glow.setColorAt(1.0, QColor(255, 90, 120, 0));
-            p.setBrush(glow);
-            p.drawEllipse(pt, cornerDotR * 2.3, cornerDotR * 2.3);
-            p.setBrush(QColor("#ff5272"));
-            p.drawEllipse(pt, cornerDotR, cornerDotR);
-        }
         if (st.micActive) {
             const QPointF pt(sphereCenter.x() + cornerOffset, sphereCenter.y() - cornerOffset);
             p.setBrush(QColor("#ff9f0a"));
@@ -4103,10 +4386,33 @@ void FloatingBall::paintEvent(QPaintEvent *)
         p.setPen(QPen(QColor(255, 255, 255, 235), qMax(1.8, d * 0.048)));
         p.drawEllipse(sphereCenter, d * 0.19, d * 0.19);
     }
+
+    // ★ 7. Directional Message Radar Dots on the Main Ball Rim! ★
+    // Each notifying window in the outer rings (or tray attention) projects a crisp dot
+    // at its exact expansion bearing angle on the main ball's perimeter!
+    if (m_statusOrbMode && !m_attentionAnglesRad.isEmpty()) {
+        const qreal rimR = radius * 0.89;
+        const qreal dotR = qMax(2.6, d * 0.050);
+        for (qreal rad : m_attentionAnglesRad) {
+            const QPointF pt(sphereCenter.x() + std::cos(rad) * rimR,
+                             sphereCenter.y() + std::sin(rad) * rimR);
+            QRadialGradient glow(pt, dotR * 2.3);
+            glow.setColorAt(0.0, QColor(255, 77, 109, 215));
+            glow.setColorAt(1.0, QColor(255, 77, 109, 0));
+            p.setPen(Qt::NoPen);
+            p.setBrush(glow);
+            p.drawEllipse(pt, dotR * 2.3, dotR * 2.3);
+
+            p.setBrush(QColor("#ff4d6d"));
+            p.setPen(QPen(QColor("#ffffff"), 1.0));
+            p.drawEllipse(pt, dotR, dotR);
+        }
+    }
+
     p.end();
 
     QPainter out(this);
-    out.setOpacity(m_edgeTucked ? qMax(0.40, m_ballOpacity) : m_ballOpacity);
+    out.setOpacity(m_ballOpacity);
     out.drawPixmap(0, 0, face);
 }
 
@@ -4223,28 +4529,25 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
     menu.addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
     menu.addSeparator();
 
-    auto *ringsMenu = menu.addMenu(tr("外围悬浮层数（当前 %1 层）").arg(m_ringCount));
-    for (int n : {1, 2, 3, 4, 6, 8, 10, 15, 20, 30}) {
-        QAction *a = ringsMenu->addAction(
-            n == kDefaultRingCount ? tr("%1 层（默认）").arg(n)
-                                   : (n == kMaxRingCount ? tr("%1 层（自适应铺满）").arg(n) : tr("%1 层").arg(n)));
-        a->setCheckable(true);
-        a->setChecked(n == m_ringCount);
-        connect(a, &QAction::triggered, this, [this, n] {
-            setRingCount(n);
-            DesktopActions::showToast(tr("外围悬浮层数已设为 %1 层（自动限屏不越界）").arg(n), anchorCenterGlobal().toPoint());
-        });
+    if (m_dockSide != DockFree) {
+        if (m_edgeTucked) {
+            menu.addAction(tr("恢复正圆双行时钟主球"), this, [this] {
+                m_manualTucked = false;
+                expandFromEdge();
+            });
+        } else {
+            menu.addAction(tr("临时靠边收成竖胶囊（看视频 / 游戏免打扰）"), this, [this] {
+                tuckToEdgeCapsule(true, true);
+            });
+        }
     }
-    menu.addAction(tr("从系统 Dock 同步常驻应用"), this, [this] {
-        const int count = dockModel()->importFromSystemDock();
-        DesktopActions::showToast(tr("✓ 已同步 %1 个系统 Dock 应用").arg(count), anchorCenterGlobal().toPoint());
-    });
-    auto *statusOrbAction = menu.addAction(tr("Duo 组合状态仪主球（亮度/音量/电量/网络/输入法/通知点）"));
+
+    auto *statusOrbAction = menu.addAction(tr("状态仪双行 24H 时钟主球（替代系统状态栏）"));
     statusOrbAction->setCheckable(true);
     statusOrbAction->setChecked(m_statusOrbMode);
     connect(statusOrbAction, &QAction::toggled, this, &FloatingBall::setStatusOrbMode);
-    if (m_statusMonitor && m_statusMonitor->snapshot().hasNotificationDot()) {
-        menu.addAction(tr("清除未读通知小点"), this, &FloatingBall::clearNotificationDot);
+    if (!m_attentionAnglesRad.isEmpty() || (m_statusMonitor && m_statusMonitor->snapshot().hasNotificationDot())) {
+        menu.addAction(tr("清除未读消息方位红点"), this, &FloatingBall::clearNotificationDot);
     }
     menu.addSeparator();
     if (QGuiApplication::screens().size() > 1) {
@@ -4284,17 +4587,11 @@ void FloatingBall::showSettings()
     auto *appearance = new QWidget(&dialog);
     auto *appForm = new QFormLayout(appearance);
 
-    auto *ringSpin = new QSpinBox(appearance);
-    ringSpin->setObjectName(QStringLiteral("ringCountSpin"));
-    ringSpin->setRange(kMinRingCount, kMaxRingCount);
-    ringSpin->setValue(m_ringCount);
-    ringSpin->setSuffix(tr(" 层（默认 3 层：2层快捷+已开应用，上限 %1 层）").arg(kMaxRingCount));
-
-    auto *dockCheck = new QCheckBox(tr("启用悬浮 Dock 替代模式（第 3 层起优先显示已打开应用 + 固定应用）"), appearance);
+    auto *dockCheck = new QCheckBox(tr("外圈自动展开所有已打开窗口（同应用稳定聚类，鼠标中键快关）"), appearance);
     dockCheck->setObjectName(QStringLiteral("dockModeCheck"));
     dockCheck->setChecked(m_dockModeEnabled);
 
-    auto *statusOrbCheck = new QCheckBox(tr("Duo 组合状态仪主球（显示亮度/音量/电量/网络/输入法/隐私/通知小点，适合隐藏状态栏）"), appearance);
+    auto *statusOrbCheck = new QCheckBox(tr("启用正圆双行 24H 时钟主球 + 方向消息雷达点（替代传统状态栏）"), appearance);
     statusOrbCheck->setObjectName(QStringLiteral("statusOrbCheck"));
     statusOrbCheck->setChecked(m_statusOrbMode);
 
@@ -4309,7 +4606,7 @@ void FloatingBall::showSettings()
     diameter->setSuffix(QStringLiteral(" px"));
 
     auto *idle = new QSpinBox(appearance);
-    idle->setRange(15, 95);
+    idle->setRange(15, 100);
     idle->setValue(qRound(m_idleOpacity * 100));
     idle->setSuffix(QStringLiteral(" %"));
 
@@ -4332,13 +4629,15 @@ void FloatingBall::showSettings()
     auto *snap = new QCheckBox(tr("松手自动贴靠屏幕四边（上 / 下 / 左 / 右）"), appearance);
     snap->setChecked(m_snapEnabled);
 
-    auto *autoHide = new QCheckBox(tr("闲置时退入屏幕边缘呈小米 5 半隐圆环"), appearance);
+    auto *autoHide = new QCheckBox(tr("闲置自动靠边形变为竖胶囊（默认关闭 · 常驻显示正圆时钟主球）"), appearance);
     autoHide->setChecked(m_autoHideEnabled);
+
+    auto *autoTuckFs = new QCheckBox(tr("全屏看视频 / 打游戏时自动靠边形变为竖胶囊（退出全屏自动恢复圆球）"), appearance);
+    autoTuckFs->setChecked(m_autoTuckFullscreen);
 
     auto *crosshairPull = new QCheckBox(tr("拉出最外层环一键唤起系统截屏（Spectacle / macshot）"), appearance);
     crosshairPull->setChecked(m_crosshairPullEnabled);
 
-    appForm->addRow(tr("外围悬浮层数"), ringSpin);
     appForm->addRow(dockCheck);
     appForm->addRow(statusOrbCheck);
     appForm->addRow(multiScreenCheck);
@@ -4349,17 +4648,18 @@ void FloatingBall::showSettings()
     appForm->addRow(blur);
     appForm->addRow(snap);
     appForm->addRow(autoHide);
+    appForm->addRow(autoTuckFs);
     appForm->addRow(crosshairPull);
 
     auto *gestureGuide = new QLabel(
         tr("交互提示：\n"
-           "• 短按展开多层扇形（展开时滚轮可实时增减层数，右键 App 可固定/退出）\n"
-           "• 按住内拉一划即选第 1 层动作或外围应用，松手瞬间切换\n"
-           "• 拉出最外层环松手即可一键唤起系统原生截图（Linux: KDE Spectacle / macOS: macshot）"),
+           "• 最内圈固定 5 个系统总控按钮；外侧自动把所有已打开窗口分层展开（支持鼠标左键切换、中键直接关闭）\n"
+           "• 有新消息的窗口会在正圆主球边缘对应方位亮起红点，点开主球顺着方向一眼命中\n"
+           "• 向屏幕外边框方向轻推主球可手动临时收成竖胶囊；全屏看视频/游戏会自动靠边形变"),
         appearance);
     gestureGuide->setWordWrap(true);
     appForm->addRow(gestureGuide);
-    tabs->addTab(appearance, tr("多层与手势"));
+    tabs->addTab(appearance, tr("形态与手势"));
 
     // Tab 2: Inner Ring (Ring 1) 5-Slot Actions
     auto *fanPage = new QWidget(&dialog);
@@ -4471,16 +4771,17 @@ void FloatingBall::showSettings()
         const QStringList defs = defaultOrbitActions();
         for (int i = 0; i < kOrbitSlotCount; ++i)
             slotCombos[i]->setCurrentIndex(slotCombos[i]->findData(defs[i]));
-        ringSpin->setValue(kDefaultRingCount);
         dockCheck->setChecked(true);
+        statusOrbCheck->setChecked(true);
         multiScreenCheck->setChecked(true);
-        diameter->setValue(56);
-        idle->setValue(38);
-        active->setValue(88);
+        diameter->setValue(60);
+        idle->setValue(82);
+        active->setValue(94);
         panels->setValue(58);
         blur->setChecked(blur->isEnabled());
         snap->setChecked(true);
-        autoHide->setChecked(true);
+        autoHide->setChecked(false);
+        autoTuckFs->setChecked(true);
         crosshairPull->setChecked(true);
         status->clear();
     });
@@ -4495,12 +4796,13 @@ void FloatingBall::showSettings()
             status->setText(tr("激活透明度需大于或等于闲置透明度。"));
             return;
         }
-        m_ringCount = qBound(kMinRingCount, ringSpin->value(), kMaxRingCount);
         m_dockModeEnabled = dockCheck->isChecked();
         setStatusOrbMode(statusOrbCheck->isChecked());
         m_multiScreenEnabled = multiScreenCheck->isChecked();
         m_snapEnabled = snap->isChecked();
         m_autoHideEnabled = autoHide->isChecked();
+        m_autoTuckFullscreen = autoTuckFs->isChecked();
+        m_fullscreenTucked = (m_autoTuckFullscreen && dockModel()->activeWindowFullscreen());
         m_crosshairPullEnabled = crosshairPull->isChecked();
         m_idleOpacity = idle->value() / 100.0;
         m_activeOpacity = active->value() / 100.0;

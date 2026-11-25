@@ -141,6 +141,8 @@ public:
 signals:
     void statusChanged(const SystemStatusSnapshot &snapshot);
     void trayItemsChanged();
+    void notificationReceived(const QString &appName, const QString &desktopEntry, const QString &summary);
+    void inputMethodActivity(const QString &label);
 
 private slots:
 #ifdef Q_OS_LINUX
@@ -152,6 +154,7 @@ private slots:
     void refreshLinuxSniTray();
     void refreshLinuxNightLight();
     void refreshLinuxPowerProfile();
+    void refreshLinuxInputMethod();
 #endif
 
 private:
@@ -162,7 +165,6 @@ private:
 
 #ifdef Q_OS_LINUX
     void initLinuxDBus();
-    void refreshLinuxInputMethod();
     void refreshLinuxMic();
     void refreshLinuxDnd();
     void refreshLinuxBluetooth();
@@ -175,6 +177,7 @@ private:
     SystemStatusSnapshot m_snapshot;
     QList<TrayItemInfo> m_trayItems;
     QTimer *m_pollTimer = nullptr;
+    QTimer *m_imeFastTimer = nullptr;
     QProcess *m_notifMonitor = nullptr;
     int m_brightnessMax = 100;
 };

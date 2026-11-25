@@ -4,12 +4,15 @@
 #include <QIcon>
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
 struct DockAppEntry {
     QString id;
+    QString appKey;       // Normalized app identifier for stable same-app window clustering
     QString name;
+    QString caption;      // Live window title (e.g. "nvim floatingball.cpp")
     QString genericName;
     QString keywords;
     QStringList categories;
@@ -18,17 +21,22 @@ struct DockAppEntry {
     QIcon icon;
     bool running = false;
     bool active = false;
+    bool minimized = false;
+    bool demandsAttention = false;
     bool pinned = false;
 };
 
-// Native Dock replacement provider for FloatingBall's multi-ring outer orbits.
-// Combines user-pinned apps (seeded from the system Dock on macOS or common
-// desktop apps on Linux) with live running regular desktop applications.
+// Native Dock & Live Window provider for FloatingBall's multi-ring outer orbits.
 class AppDockModel : public QObject {
     Q_OBJECT
 public:
     explicit AppDockModel(QObject *parent = nullptr);
     ~AppDockModel() override;
+
+    // Pure currently open windows, stably clustered by application so spatial
+    // bearing angles remain predictable across focus changes.
+    QList<DockAppEntry> openWindows() const;
+    bool activeWindowFullscreen() const { return m_activeFullscreen; }
 
     // Merged Dock list: when runningFirst is true, currently open/running apps
     // come first (active app at the front), followed by pinned apps not yet
@@ -43,22 +51,36 @@ public:
     bool togglePin(const QString &launchTarget);
     int importFromSystemDock();
 
+    void notifyAppAttention(const QString &appName, const QString &desktopEntry = QString());
+    void clearAttentionForApp(const DockAppEntry &entry);
+    void clearAllAttention();
+
+    // Test hooks for deterministic automated verification (0..100 windows, attention, fullscreen)
+    void setOpenWindowsForTest(const QList<DockAppEntry> &windows);
+    void clearOpenWindowsForTest();
+    void setActiveFullscreenForTest(bool fullscreen);
+
     DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry) const;
     DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry) const;
     DesktopActions::Outcome minimizeAllWindows() const;
     DesktopActions::Outcome launchFresh(const DockAppEntry &entry) const;
-    DesktopActions::Outcome quitApp(const DockAppEntry &entry) const;
+    DesktopActions::Outcome quitApp(const DockAppEntry &entry);
 
     static QString displayNameForTarget(const QString &launchTarget);
 
 signals:
     void appsChanged();
+    void activeFullscreenChanged(bool fullscreen);
 
 private:
     void loadPinned();
     void savePinned() const;
 
     QStringList m_pinnedTargets;
+    QSet<QString> m_notifiedAppKeys;
+    bool m_activeFullscreen = false;
+    bool m_hasTestWindows = false;
+    QList<DockAppEntry> m_testWindows;
 #ifdef Q_OS_MACOS
     void *m_macObservers = nullptr;
 #elif defined(Q_OS_LINUX)

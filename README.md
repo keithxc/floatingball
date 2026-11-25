@@ -12,14 +12,13 @@ See [FOOVIEW_STUDY.md](FOOVIEW_STUDY.md) for the reference gesture study and [TO
 
 Designed so touching or mousing on a **Touchscreen Mac** or **Touchscreen Linux Desktop (KDE Plasma Wayland)** feels immediate, legible, and conflict-free:
 
-1. **Duo Status Orb & Idle Edge Half-Ring**
-   - Docks cleanly to any of the four screen edges (Top / Bottom / Left / Right), with per-screen independent edge placement on multi-monitor setups.
-   - Displays live glanceable indicators (brightness/volume rings, battery, Wi-Fi/network, input method, privacy mic/camera dots, and unread notification dot) or tucks into a subtle glowing half-ring crescent when idle.
-2. **Short Tap (`Tap`) — 2-Ring Branching Hub**
-   - Opens a unified single-canvas 2-ring hub (zero hover geometry jitter):
-     - **Inner Ring**: 4 virtual desktops on Linux (`vdesk1..4`) or 4 high-frequency actions on macOS (`Mission Control`, `Minimize All`, `Screenshot`, `Input Method`).
-     - **Outer Ring**: 5 hubs (`Launcher`, `Windows ›`, `Tray ›` / `Clipboard`, `Control Center`, `Tools ›`).
-   - Sliding or tapping into any `›` hub expands a clean single ring with an explicit `←` backtrack breadcrumb orb.
+1. **Primary Circular 24H Clock Ball & Supplement Edge Capsule Morph**
+   - Always-visible circular status ball by default (built to replace bulky traditional desktop status bars/panels), docking cleanly to any of the four screen edges with per-screen independent placement.
+   - Displays a crisp **2-line zero-padded 24H clock (`HH` / `mm`)** at the center (transiently flashing the active input method `双` / `EN` on keyboard IME activity), surrounded by live brightness/volume/battery/network/privacy arcs and **directional message radar dots** pointing straight toward notifying outer-ring windows.
+   - Automatically morphs into a low-interference **Vertical Edge Capsule** during fullscreen video/gaming (`KWin` `fullScreen` detection) or when manually pushed outward toward the screen bezel; clicking or pulling inward restores the circular ball.
+2. **Short Tap (`Tap`) or Press-Pull — Fixed Inner Ring + Auto-Expanding All-Windows Outer Rings**
+   - **Inner Ring (Ring 0)**: 5 fixed system hubs (`Launcher`, `Control Center`, `Tray ›`, `Overview / Workspaces`, `Tools ›`).
+   - **Outer Rings (Ring 1..K)**: Automatically expands **all currently open windows** across concentric arcs (from 0 to 100+ windows, stably clustered by application with micro-tags, hover/above-finger full captions, left-click activation, and PC middle-click instant window close).
 3. **Press & Immediate Pull (`Press-Slide-Release`)**
    - Pull inward from the orb without waiting: radial slots appear immediately with magnetized angular highlight; lift your finger to execute in one continuous stroke, or return to the center `×` to cancel.
    - Pulling past the outer ring and releasing triggers the native OS screenshot bridge directly.

@@ -480,8 +480,22 @@ void AppDockModel::initKWinBridge()
     m_kwinAdaptor = new KWinBridgeReceiver([self](const QString &json) {
         if (!self) return;
         const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
-        if (!doc.isArray()) return;
-        const QJsonArray arr = doc.array();
+        QJsonArray arr;
+        bool activeFs = false;
+        if (doc.isObject()) {
+            const QJsonObject root = doc.object();
+            arr = root.value(QStringLiteral("windows")).toArray();
+            activeFs = root.value(QStringLiteral("activeFullscreen")).toBool();
+        } else if (doc.isArray()) {
+            arr = doc.array();
+        } else {
+            return;
+        }
+
+        if (self->m_activeFullscreen != activeFs) {
+            self->m_activeFullscreen = activeFs;
+            emit self->activeFullscreenChanged(activeFs);
+        }
 
         QSet<QString> pinnedSet;
         for (const QString &t : self->m_pinnedTargets) pinnedSet.insert(normalizeTarget(t));
@@ -494,28 +508,39 @@ void AppDockModel::initKWinBridge()
             const QString resClass = obj.value(QStringLiteral("resourceClass")).toString();
             const QString caption = obj.value(QStringLiteral("caption")).toString();
             const bool active = obj.value(QStringLiteral("active")).toBool();
+            const bool minimized = obj.value(QStringLiteral("minimized")).toBool();
+            const bool kwinAttention = obj.value(QStringLiteral("demandsAttention")).toBool();
             if (winId.isEmpty()) continue;
 
             const DesktopFileInfo *matched = matchDesktopFile(desktopFile, resClass);
             DockAppEntry entry;
             entry.windowId = winId;
+            entry.caption = caption;
             entry.running = true;
             entry.active = active;
+            entry.minimized = minimized;
             if (matched) {
                 entry.id = matched->id;
-                entry.name = !caption.isEmpty() && caption.size() <= 24 ? caption : matched->name;
+                entry.appKey = matched->id.toLower();
+                entry.name = matched->name;
                 entry.launchTarget = matched->desktopPath;
                 entry.icon = resolveLinuxIcon(matched->iconName);
                 entry.pinned = pinnedSet.contains(normalizeTarget(matched->desktopPath));
             } else {
                 entry.id = !desktopFile.isEmpty() ? desktopFile : resClass;
+                entry.appKey = (!resClass.isEmpty() ? resClass : entry.id).toLower();
                 entry.name = !caption.isEmpty() ? caption : (!resClass.isEmpty() ? resClass : QStringLiteral("窗口"));
                 if (entry.name.size() > 26) entry.name = entry.name.left(25) + QStringLiteral("…");
                 entry.launchTarget = desktopFile;
                 entry.icon = resolveLinuxIcon(!desktopFile.isEmpty() ? desktopFile : resClass.toLower());
             }
-            if (active) live.prepend(entry);
-            else live.append(entry);
+            if (active && !entry.appKey.isEmpty()) {
+                self->m_notifiedAppKeys.remove(entry.appKey);
+            }
+            entry.demandsAttention = kwinAttention ||
+                (!active && !entry.appKey.isEmpty() && self->m_notifiedAppKeys.contains(entry.appKey));
+            // Keep stable creation order so window angles on the radial fan never jump on focus switches!
+            live.append(entry);
         }
 
         self->m_linuxRunningApps = live;
@@ -524,10 +549,15 @@ void AppDockModel::initKWinBridge()
         if (!self) return {};
         QStringList lines;
         for (const DockAppEntry &e : self->m_linuxRunningApps) {
-            lines.append(QStringLiteral("%1 | id=%2 | target=%3 | active=%4")
-                             .arg(e.name, e.id, e.launchTarget, e.active ? QStringLiteral("1") : QStringLiteral("0")));
+            lines.append(QStringLiteral("%1 | caption=%2 | id=%3 | active=%4 | attn=%5")
+                             .arg(e.name, e.caption, e.id,
+                                  e.active ? QStringLiteral("1") : QStringLiteral("0"),
+                                  e.demandsAttention ? QStringLiteral("1") : QStringLiteral("0")));
         }
-        return QStringLiteral("count=%1\n%2").arg(self->m_linuxRunningApps.size()).arg(lines.join(QLatin1Char('\n')));
+        return QStringLiteral("count=%1 fullscreen=%2\n%3")
+            .arg(self->m_linuxRunningApps.size())
+            .arg(self->m_activeFullscreen ? 1 : 0)
+            .arg(lines.join(QLatin1Char('\n')));
     }, this);
 
     bus.registerService(QStringLiteral("dev.floatingball.KWinBridge"));
@@ -539,13 +569,23 @@ void AppDockModel::initKWinBridge()
     m_kwinBridgeScriptPath = base + QStringLiteral("/floatingball-kwin-bridge.js");
 
     static const char *kBridgeScript = R"JS(
+function fbHookWindow(w) {
+    if (!w || w.__fbHooked) return;
+    w.__fbHooked = true;
+    if (w.captionChanged) w.captionChanged.connect(fbPublishWindows);
+    if (w.minimizedChanged) w.minimizedChanged.connect(fbPublishWindows);
+    if (w.demandsAttentionChanged) w.demandsAttentionChanged.connect(fbPublishWindows);
+    if (w.fullScreenChanged) w.fullScreenChanged.connect(fbPublishWindows);
+}
 function fbPublishWindows() {
     var out = [];
     var wins = workspace.windowList();
     var active = workspace.activeWindow;
+    var activeFs = !!(active && active.normalWindow && !active.skipTaskbar && active.fullScreen);
     for (var i = 0; i < wins.length; ++i) {
         var w = wins[i];
         if (!w || !w.normalWindow || w.skipTaskbar || w.specialWindow) continue;
+        fbHookWindow(w);
         var cls = String(w.resourceClass || "");
         if (cls.toLowerCase().indexOf("floatingball") !== -1) continue;
         out.push({
@@ -554,18 +594,16 @@ function fbPublishWindows() {
             resourceClass: cls,
             caption: String(w.caption || ""),
             active: (w === active),
-            minimized: !!w.minimized
+            minimized: !!w.minimized,
+            demandsAttention: !!w.demandsAttention
         });
     }
     callDBus("dev.floatingball.KWinBridge", "/Windows",
              "dev.floatingball.KWinBridge", "publishWindows",
-             JSON.stringify(out));
+             JSON.stringify({ activeFullscreen: activeFs, windows: out }));
 }
 workspace.windowAdded.connect(function(w) {
-    if (w && w.normalWindow) {
-        w.captionChanged.connect(fbPublishWindows);
-        w.minimizedChanged.connect(fbPublishWindows);
-    }
+    if (w && w.normalWindow) fbHookWindow(w);
     fbPublishWindows();
 });
 workspace.windowRemoved.connect(fbPublishWindows);
@@ -696,6 +734,149 @@ int AppDockModel::importFromSystemDock()
     savePinned();
     emit appsChanged();
     return m_pinnedTargets.size();
+}
+
+QList<DockAppEntry> AppDockModel::openWindows() const
+{
+    QList<DockAppEntry> raw;
+    if (m_hasTestWindows) {
+        raw = m_testWindows;
+    } else {
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+            raw = AppDockMac::runningApps();
+        }
+#elif defined(Q_OS_LINUX)
+        raw = m_linuxRunningApps;
+#endif
+    }
+
+    if (raw.isEmpty()) return raw;
+
+    // Stably cluster windows belonging to the same appKey contiguously while
+    // preserving first-seen app order and per-window creation order!
+    QStringList appOrder;
+    QHash<QString, QList<DockAppEntry>> byApp;
+    for (const DockAppEntry &src : raw) {
+        if (!src.running) continue;
+        DockAppEntry e = src;
+        if (e.appKey.isEmpty()) {
+            e.appKey = (!e.id.isEmpty() ? e.id : (!e.launchTarget.isEmpty() ? displayNameForTarget(e.launchTarget) : e.name)).toLower();
+        }
+        if (!e.active && m_notifiedAppKeys.contains(e.appKey)) {
+            e.demandsAttention = true;
+        }
+        if (!byApp.contains(e.appKey)) {
+            appOrder.append(e.appKey);
+        }
+        byApp[e.appKey].append(e);
+    }
+
+    QList<DockAppEntry> clustered;
+    clustered.reserve(raw.size());
+    for (const QString &key : appOrder) {
+        clustered.append(byApp.value(key));
+    }
+    return clustered;
+}
+
+void AppDockModel::notifyAppAttention(const QString &appName, const QString &desktopEntry)
+{
+    auto cleanKey = [](QString s) {
+        s = s.trimmed().toLower();
+        if (s.endsWith(QLatin1String(".desktop"))) s.chop(8);
+        return s;
+    };
+    const QString k1 = cleanKey(desktopEntry);
+    const QString k2 = cleanKey(appName);
+
+    bool matchedAny = false;
+    auto tryMatchList = [&](QList<DockAppEntry> &list) {
+        for (DockAppEntry &e : list) {
+            const QString ek = cleanKey(e.appKey.isEmpty() ? e.id : e.appKey);
+            const QString en = e.name.trimmed().toLower();
+            const bool hit = (!k1.isEmpty() && (ek == k1 || ek.endsWith(QLatin1Char('.') + k1) || k1.endsWith(QLatin1Char('.') + ek))) ||
+                             (!k2.isEmpty() && (ek == k2 || en == k2 || ek.contains(k2) || en.contains(k2)));
+            if (hit && !e.active) {
+                e.demandsAttention = true;
+                m_notifiedAppKeys.insert(ek);
+                matchedAny = true;
+            }
+        }
+    };
+
+    if (m_hasTestWindows) {
+        tryMatchList(m_testWindows);
+    }
+#ifdef Q_OS_LINUX
+    tryMatchList(m_linuxRunningApps);
+#endif
+    if (!matchedAny) {
+        if (!k1.isEmpty()) m_notifiedAppKeys.insert(k1);
+        else if (!k2.isEmpty()) m_notifiedAppKeys.insert(k2);
+    }
+    emit appsChanged();
+}
+
+void AppDockModel::clearAttentionForApp(const DockAppEntry &entry)
+{
+    bool changed = false;
+    const QString key = (entry.appKey.isEmpty() ? entry.id : entry.appKey).trimmed().toLower();
+    if (!key.isEmpty() && m_notifiedAppKeys.remove(key)) changed = true;
+
+    auto clearInList = [&](QList<DockAppEntry> &list) {
+        for (DockAppEntry &e : list) {
+            if ((!entry.windowId.isEmpty() && e.windowId == entry.windowId) ||
+                (!key.isEmpty() && (e.appKey == key || e.id.toLower() == key))) {
+                if (e.demandsAttention) {
+                    e.demandsAttention = false;
+                    changed = true;
+                }
+            }
+        }
+    };
+    if (m_hasTestWindows) clearInList(m_testWindows);
+#ifdef Q_OS_LINUX
+    clearInList(m_linuxRunningApps);
+#endif
+    if (changed) emit appsChanged();
+}
+
+void AppDockModel::clearAllAttention()
+{
+    m_notifiedAppKeys.clear();
+    if (m_hasTestWindows) {
+        for (DockAppEntry &e : m_testWindows) e.demandsAttention = false;
+    }
+#ifdef Q_OS_LINUX
+    for (DockAppEntry &e : m_linuxRunningApps) e.demandsAttention = false;
+#endif
+    emit appsChanged();
+}
+
+void AppDockModel::setOpenWindowsForTest(const QList<DockAppEntry> &windows)
+{
+    m_hasTestWindows = true;
+    m_testWindows = windows;
+    for (DockAppEntry &e : m_testWindows) {
+        e.running = true;
+        if (e.appKey.isEmpty()) e.appKey = (e.id.isEmpty() ? e.name : e.id).toLower();
+    }
+    emit appsChanged();
+}
+
+void AppDockModel::clearOpenWindowsForTest()
+{
+    m_hasTestWindows = false;
+    m_testWindows.clear();
+    emit appsChanged();
+}
+
+void AppDockModel::setActiveFullscreenForTest(bool fullscreen)
+{
+    if (m_activeFullscreen == fullscreen) return;
+    m_activeFullscreen = fullscreen;
+    emit activeFullscreenChanged(fullscreen);
 }
 
 QList<DockAppEntry> AppDockModel::dockApps(int maxCount, bool includeInstalledOverflow,
@@ -997,8 +1178,20 @@ DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry
 #endif
 }
 
-DesktopActions::Outcome AppDockModel::quitApp(const DockAppEntry &entry) const
+DesktopActions::Outcome AppDockModel::quitApp(const DockAppEntry &entry)
 {
+    if (m_hasTestWindows) {
+        for (int i = 0; i < m_testWindows.size(); ++i) {
+            if ((!entry.windowId.isEmpty() && m_testWindows[i].windowId == entry.windowId) ||
+                (entry.windowId.isEmpty() && m_testWindows[i].id == entry.id)) {
+                const QString closedTitle = !m_testWindows[i].caption.isEmpty() ? m_testWindows[i].caption : m_testWindows[i].name;
+                m_testWindows.removeAt(i);
+                emit appsChanged();
+                return {true, QStringLiteral("✓ 已关闭 ") + closedTitle};
+            }
+        }
+        return {false, entry.name + QStringLiteral(" 当前未运行")};
+    }
 #ifdef Q_OS_MACOS
     return AppDockMac::quitApp(entry);
 #elif defined(Q_OS_LINUX)
@@ -1014,7 +1207,7 @@ DesktopActions::Outcome AppDockModel::quitApp(const DockAppEntry &entry) const
                 "}"
                 "})();").arg(safeId);
             runOneShotKWinScript(QStringLiteral("floatingball_close_win"), js);
-            return {true, QStringLiteral("✓ 已关闭 ") + entry.name};
+            return {true, QStringLiteral("✓ 已关闭 ") + (!entry.caption.isEmpty() ? entry.caption : entry.name)};
         }
     }
     return {false, entry.name + QStringLiteral(" 当前未运行")};

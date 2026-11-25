@@ -90,6 +90,9 @@ protected:
                 widget->windowHandle()->requestUpdate();
             }
         }
+        if (event->type() == QEvent::Close) {
+            surfaceClosed = true;
+        }
         if (event->type() == QEvent::Move || event->type() == QEvent::Resize)
             sync(false);
         else if (event->type() == QEvent::Show)
@@ -113,10 +116,13 @@ private:
         if (!screen) return;
         const QPoint offset = widget->pos() - screen->geometry().topLeft();
         const QSize currentSize = widget->size();
-        if (!force && screen == lastScreen && offset == lastOffset && currentSize == lastSize)
+        const QString screenName = screen->name();
+        const bool outputChanged = surfaceClosed ||
+            (!lastScreenName.isEmpty() && (lastScreen == nullptr || lastScreen != screen || lastScreenName != screenName));
+        if (!force && !outputChanged && screen == lastScreen && offset == lastOffset && currentSize == lastSize)
             return;
-        const bool outputChanged = (lastScreen != nullptr && lastScreen != screen);
         lastScreen = screen;
+        lastScreenName = screenName;
         lastOffset = offset;
         lastSize = currentSize;
         surface->setScreen(screen);
@@ -125,7 +131,9 @@ private:
         surface->setDesiredSize(currentSize);
         surface->setMargins(QMargins(offset.x(), offset.y(), 0, 0));
         if (outputChanged && widget->isVisible() && !remapping) {
-            // zwlr_layer_surface_v1 binds wl_output immutably at map time; remap onto new output.
+            // zwlr_layer_surface_v1 binds wl_output immutably at map time and dies permanently
+            // on output removal (clamshell lid-close); hide+show recreates a live layer surface!
+            surfaceClosed = false;
             remapping = true;
             QPointer<QWidget> wPtr(widget);
             QPointer<QScreen> sPtr(screen);
@@ -134,11 +142,13 @@ private:
                 if (!wPtr || !sPtr || !QGuiApplication::screens().contains(sPtr)) return;
                 if (!wPtr->isVisible()) return;
                 wPtr->hide();
+                surface->setScreen(sPtr);
                 if (wPtr->windowHandle()) wPtr->windowHandle()->setScreen(sPtr);
                 wPtr->show();
             });
             return;
         }
+        surfaceClosed = false;
         if (widget->isVisible() && widget->windowHandle()) {
             widget->update();
             widget->windowHandle()->requestUpdate();
@@ -147,11 +157,13 @@ private:
     QWidget *widget;
     LayerShellQt::Window *surface;
     QPointer<QScreen> lastScreen;
+    QString lastScreenName;
     QPoint lastOffset{INT_MIN, INT_MIN};
     QSize lastSize;
     bool activateOnShow = false;
     bool syncing = false;
     bool remapping = false;
+    bool surfaceClosed = false;
 };
 } // namespace
 #endif

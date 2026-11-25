@@ -401,6 +401,11 @@ SystemStatusMonitor::SystemStatusMonitor(QObject *parent) : QObject(parent)
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(5000);
     connect(m_pollTimer, &QTimer::timeout, this, &SystemStatusMonitor::pollSlowMetrics);
+#ifdef Q_OS_LINUX
+    m_imeFastTimer = new QTimer(this);
+    m_imeFastTimer->setInterval(550);
+    connect(m_imeFastTimer, &QTimer::timeout, this, &SystemStatusMonitor::refreshLinuxInputMethod);
+#endif
 }
 
 SystemStatusMonitor::~SystemStatusMonitor()
@@ -430,6 +435,7 @@ void SystemStatusMonitor::startPlatformWatchers()
 #ifdef Q_OS_LINUX
     initLinuxDBus();
     startNotificationMonitor();
+    if (m_imeFastTimer) m_imeFastTimer->start();
 #endif
     m_pollTimer->start();
 }
@@ -437,6 +443,7 @@ void SystemStatusMonitor::startPlatformWatchers()
 void SystemStatusMonitor::stopPlatformWatchers()
 {
     if (m_pollTimer) m_pollTimer->stop();
+    if (m_imeFastTimer) m_imeFastTimer->stop();
 #ifdef Q_OS_LINUX
     stopNotificationMonitor();
 #endif
@@ -889,17 +896,23 @@ void SystemStatusMonitor::refreshLinuxInputMethod()
         const QDBusMessage reply = w->reply();
         w->deleteLater();
         if (!self) return;
+        const QString prevLabel = self->m_snapshot.inputLabel;
+        const bool hadInput = self->m_snapshot.inputPresent;
         SystemStatusSnapshot next = self->m_snapshot;
         if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
             const QString im = reply.arguments().first().toString();
             next.inputLabel = mapFcitxToLabel(im);
             next.inputPresent = !next.inputLabel.isEmpty();
-            next.inputDescription = (next.inputLabel == QLatin1String("双")) ? QStringLiteral("双拼") : QStringLiteral("English");
+            next.inputDescription = (next.inputLabel == QStringLiteral("双")) ? QStringLiteral("双拼") : QStringLiteral("English");
         } else {
             next.inputPresent = false;
             next.inputLabel.clear();
         }
+        const bool switched = hadInput && next.inputPresent && (next.inputLabel != prevLabel);
         self->emitIfChanged(next);
+        if (switched) {
+            emit self->inputMethodActivity(next.inputLabel);
+        }
     });
 }
 
@@ -1090,6 +1103,8 @@ void SystemStatusMonitor::refreshLinuxSniTray()
                         const QString iconName = props.value(QStringLiteral("IconName")).toString();
                         const QString themePath = props.value(QStringLiteral("IconThemePath")).toString();
                         info.icon = resolveSniIcon(iconName, themePath, props.value(QStringLiteral("IconPixmap")));
+                        if (iconName.contains(QLatin1String("attention"), Qt::CaseInsensitive))
+                            info.status = QStringLiteral("NeedsAttention");
                         if (info.status == QLatin1String("NeedsAttention"))
                             gather->attention = true;
                         gather->collected[idx] = info;
@@ -1216,14 +1231,21 @@ void SystemStatusMonitor::startNotificationMonitor()
         if (chunk.contains(QStringLiteral("member=Notify"))) {
             SystemStatusSnapshot next = m_snapshot;
             next.unreadNotifications = qMin(99, next.unreadNotifications + 1);
-            QRegularExpression strRe(QStringLiteral("string \"([^\"]{1,48})\""));
+            QRegularExpression strRe(QStringLiteral("string \"([^\"]{1,64})\""));
             auto it = strRe.globalMatch(chunk);
             QString appName;
             if (it.hasNext()) appName = it.next().captured(1);
+
+            QString desktopEntry;
+            QRegularExpression deRe(QStringLiteral("string \"desktop-entry\"\\s+variant\\s+string \"([^\"]{1,64})\""));
+            const auto deMatch = deRe.match(chunk);
+            if (deMatch.hasMatch()) desktopEntry = deMatch.captured(1);
+
             next.lastNotificationSummary = appName.isEmpty()
                 ? QStringLiteral("收到新通知 (%1)").arg(QTime::currentTime().toString(QStringLiteral("HH:mm")))
                 : QStringLiteral("%1 发来新通知").arg(appName);
             emitIfChanged(next);
+            emit notificationReceived(appName, desktopEntry, next.lastNotificationSummary);
         }
     });
     m_notifMonitor->start(

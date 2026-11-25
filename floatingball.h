@@ -59,6 +59,7 @@ struct RadialSlotItem {
     bool isBranchItem = false;
     bool toggleActive = false;
     QColor accentColor;
+    QPointF finalCenterGlobal; // Resting target center (independent of open animation progress)
     QPointF centerGlobal;
     QRectF rectGlobal;
 };
@@ -122,9 +123,11 @@ public:
     int activeRingCount() const { return m_activeRingCount; }
     int hitSlotAtGlobal(const QPointF &globalPt, bool magneticSector) const;
     qreal fanOuterRadius() const { return m_outermostRadius; }
+    QList<qreal> computeAttentionAnglesRad();
 
 signals:
     void slotTapped(int slotIndex);
+    void slotMiddleClicked(int slotIndex);
     void slotContextMenuRequested(int slotIndex, const QPoint &globalPos);
     void ringCountStepRequested(int delta);
     void dismissedByUser();
@@ -233,6 +236,18 @@ public:
     void setDockModeEnabled(bool enabled);
     bool statusOrbMode() const { return m_statusOrbMode; }
     void setStatusOrbMode(bool enabled);
+    bool autoHideEnabled() const { return m_autoHideEnabled; }
+    void setAutoHideEnabled(bool enabled);
+    bool autoTuckFullscreen() const { return m_autoTuckFullscreen; }
+    void setAutoTuckFullscreen(bool enabled);
+    bool isManualTucked() const { return m_manualTucked; }
+    bool isFullscreenTucked() const { return m_fullscreenTucked; }
+    void tuckToEdgeCapsule(bool manual = true, bool animate = true);
+    void triggerImeFlash(const QString &label, int durationMs = 1600);
+    QString activeImeFlashLabel() const;
+    const QList<qreal> &attentionAnglesRad() const { return m_attentionAnglesRad; }
+    void refreshAttentionBearings();
+
     bool multiScreenEnabled() const { return m_multiScreenEnabled; }
     void setMultiScreenEnabled(bool enabled);
     QScreen *assignedScreen() const { return m_assignedScreen; }
@@ -346,6 +361,8 @@ private:
     QTimer *m_holdTimer = nullptr;
     QTimer *m_idleTimer = nullptr;
     QTimer *m_audioPollTimer = nullptr;
+    QTimer *m_clockTimer = nullptr;
+    QTimer *m_imeFlashTimer = nullptr;
     QVariantAnimation *m_dwellAnimation = nullptr;
     QVariantAnimation *m_orbitAnimation = nullptr;
     QVariantAnimation *m_opacityAnimation = nullptr;
@@ -355,25 +372,29 @@ private:
     qreal m_dwellProgress = 0.0;
     qreal m_orbitProgress = 0.0;
     qreal m_pickupPulse = 0.0;
-    qreal m_ballOpacity = 0.38;
-    qreal m_idleOpacity = 0.38;
-    qreal m_activeOpacity = 0.88;
-    qreal m_preferredDiameter = 56.0;
+    qreal m_ballOpacity = 0.82;
+    qreal m_idleOpacity = 0.82;
+    qreal m_activeOpacity = 0.94;
+    qreal m_preferredDiameter = 60.0;
     qreal m_screenScale = 1.0;
     qreal m_verticalFraction = 0.58;
 
-    int m_ringCount = kDefaultRingCount; // 1..30 concentric rings (default 3)
-    bool m_dockModeEnabled = true;       // outer rings act as live Dock replacement
-    bool m_statusOrbMode = false;        // Duo combined status orb (default ON on Linux, OFF on macOS)
+    int m_ringCount = kDefaultRingCount; // Preserved for settings compat; outer rings auto-size to open windows
+    bool m_dockModeEnabled = true;       // outer rings expand all live open windows
+    bool m_statusOrbMode = true;         // Primary circular 24H clock + status ball
     bool m_multiScreenEnabled = true;    // Scheme A: independent docked orb per screen, shared content
     bool m_hiddenOnThisScreen = false;
     bool m_userHiddenAll = false;
     bool m_systemMuted = false;
     int m_systemVolume = 60;
 
-    int m_dockSide = 1; // -1 = left edge, +1 = right edge, 0 = free
+    int m_dockSide = 1; // -1 = left edge, +1 = right edge, 2 = top, -2 = bottom, 0 = free
     bool m_snapEnabled = true;
-    bool m_autoHideEnabled = true;
+    bool m_autoHideEnabled = false;      // Default OFF: primary circular clock ball stays visible!
+    bool m_autoTuckFullscreen = true;    // Default ON: fullscreen video/game morphs ball into slim edge capsule
+    bool m_manualTucked = false;
+    bool m_fullscreenTucked = false;
+    bool m_startedInteractionTucked = false;
     bool m_crosshairPullEnabled = true;
     bool m_edgeTucked = false;
     bool m_orbitVisible = false;
@@ -382,6 +403,9 @@ private:
     bool m_settingsOpen = false;
     bool m_screenAdaptationPending = false;
     bool m_adaptingScreen = false;
+    bool m_waylandSurfaceClosed = false;
+    QString m_imeFlashLabel;
+    QList<qreal> m_attentionAnglesRad;
 
     QRect m_expandedDockGeometry;
     QPointer<QScreen> m_assignedScreen;
