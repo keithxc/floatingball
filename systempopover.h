@@ -204,6 +204,7 @@ private:
     QLabel *m_dndBadge = nullptr;
     QLabel *m_dndSub = nullptr;
     CapsuleSlider *m_brightnessSlider = nullptr;
+    QWidget *m_desktopQuickCol = nullptr;
     QTimer *m_brightnessDebounce = nullptr;
     CapsuleSlider *m_volumeSlider = nullptr;
     QTimer *m_volumeDebounce = nullptr;

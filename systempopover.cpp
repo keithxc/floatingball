@@ -934,6 +934,41 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     m_brightnessSlider->setBadgeText(QStringLiteral("70%"));
     slidersRow->addWidget(m_brightnessSlider, 1);
 
+    // Fallback stacked Bento quick-tiles when no hardware brightness control exists
+    // (e.g. Mac mini / external HDMI monitor) so Volume keeps its sleek slender capsule shape!
+    m_desktopQuickCol = new QWidget(page);
+    auto *dqv = new QVBoxLayout(m_desktopQuickCol);
+    dqv->setContentsMargins(0, 0, 0, 0);
+    dqv->setSpacing(8);
+    auto makeMiniTile = [&](FloatingIcons::Icon ico, const QColor &ink, const QString &lbl,
+                            const QString &tip, std::function<void()> onClick) {
+        auto *b = new QToolButton(m_desktopQuickCol);
+        b->setObjectName(QStringLiteral("dndCard"));
+        b->setIcon(FloatingIcons::make(ico, ink, 18));
+        b->setIconSize(QSize(18, 18));
+        b->setText(lbl);
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setToolTip(tip);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setStyleSheet(QStringLiteral(
+            "QToolButton#dndCard { background:rgba(255,255,255,18); color:#e2e8f0;"
+            "  border:1px solid rgba(255,255,255,26); border-radius:18px;"
+            "  font-size:11px; font-weight:600; padding:6px 2px; }"
+            "QToolButton#dndCard:hover { background:rgba(255,255,255,30); color:#ffffff; }"
+            "QToolButton#dndCard:pressed { background:rgba(255,255,255,42); }"));
+        connect(b, &QToolButton::clicked, this, [onClick] { onClick(); });
+        return b;
+    };
+    dqv->addWidget(makeMiniTile(FloatingIcons::Overview, QColor("#93c5fd"), QStringLiteral("调度"),
+                                QStringLiteral("打开调度中心 / 多任务视图"),
+                                [this] { hide(); DesktopActions::showOverview(); }), 1);
+    dqv->addWidget(makeMiniTile(FloatingIcons::Sun, QColor("#fde68a"), QStringLiteral("显示"),
+                                QStringLiteral("打开显示器设置"),
+                                [this] { hide(); if (m_monitor) m_monitor->openKdeModule(QStringLiteral("display")); }), 1);
+    m_desktopQuickCol->hide();
+    slidersRow->addWidget(m_desktopQuickCol, 1);
+
     m_brightnessDebounce = new QTimer(this);
     m_brightnessDebounce->setSingleShot(true);
     m_brightnessDebounce->setInterval(75);
@@ -1766,6 +1801,7 @@ void SystemPopover::syncBrightness()
     DesktopActions::queryBrightness([self](int pct, bool ok) {
         if (!self || !self->m_brightnessSlider) return;
         self->m_brightnessSlider->setVisible(ok);
+        if (self->m_desktopQuickCol) self->m_desktopQuickCol->setVisible(!ok);
         if (ok) {
             const int clamped = qBound(1, pct, 100);
             self->m_brightnessSlider->setValue(clamped);
