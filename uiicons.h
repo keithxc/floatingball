@@ -292,13 +292,29 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         return;
     }
     case Settings: {
-        p.drawEllipse(QPointF(12, 12), 3.3, 3.3);
-        for (int i = 0; i < 8; ++i) {
-            const qreal a = i * M_PI / 4.0;
-            path.moveTo(12 + qCos(a) * 6.0, 12 + qSin(a) * 6.0);
-            path.lineTo(12 + qCos(a) * 8.6, 12 + qSin(a) * 8.6);
+        // Crisp 6-tooth closed gearshape outline (unmistakable at 16px vs Sun)
+        constexpr int teeth = 6;
+        constexpr qreal rIn = 6.2;
+        constexpr qreal rOut = 9.1;
+        constexpr qreal halfTooth = 0.19;
+        constexpr qreal halfBase = 0.34;
+        for (int i = 0; i < teeth; ++i) {
+            const qreal c = i * (2.0 * M_PI / teeth) - M_PI / 2.0;
+            const QPointF p0(12.0 + qCos(c - halfBase) * rIn, 12.0 + qSin(c - halfBase) * rIn);
+            const QPointF p1(12.0 + qCos(c - halfTooth) * rOut, 12.0 + qSin(c - halfTooth) * rOut);
+            const QPointF p2(12.0 + qCos(c + halfTooth) * rOut, 12.0 + qSin(c + halfTooth) * rOut);
+            const QPointF p3(12.0 + qCos(c + halfBase) * rIn, 12.0 + qSin(c + halfBase) * rIn);
+            if (i == 0) path.moveTo(p0);
+            else path.lineTo(p0);
+            path.lineTo(p1);
+            path.lineTo(p2);
+            path.lineTo(p3);
         }
-        break;
+        path.closeSubpath();
+        p.drawPath(path);
+        p.drawEllipse(QPointF(12.0, 12.0), 2.8, 2.8);
+        p.restore();
+        return;
     }
     case Search: {
         p.drawEllipse(QPointF(10.5, 10.5), 6.2, 6.2);
