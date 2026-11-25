@@ -52,6 +52,9 @@ QString normalizeTarget(const QString &target)
 struct DesktopFileInfo {
     QString id;
     QString name;
+    QString genericName;
+    QString keywords;
+    QStringList categories;
     QString execCmd;
     QString iconName;
     QString wmClass;
@@ -123,6 +126,11 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
     QString type;
     QString name;
     QString zhName;
+    QString genericName;
+    QString zhGenericName;
+    QString keywords;
+    QString zhKeywords;
+    QString categoriesRaw;
     QString exec;
     QString icon;
     QString wmClass;
@@ -144,6 +152,11 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
         else if (key == QLatin1String("Hidden")) hidden = (val == QLatin1String("true"));
         else if (key == QLatin1String("Name")) name = val;
         else if (key == QLatin1String("Name[zh_CN]")) zhName = val;
+        else if (key == QLatin1String("GenericName")) genericName = val;
+        else if (key == QLatin1String("GenericName[zh_CN]")) zhGenericName = val;
+        else if (key == QLatin1String("Keywords")) keywords = val;
+        else if (key == QLatin1String("Keywords[zh_CN]")) zhKeywords = val;
+        else if (key == QLatin1String("Categories")) categoriesRaw = val;
         else if (key == QLatin1String("Exec")) exec = val;
         else if (key == QLatin1String("Icon")) icon = val;
         else if (key == QLatin1String("StartupWMClass")) wmClass = val;
@@ -158,6 +171,15 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
 
     out->id = QFileInfo(path).completeBaseName();
     out->name = displayName;
+    out->genericName = !zhGenericName.isEmpty() ? zhGenericName : genericName;
+    QStringList kwParts;
+    if (!name.isEmpty() && name != displayName) kwParts.append(name);
+    if (!genericName.isEmpty()) kwParts.append(genericName);
+    if (!zhGenericName.isEmpty()) kwParts.append(zhGenericName);
+    if (!keywords.isEmpty()) kwParts.append(keywords);
+    if (!zhKeywords.isEmpty()) kwParts.append(zhKeywords);
+    out->keywords = kwParts.join(QLatin1Char(' '));
+    out->categories = categoriesRaw.split(QLatin1Char(';'), Qt::SkipEmptyParts);
     out->execCmd = stripExecFieldCodes(exec);
     out->iconName = icon;
     out->wmClass = wmClass;
@@ -853,6 +875,9 @@ QList<DockAppEntry> AppDockModel::installedApps(int maxCount) const
         DockAppEntry e;
         e.id = info.id;
         e.name = info.name;
+        e.genericName = info.genericName;
+        e.keywords = info.keywords;
+        e.categories = info.categories;
         e.launchTarget = info.desktopPath;
         e.icon = resolveLinuxIcon(info.iconName);
         e.pinned = isPinned(info.desktopPath);
@@ -860,6 +885,14 @@ QList<DockAppEntry> AppDockModel::installedApps(int maxCount) const
     }
     return list;
 #endif
+}
+
+DesktopActions::Outcome AppDockModel::launchFresh(const DockAppEntry &entry) const
+{
+    DockAppEntry fresh = entry;
+    fresh.running = false;
+    fresh.windowId.clear();
+    return activateOrLaunch(fresh);
 }
 
 DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry) const

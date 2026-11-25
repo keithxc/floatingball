@@ -218,7 +218,11 @@ void clearLayout(QLayout *layout)
 {
     if (!layout) return;
     while (QLayoutItem *it = layout->takeAt(0)) {
-        if (QWidget *w = it->widget()) w->deleteLater();
+        if (QWidget *w = it->widget()) {
+            w->hide();
+            w->setParent(nullptr);
+            w->deleteLater();
+        }
         delete it;
     }
 }
@@ -302,7 +306,9 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
-    setFixedWidth(382);
+    // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
+    // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
+    setFixedSize(388, 540);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(6, 6, 6, 8);
@@ -800,6 +806,7 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     footRow->addWidget(deckBtn);
     footRow->addWidget(lockBtn);
     footRow->addWidget(pwrBtn);
+    v->addStretch(1);
     v->addLayout(footRow);
 
     return page;
@@ -816,22 +823,38 @@ QWidget *SystemPopover::buildWifiPage(QWidget *parent)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(8);
 
-    auto *bar = new QHBoxLayout();
-    m_wifiSummaryLbl = new QLabel(QStringLiteral("正在读取网络状态…"), page);
-    m_wifiSummaryLbl->setObjectName(QStringLiteral("ccSub"));
-    m_wifiSummaryLbl->setWordWrap(true);
-    bar->addWidget(m_wifiSummaryLbl, 1);
+    // Top radio toggle pills row: Wi-Fi + 4G WWAN (auto-hidden if no modem)
+    auto *toggleRow = new QHBoxLayout();
+    toggleRow->setSpacing(8);
 
     m_wifiPowerBtn = new QToolButton(page);
     m_wifiPowerBtn->setObjectName(QStringLiteral("powerBtn"));
     m_wifiPowerBtn->setText(QStringLiteral("Wi-Fi 已开"));
+    m_wifiPowerBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_wifiPowerBtn->setMinimumHeight(34);
     m_wifiPowerBtn->setCursor(Qt::PointingHandCursor);
     connect(m_wifiPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleWifiRadio);
-    bar->addWidget(m_wifiPowerBtn);
-    v->addLayout(bar);
+    toggleRow->addWidget(m_wifiPowerBtn, 1);
+
+    m_wwanPowerBtn = new QToolButton(page);
+    m_wwanPowerBtn->setObjectName(QStringLiteral("powerBtn"));
+    m_wwanPowerBtn->setText(QStringLiteral("4G 已关"));
+    m_wwanPowerBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_wwanPowerBtn->setMinimumHeight(34);
+    m_wwanPowerBtn->setCursor(Qt::PointingHandCursor);
+    m_wwanPowerBtn->hide();
+    connect(m_wwanPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleWwanRadio);
+    toggleRow->addWidget(m_wwanPowerBtn, 1);
+    v->addLayout(toggleRow);
+
+    // Dedicated full-width summary line (never collides with radio switches)
+    m_wifiSummaryLbl = new QLabel(QStringLiteral("正在读取网络状态…"), page);
+    m_wifiSummaryLbl->setObjectName(QStringLiteral("ccSub"));
+    m_wifiSummaryLbl->setWordWrap(true);
+    m_wifiSummaryLbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    v->addWidget(m_wifiSummaryLbl);
 
     auto *scroll = makeTouchScrollArea(page, &m_wifiListLayout);
-    scroll->setMinimumHeight(290);
     v->addWidget(scroll, 1);
 
     auto *foot = new QToolButton(page);
@@ -855,22 +878,34 @@ QWidget *SystemPopover::buildHotspotPage(QWidget *parent)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(9);
 
-    // Top upstream summary + master hotspot switch
+    // Top toggle bar: Hotspot master switch + optional 4G WWAN switch
     auto *bar = new QHBoxLayout();
     bar->setSpacing(8);
-    m_hsSummaryLbl = new QLabel(QStringLiteral("正在检测 4G / 有线上游与 Wi-Fi 网卡…"), page);
-    m_hsSummaryLbl->setObjectName(QStringLiteral("ccSub"));
-    m_hsSummaryLbl->setWordWrap(true);
-    bar->addWidget(m_hsSummaryLbl, 1);
-
     m_hsPowerBtn = new QToolButton(page);
     m_hsPowerBtn->setObjectName(QStringLiteral("powerBtn"));
     m_hsPowerBtn->setText(QStringLiteral("开启热点"));
+    m_hsPowerBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_hsPowerBtn->setMinimumHeight(34);
     m_hsPowerBtn->setCursor(Qt::PointingHandCursor);
     connect(m_hsPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleHotspot);
-    bar->addWidget(m_hsPowerBtn);
+    bar->addWidget(m_hsPowerBtn, 1);
+
+    m_hsWwanBtn = new QToolButton(page);
+    m_hsWwanBtn->setObjectName(QStringLiteral("powerBtn"));
+    m_hsWwanBtn->setText(QStringLiteral("4G 已关"));
+    m_hsWwanBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_hsWwanBtn->setMinimumHeight(34);
+    m_hsWwanBtn->setCursor(Qt::PointingHandCursor);
+    m_hsWwanBtn->hide();
+    connect(m_hsWwanBtn, &QToolButton::clicked, this, &SystemPopover::toggleWwanRadio);
+    bar->addWidget(m_hsWwanBtn, 1);
     v->addLayout(bar);
+
+    m_hsSummaryLbl = new QLabel(QStringLiteral("正在检测 4G / 有线上游与 Wi-Fi 网卡…"), page);
+    m_hsSummaryLbl->setObjectName(QStringLiteral("ccSub"));
+    m_hsSummaryLbl->setWordWrap(true);
+    m_hsSummaryLbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    v->addWidget(m_hsSummaryLbl);
 
     // Config glass card: SSID, Password (mask/copy), WPA3/WPA2, Band 2.4G/5G
     auto *cfgCard = new QWidget(page);
@@ -1194,7 +1229,7 @@ void SystemPopover::syncHeaderForPage()
     m_backBtn->setVisible(!isHome);
     m_metaLbl->setVisible(isHome);
     if (m_currentPage == PageHome) m_titleLbl->setText(QStringLiteral("控制中心"));
-    else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi 网络"));
+    else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi 与 4G 网络"));
     else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
     else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙设备"));
     else m_titleLbl->setText(QStringLiteral("Mihomo 代理"));
@@ -1544,6 +1579,8 @@ void SystemPopover::refreshWifi(bool rescan)
         if (!self) return;
 
         bool wifiEnabled = true;
+        bool wwanAvailable = false;
+        bool wwanEnabled = false;
         QStringList vpnLinks;
         QList<WifiEntry> entries;
         QHash<QString, int> seenIndex;
@@ -1556,7 +1593,15 @@ void SystemPopover::refreshWifi(bool rescan)
             if (line.isEmpty()) continue;
 
             if (section == 0) {
-                wifiEnabled = line.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0;
+                // WIFI:WWAN-HW:WWAN
+                const QStringList r = line.split(QLatin1Char(':'));
+                if (r.size() >= 3) {
+                    wifiEnabled = (r[0].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                    wwanAvailable = (r[1].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                    wwanEnabled = (r[2].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                } else {
+                    wifiEnabled = (line.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                }
             } else if (section == 1) {
                 const QStringList p = line.split(QLatin1Char(':'));
                 if (p.size() >= 2 && (p[1] == QLatin1String("tun") || p[1] == QLatin1String("vpn") ||
@@ -1600,12 +1645,12 @@ void SystemPopover::refreshWifi(bool rescan)
             if (a.active != b.active) return a.active;
             return a.signal > b.signal;
         });
-        self->rebuildWifiList(wifiEnabled, vpnLinks, entries);
+        self->rebuildWifiList(wifiEnabled, wwanAvailable, wwanEnabled, vpnLinks, entries);
     });
     const QString rescanFlag = rescan ? QStringLiteral("yes") : QStringLiteral("no");
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
-                 QStringLiteral("nmcli radio wifi; echo '---ACTIVE---'; "
+                 QStringLiteral("nmcli -t -f WIFI,WWAN-HW,WWAN radio all; echo '---ACTIVE---'; "
                                 "nmcli -t -f NAME,TYPE connection show --active; echo '---WIFI---'; "
                                 "nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY device wifi list --rescan %1").arg(rescanFlag)});
 #else
@@ -1613,12 +1658,28 @@ void SystemPopover::refreshWifi(bool rescan)
 #endif
 }
 
-void SystemPopover::rebuildWifiList(bool wifiEnabled, const QStringList &vpnLinks, const QList<WifiEntry> &entries)
+void SystemPopover::rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool wwanEnabled,
+                                    const QStringList &vpnLinks, const QList<WifiEntry> &entries)
 {
     m_wifiRadioEnabled = wifiEnabled;
+    m_wwanAvailable = wwanAvailable;
+    m_wwanEnabled = wwanEnabled;
+
     m_wifiPowerBtn->setText(wifiEnabled ? QStringLiteral("Wi-Fi 已开") : QStringLiteral("Wi-Fi 已关"));
     m_wifiPowerBtn->setProperty("on", wifiEnabled);
     repolish(m_wifiPowerBtn);
+
+    auto syncWwanBtn = [&](QToolButton *btn) {
+        if (!btn) return;
+        btn->setVisible(wwanAvailable);
+        if (wwanAvailable) {
+            btn->setText(wwanEnabled ? QStringLiteral("4G 已开") : QStringLiteral("4G 已关"));
+            btn->setProperty("on", wwanEnabled);
+            repolish(btn);
+        }
+    };
+    syncWwanBtn(m_wwanPowerBtn);
+    syncWwanBtn(m_hsWwanBtn);
 
     m_cachedWifiSsid.clear();
     m_cachedWifiSignal = 0;
@@ -1631,40 +1692,48 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, const QStringList &vpnLink
     }
     syncHomeFromSnapshot();
 
-    QString summary = !wifiEnabled ? QStringLiteral("无线开关已关闭")
-        : (m_cachedWifiSsid.isEmpty() ? QStringLiteral("未连接 Wi-Fi") : QStringLiteral("已连 %1").arg(m_cachedWifiSsid));
-    if (!vpnLinks.isEmpty()) summary += QStringLiteral(" · 隧道: ") + vpnLinks.join(QStringLiteral(", "));
-    m_wifiSummaryLbl->setText(summary);
+    QStringList parts;
+    if (!wifiEnabled) parts.append(QStringLiteral("Wi-Fi 已关"));
+    else if (m_cachedWifiSsid.isEmpty()) parts.append(QStringLiteral("Wi-Fi 未连接"));
+    else parts.append(QStringLiteral("Wi-Fi: %1").arg(elideText(m_cachedWifiSsid, 18)));
+    if (wwanAvailable) parts.append(wwanEnabled ? QStringLiteral("4G 已开") : QStringLiteral("4G 已关"));
+    if (!vpnLinks.isEmpty()) parts.append(QStringLiteral("隧道: ") + vpnLinks.join(QStringLiteral(", ")));
+    m_wifiSummaryLbl->setText(parts.join(QStringLiteral(" · ")));
 
     clearLayout(m_wifiListLayout);
     if (!wifiEnabled) {
-        auto *lbl = new QLabel(QStringLiteral("点击右上角「Wi-Fi 已关」可重新开启无线网络"), this);
+        auto *lbl = new QLabel(QStringLiteral("Wi-Fi 已关闭（点上方「Wi-Fi 已关」重新开启）"), m_wifiListLayout->parentWidget());
+        lbl->setWordWrap(true);
         lbl->setAlignment(Qt::AlignCenter);
         m_wifiListLayout->addWidget(lbl);
         m_wifiListLayout->addStretch(1);
         return;
     }
     if (entries.isEmpty()) {
-        auto *lbl = new QLabel(QStringLiteral("附近暂未发现 Wi-Fi 热点（点右上角 ↻ 扫描）"), this);
+        auto *lbl = new QLabel(QStringLiteral("附近暂未发现 Wi-Fi 热点（点右上角 ↻ 扫描）"), m_wifiListLayout->parentWidget());
+        lbl->setWordWrap(true);
         lbl->setAlignment(Qt::AlignCenter);
         m_wifiListLayout->addWidget(lbl);
         m_wifiListLayout->addStretch(1);
         return;
     }
 
-    const int limit = qMin(entries.size(), 14);
+    QWidget *rowParent = m_wifiListLayout->parentWidget();
+    const int limit = qMin(entries.size(), 16);
     for (int i = 0; i < limit; ++i) {
         const WifiEntry entry = entries[i];
-        auto *btn = new QPushButton(this);
+        auto *btn = new QPushButton(rowParent);
         btn->setObjectName(QStringLiteral("rowBtn"));
         btn->setProperty("connected", entry.active);
-        btn->setMinimumHeight(46);
+        btn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        btn->setMinimumHeight(44);
         const QString lock = (!entry.security.isEmpty() && entry.security != QLatin1String("--"))
             ? QStringLiteral("🔒 ") : QString();
         const QString rightTag = entry.active
-            ? QStringLiteral("已连接 · %1%").arg(entry.signal)
+            ? QStringLiteral("已连 · %1%").arg(entry.signal)
             : QStringLiteral("%1%").arg(entry.signal);
-        btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, entry.ssid, rightTag));
+        btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, elideText(entry.ssid, 19), rightTag));
+        btn->setToolTip(entry.ssid);
         connect(btn, &QPushButton::clicked, this, [this, entry] { connectWifi(entry); });
         m_wifiListLayout->addWidget(btn);
     }
@@ -1681,6 +1750,31 @@ void SystemPopover::toggleWifiRadio()
                                  turnOn ? QStringLiteral("on") : QStringLiteral("off")});
     showStatusBanner(turnOn ? QStringLiteral("正在开启 Wi-Fi…") : QStringLiteral("已关闭 Wi-Fi"));
     QTimer::singleShot(1100, this, [this] { refreshWifi(false); });
+#endif
+}
+
+void SystemPopover::toggleWwanRadio()
+{
+#ifdef Q_OS_LINUX
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) return;
+    const bool turnOn = !m_wwanEnabled;
+    QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wwan"),
+                                 turnOn ? QStringLiteral("on") : QStringLiteral("off")});
+    showStatusBanner(turnOn ? QStringLiteral("正在开启 4G 移动网络…") : QStringLiteral("已关闭 4G 移动网络"));
+    QPointer<SystemPopover> self(this);
+    QTimer::singleShot(1400, this, [self] {
+        if (!self) return;
+        self->refreshWifi(false);
+        self->refreshHotspot();
+    });
+    if (turnOn) {
+        QTimer::singleShot(4000, this, [self] {
+            if (!self) return;
+            self->refreshWifi(false);
+            self->refreshHotspot();
+        });
+    }
 #endif
 }
 
@@ -2374,7 +2468,10 @@ void SystemPopover::rebuildHotspotView()
     m_hsSummaryLbl->setText(summary);
 
     if (m_hsSsidEdit && !m_hsSsidEdit->hasFocus()) m_hsSsidEdit->setText(m_hsSsid);
-    if (m_hsPassEdit && !m_hsPassEdit->hasFocus()) m_hsPassEdit->setText(m_hsPassword);
+    if (m_hsPassEdit && !m_hsPassEdit->hasFocus()) {
+        m_hsPassEdit->setText(m_hsPassword);
+        m_hsPassEdit->setCursorPosition(0);
+    }
 
     if (m_hsSecBtns[0] && m_hsSecBtns[1]) {
         m_hsSecBtns[0]->setProperty("active", m_hsUseWpa3);

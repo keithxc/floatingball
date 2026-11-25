@@ -29,6 +29,8 @@ set(FLOATINGBALL_CORE_SOURCES
     quickdeck.h
     systempopover.cpp
     systempopover.h
+    applauncher.cpp
+    applauncher.h
     screenshotpanel.cpp
     screenshotpanel.h
     screenshotstore.cpp

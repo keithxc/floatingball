@@ -789,9 +789,13 @@ void SystemStatusMonitor::refreshLinuxNetwork()
                 if (props.value(QStringLiteral("State")).toUInt() != 2) { finishOne(); return; }
                 const QString type = props.value(QStringLiteral("Type")).toString();
                 const QString id = props.value(QStringLiteral("Id")).toString();
+                const bool isDefault = props.value(QStringLiteral("Default")).toBool() ||
+                                       props.value(QStringLiteral("Default6")).toBool();
+                const int defaultBoost = isDefault ? 10 : 0;
                 if (type == QLatin1String("802-3-ethernet")) {
-                    if (3 > gather->bestPrio) {
-                        gather->bestPrio = 3;
+                    const int prio = 3 + defaultBoost;
+                    if (prio > gather->bestPrio) {
+                        gather->bestPrio = prio;
                         gather->bestQuality = 100;
                         gather->bestText = id.isEmpty() ? QStringLiteral("有线网络") : (QStringLiteral("有线 · ") + id);
                     }
@@ -807,35 +811,47 @@ void SystemStatusMonitor::refreshLinuxNetwork()
                         apMsg.setArguments({QStringLiteral("org.freedesktop.NetworkManager.AccessPoint"),
                                             QStringLiteral("Strength")});
                         auto *apW = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(apMsg, 500), self);
-                        connect(apW, &QDBusPendingCallWatcher::finished, self, [apW, gather, id, finishOne] {
+                        connect(apW, &QDBusPendingCallWatcher::finished, self, [apW, gather, id, isDefault, defaultBoost, finishOne] {
                             int strength = 75;
                             const QDBusMessage apReply = apW->reply();
                             apW->deleteLater();
                             if (apReply.type() == QDBusMessage::ReplyMessage && !apReply.arguments().isEmpty()) {
                                 const QDBusVariant v = apReply.arguments().first().value<QDBusVariant>();
-                                strength = qBound(0, v.variant().toInt(), 100);
+                                strength = qBound(0, static_cast<int>(v.variant().toUInt()), 100);
                             }
-                            if (2 > gather->bestPrio || (2 == gather->bestPrio && strength > gather->bestQuality)) {
-                                gather->bestPrio = 2;
-                                gather->bestQuality = strength;
+                            // Local AP / Hotspot connections report Strength=0 and are not default-route:
+                            // never let a local hotspot override the real 4G/Ethernet upstream signal!
+                            if (!isDefault && strength == 0) {
+                                finishOne();
+                                return;
+                            }
+                            const int displayStrength = (isDefault && strength == 0) ? 20 : strength;
+                            const int prio = 2 + defaultBoost;
+                            if (prio > gather->bestPrio || (prio == gather->bestPrio && displayStrength > gather->bestQuality)) {
+                                gather->bestPrio = prio;
+                                gather->bestQuality = displayStrength;
                                 gather->bestText = (id.isEmpty() ? QStringLiteral("Wi-Fi") : id) +
-                                                   QStringLiteral(" (%1%)").arg(strength);
+                                                   QStringLiteral(" (%1%)").arg(displayStrength);
                             }
                             finishOne();
                         });
-                    } else {
-                        if (2 > gather->bestPrio) {
-                            gather->bestPrio = 2;
+                    } else if (isDefault) {
+                        const int prio = 2 + defaultBoost;
+                        if (prio > gather->bestPrio) {
+                            gather->bestPrio = prio;
                             gather->bestQuality = 75;
                             gather->bestText = id.isEmpty() ? QStringLiteral("Wi-Fi") : id;
                         }
                         finishOne();
+                    } else {
+                        finishOne();
                     }
                 } else if (type == QLatin1String("gsm") || type == QLatin1String("cdma")) {
-                    if (1 > gather->bestPrio) {
-                        gather->bestPrio = 1;
+                    const int prio = 1 + defaultBoost;
+                    if (prio > gather->bestPrio) {
+                        gather->bestPrio = prio;
                         gather->bestQuality = 80;
-                        gather->bestText = id.isEmpty() ? QStringLiteral("移动网络") : id;
+                        gather->bestText = id.isEmpty() ? QStringLiteral("4G 移动网络") : id;
                     }
                     finishOne();
                 } else {

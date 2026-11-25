@@ -1,6 +1,7 @@
 #include "floatingball.h"
 #include "./ui_floatingball.h"
 #include "actionhud.h"
+#include "applauncher.h"
 #include "clipboardbubble.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
@@ -956,7 +957,7 @@ QString RadialFanOverlay::activeLabelText() const
         } else if (item.isBranchHub) {
             text += QStringLiteral(" · 划入或点按进入");
         } else if (item.id == QLatin1String("launcher")) {
-            text += QStringLiteral(" · 右键 KRunner 搜索");
+            text += QStringLiteral(" · 松手/点按应用启动器 / 右键 KRunner");
         }
         return text;
     }
@@ -2268,6 +2269,7 @@ FloatingBall::~FloatingBall()
         delete m_clipboardBubble;
         delete m_quickDeck;
         delete m_systemPopover;
+        delete m_appLauncher;
         delete m_screenshotPanel;
     }
     delete ui;
@@ -2819,8 +2821,26 @@ void FloatingBall::openSystemPopover(int tab)
 {
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
+    if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
     const int clamped = qBound(0, tab, 4);
     systemPopover()->revealTab(static_cast<SystemPopover::Tab>(clamped), anchorCenterGlobal().toPoint());
+}
+
+AppLauncherPopover *FloatingBall::appLauncher()
+{
+    if (m_primaryPeer) return m_primaryPeer->appLauncher();
+    if (!m_appLauncher) {
+        m_appLauncher = new AppLauncherPopover(dockModel(), nullptr);
+    }
+    return m_appLauncher;
+}
+
+void FloatingBall::toggleAppLauncher()
+{
+    if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
+    if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
+    if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
+    appLauncher()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 
 void FloatingBall::executeSlotItem(const RadialSlotItem &item)
@@ -2999,7 +3019,7 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("home")) toastOutcome(DesktopActions::openHomeFolder());
     else if (id == QLatin1String("downloads")) toastOutcome(DesktopActions::openDownloadsFolder());
     else if (id == QLatin1String("trash")) toastOutcome(DesktopActions::openTrash());
-    else if (id == QLatin1String("launcher")) statusMonitor()->openAppLauncher();
+    else if (id == QLatin1String("launcher")) toggleAppLauncher();
     else if (id == QLatin1String("sys_hub")) openSystemPopover(SystemPopover::TabHome);
 }
 
@@ -3048,6 +3068,7 @@ void FloatingBall::toggleClipboardBubble()
 {
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
     if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
+    if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
     clipboardBubble()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 
@@ -3055,6 +3076,7 @@ void FloatingBall::toggleQuickDeck()
 {
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
     if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
+    if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
     quickDeck()->reveal(anchorCenterGlobal().toPoint(), true);
 }
 

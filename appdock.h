@@ -10,6 +10,9 @@
 struct DockAppEntry {
     QString id;
     QString name;
+    QString genericName;
+    QString keywords;
+    QStringList categories;
     QString launchTarget; // macOS .app path or Linux .desktop path / command
     QString windowId;     // Linux KWin internalId for live window switching/closing
     QIcon icon;
@@ -41,6 +44,7 @@ public:
     int importFromSystemDock();
 
     DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry) const;
+    DesktopActions::Outcome launchFresh(const DockAppEntry &entry) const;
     DesktopActions::Outcome quitApp(const DockAppEntry &entry) const;
 
     static QString displayNameForTarget(const QString &launchTarget);

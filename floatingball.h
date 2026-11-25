@@ -23,6 +23,7 @@
 #include "systemstatus.h"
 
 class ActionResultHud;
+class AppLauncherPopover;
 class ClipboardBubble;
 class QuickDeck;
 class ScreenshotPanel;
@@ -216,6 +217,7 @@ public:
     void toggleClipboardBubble();
     void toggleQuickDeck();
     void openSystemPopover(int tab);
+    void toggleAppLauncher();
     void showSettings();
 
     ScreenshotPanel *resultPanel();
@@ -223,6 +225,7 @@ public:
     ClipboardBubble *clipboardBubble();
     QuickDeck *quickDeck();
     SystemPopover *systemPopover();
+    AppLauncherPopover *appLauncher();
     AppDockModel *dockModel();
     RadialFanOverlay *fanOverlay() const { return m_fanOverlay; }
 
@@ -339,6 +342,7 @@ private:
     ClipboardBubble *m_clipboardBubble = nullptr;
     QuickDeck *m_quickDeck = nullptr;
     SystemPopover *m_systemPopover = nullptr;
+    AppLauncherPopover *m_appLauncher = nullptr;
     ScreenshotCapture *m_directCapture = nullptr;
     QList<QPointer<QWidget>> m_hiddenForDirectCapture;
     QPoint m_directCaptureAnchor;

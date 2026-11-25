@@ -120,10 +120,12 @@ private:
     void applyMprisVisuals();
     void triggerMprisAction(const QString &method);
 
-    // Wi-Fi async actions
+    // Wi-Fi + 4G WWAN async actions
     void refreshWifi(bool rescan = false);
-    void rebuildWifiList(bool wifiEnabled, const QStringList &vpnLinks, const QList<WifiEntry> &entries);
+    void rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool wwanEnabled,
+                         const QStringList &vpnLinks, const QList<WifiEntry> &entries);
     void toggleWifiRadio();
+    void toggleWwanRadio();
     void connectWifi(const WifiEntry &entry);
 
     // Hotspot (Wi-Fi AP sharing 4G / Ethernet, default WPA3-SAE + local hostname)
@@ -207,16 +209,20 @@ private:
     bool m_mprisPlaying = false;
     bool m_mprisVisible = false;
 
-    // Wi-Fi subpage widgets
+    // Wi-Fi + 4G WWAN subpage widgets
     QToolButton *m_wifiPowerBtn = nullptr;
+    QToolButton *m_wwanPowerBtn = nullptr;
     QLabel *m_wifiSummaryLbl = nullptr;
     QVBoxLayout *m_wifiListLayout = nullptr;
     bool m_wifiRadioEnabled = true;
+    bool m_wwanAvailable = false;
+    bool m_wwanEnabled = false;
     QString m_cachedWifiSsid;
     int m_cachedWifiSignal = 0;
 
     // Hotspot subpage widgets & state
     QToolButton *m_hsPowerBtn = nullptr;
+    QToolButton *m_hsWwanBtn = nullptr;
     QLabel *m_hsSummaryLbl = nullptr;
     QLineEdit *m_hsSsidEdit = nullptr;
     QLineEdit *m_hsPassEdit = nullptr;

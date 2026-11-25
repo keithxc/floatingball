@@ -1,5 +1,6 @@
 #include "actionhud.h"
 #include "clipboardbubble.h"
+#include "applauncher.h"
 #include "floatingball.h"
 #include "systempopover.h"
 #include "quickdeck.h"
@@ -676,6 +677,16 @@ int main(int argc, char **argv)
         app.processEvents();
         check(!ball.systemPopover()->isVisible(),
               "re-triggering sys_hub toggles Control Center closed");
+
+        // Verify launcher action opens centered macOS Tahoe-style AppLauncherPopover
+        ball.executeAction(QStringLiteral("launcher"));
+        app.processEvents();
+        check(ball.appLauncher() != nullptr && ball.appLauncher()->isVisible(),
+              "launcher action opens centered AppLauncherPopover");
+        ball.executeAction(QStringLiteral("launcher"));
+        app.processEvents();
+        check(!ball.appLauncher()->isVisible(),
+              "re-triggering launcher toggles AppLauncherPopover closed");
     }
 
     // Restore original clipboard
