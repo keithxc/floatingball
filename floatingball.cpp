@@ -2824,7 +2824,7 @@ void FloatingBall::openSystemPopover(int tab)
     if (m_quickDeck && m_quickDeck->isVisible()) m_quickDeck->hide();
     if (m_clipboardBubble && m_clipboardBubble->isVisible()) m_clipboardBubble->hide();
     if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
-    const int clamped = qBound(0, tab, 4);
+    const int clamped = qBound(0, tab, 5);
     systemPopover()->revealTab(static_cast<SystemPopover::Tab>(clamped), anchorCenterGlobal().toPoint());
 }
 

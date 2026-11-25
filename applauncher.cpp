@@ -52,14 +52,14 @@ public:
         : QToolButton(parent), m_running(entry.running), m_active(entry.active), m_pinned(entry.pinned)
     {
         setObjectName(QStringLiteral("appTile"));
-        setFixedSize(102, 92);
+        setFixedSize(76, 74);
         setCursor(Qt::PointingHandCursor);
         setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        setIconSize(QSize(42, 42));
-        setIcon(entry.icon.isNull() ? FloatingIcons::make(FloatingIcons::Orb, QColor("#dce8f8"), 40) : entry.icon);
+        setIconSize(QSize(38, 38));
+        setIcon(entry.icon.isNull() ? FloatingIcons::make(FloatingIcons::Orb, QColor("#dce8f8"), 38) : entry.icon);
 
         QString label = entry.name.trimmed();
-        if (label.size() > 12) label = label.left(11) + QStringLiteral("…");
+        if (label.size() > 9) label = label.left(8) + QStringLiteral("…");
         setText(label);
         setToolTip(entry.genericName.isEmpty() ? entry.name
                                                : QStringLiteral("%1 · %2").arg(entry.name, entry.genericName));
@@ -76,14 +76,14 @@ protected:
         if (m_running) {
             // Subtle macOS Dock / Tahoe running indicator pill beneath the tile
             p.setBrush(m_active ? QColor("#7cc8ff") : QColor("#94a3b8"));
-            p.drawRoundedRect(QRectF(width() * 0.5 - (m_active ? 8.0 : 3.0), height() - 6.5,
-                                     m_active ? 16.0 : 6.0, 3.2),
-                              1.6, 1.6);
+            p.drawRoundedRect(QRectF(width() * 0.5 - (m_active ? 7.0 : 2.5), height() - 5.5,
+                                     m_active ? 14.0 : 5.0, 2.8),
+                              1.4, 1.4);
         }
         if (m_pinned) {
             // Tiny amber favorite dot at top-right corner
-            p.setBrush(QColor(251, 191, 36, 200));
-            p.drawEllipse(QPointF(width() - 12.0, 11.0), 2.5, 2.5);
+            p.setBrush(QColor(251, 191, 36, 210));
+            p.drawEllipse(QPointF(width() - 9.0, 9.0), 2.2, 2.2);
         }
     }
 
@@ -140,10 +140,12 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
-    setFixedSize(584, 504);
+    setFixedSize(604, 468);
+    setProperty("panelBlurInset", 10);
+    setProperty("panelBlurRadius", 26);
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 8);
+    outer->setContentsMargins(10, 10, 10, 10);
 
     auto *card = new QWidget(this);
     card->setObjectName(QStringLiteral("launcherCard"));
@@ -151,25 +153,25 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
 
     FloatingWindow::setPanelStyleSheet(
         card,
-        "QWidget#launcherCard { background:@panelTint@; border:1px solid rgba(255,255,255,38); border-radius:24px; }"
-        "QWidget#searchWrap { background:rgba(255,255,255,14); border:1px solid rgba(255,255,255,28); border-radius:16px; }"
-        "QLineEdit#searchInput { background:transparent; color:#f8fafc; border:none; font-size:14px; padding:4px 2px; }"
-        "QToolButton#hdrBtn { background:rgba(255,255,255,12); color:#cbd5e1; border:1px solid rgba(255,255,255,18); border-radius:14px; }"
-        "QToolButton#hdrBtn:hover { background:rgba(255,255,255,26); color:#ffffff; }"
-        "QToolButton#catPill { background:rgba(255,255,255,10); color:#cbd5e1; border:1px solid rgba(255,255,255,16);"
-        "                      border-radius:13px; padding:5px 11px; font-size:12px; font-weight:600; }"
-        "QToolButton#catPill:hover { background:rgba(255,255,255,22); color:#ffffff; }"
-        "QToolButton#catPill[active=\"true\"] { background:rgba(59,130,246,165); color:#ffffff; border:1px solid rgba(147,197,253,190); }"
+        "QWidget#launcherCard { background:transparent; border:none; }"
+        "QWidget#searchWrap { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,28); border-radius:15px; }"
+        "QLineEdit#searchInput { background:transparent; color:#f8fafc; border:none; font-size:13.5px; padding:3px 2px; }"
+        "QToolButton#hdrBtn { background:rgba(255,255,255,16); color:#cbd5e1; border:1px solid rgba(255,255,255,22); border-radius:14px; }"
+        "QToolButton#hdrBtn:hover { background:rgba(255,255,255,30); color:#ffffff; }"
+        "QToolButton#catPill { background:rgba(255,255,255,12); color:#cbd5e1; border:1px solid rgba(255,255,255,18);"
+        "                      border-radius:12px; padding:4px 10px; font-size:11.5px; font-weight:600; }"
+        "QToolButton#catPill:hover { background:rgba(255,255,255,24); color:#ffffff; }"
+        "QToolButton#catPill[active=\"true\"] { background:rgba(59,130,246,175); color:#ffffff; border:1px solid rgba(147,197,253,195); }"
         "QToolButton#appTile { background:transparent; color:#e2e8f0; border:1px solid transparent;"
-        "                      border-radius:16px; padding:8px 4px 10px 4px; font-size:11.5px; font-weight:500; }"
-        "QToolButton#appTile:hover { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,28); color:#ffffff; }"
-        "QToolButton#appTile:pressed { background:rgba(255,255,255,30); }"
-        "QToolButton#appTile[firstMatch=\"true\"] { background:rgba(56,189,248,28); border:1px solid rgba(125,211,252,110); color:#ffffff; }"
-        "QLabel#footInfo { color:#94a3b8; font-size:11px; background:transparent; }");
+        "                      border-radius:14px; padding:5px 2px 7px 2px; font-size:11px; font-weight:500; }"
+        "QToolButton#appTile:hover { background:rgba(255,255,255,20); border:1px solid rgba(255,255,255,30); color:#ffffff; }"
+        "QToolButton#appTile:pressed { background:rgba(255,255,255,32); }"
+        "QToolButton#appTile[firstMatch=\"true\"] { background:rgba(56,189,248,34); border:1px solid rgba(125,211,252,125); color:#ffffff; }"
+        "QLabel#footInfo { color:rgba(226,232,240,175); font-size:11px; background:transparent; }");
 
     auto *root = new QVBoxLayout(card);
-    root->setContentsMargins(16, 14, 16, 12);
-    root->setSpacing(10);
+    root->setContentsMargins(14, 12, 14, 10);
+    root->setSpacing(8);
 
     // ---- Top Search & Drag Bar ----
     auto *topBar = new LauncherDragBar(card);
@@ -240,9 +242,9 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     auto *gridContainer = new QWidget(m_gridScroll);
     gridContainer->setStyleSheet(QStringLiteral("background: transparent;"));
     m_gridLayout = new QGridLayout(gridContainer);
-    m_gridLayout->setContentsMargins(2, 4, 6, 6);
-    m_gridLayout->setHorizontalSpacing(8);
-    m_gridLayout->setVerticalSpacing(8);
+    m_gridLayout->setContentsMargins(2, 2, 4, 4);
+    m_gridLayout->setHorizontalSpacing(3);
+    m_gridLayout->setVerticalSpacing(4);
     m_gridLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_gridScroll->setWidget(gridContainer);
     root->addWidget(m_gridScroll, 1);
@@ -284,6 +286,41 @@ void AppLauncherPopover::positionCenteredOnScreen(const QPoint &anchorGlobal)
     const int y = b.top() + (b.height() - height()) / 2;
     move(qBound(b.left() + 8, x, qMax(b.left() + 8, b.right() - width() - 8)),
          qBound(b.top() + 8, y, qMax(b.top() + 8, b.bottom() - height() - 8)));
+}
+
+void AppLauncherPopover::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+
+    const QRectF base = QRectF(rect()).adjusted(10.0, 10.0, -10.0, -10.0);
+    // Soft feathered outer edge fade (macOS/iPadOS frosted glass, zero hard border)
+    struct FeatherStep { qreal expand; int alpha; };
+    static const FeatherStep kFeather[] = {
+        {10.0, 8}, {7.5, 14}, {5.0, 22}, {2.5, 34}
+    };
+    for (const FeatherStep &s : kFeather) {
+        p.setBrush(QColor(12, 17, 29, s.alpha));
+        p.drawRoundedRect(base.adjusted(-s.expand, -s.expand, s.expand, s.expand),
+                          26.0 + s.expand * 0.5, 26.0 + s.expand * 0.5);
+    }
+
+    // Translucent frosted liquid glass gradient over KWin Gaussian blur
+    QLinearGradient glass(base.topLeft(), base.bottomRight());
+    glass.setColorAt(0.0, QColor(34, 44, 66, 134));
+    glass.setColorAt(0.45, QColor(18, 24, 38, 138));
+    glass.setColorAt(1.0, QColor(12, 16, 28, 150));
+    p.setBrush(glass);
+    p.drawRoundedRect(base, 26.0, 26.0);
+
+    // Subtle top-left iPadOS/macOS specular sheen
+    QRadialGradient sheen(base.topLeft() + QPointF(base.width() * 0.25, 0.0), base.width() * 0.85);
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 22));
+    sheen.setColorAt(0.6, QColor(255, 255, 255, 5));
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+    p.setBrush(sheen);
+    p.drawRoundedRect(base, 26.0, 26.0);
 }
 
 void AppLauncherPopover::keyPressEvent(QKeyEvent *event)
@@ -514,13 +551,13 @@ void AppLauncherPopover::rebuildGrid()
         auto *empty = new QLabel(QStringLiteral("没有匹配的应用（可按 Esc 清空搜索）"), this);
         empty->setStyleSheet(QStringLiteral("color:#94a3b8; font-size:13px; padding:48px 0;"));
         empty->setAlignment(Qt::AlignCenter);
-        m_gridLayout->addWidget(empty, 0, 0, 1, 5);
+        m_gridLayout->addWidget(empty, 0, 0, 1, 7);
         m_footerLbl->setText(QStringLiteral("0 个匹配 · 右键悬浮球「开始」可呼出 KRunner"));
         return;
     }
 
     const bool highlightFirst = m_searchEdit && !m_searchEdit->text().trimmed().isEmpty();
-    constexpr int kCols = 5;
+    constexpr int kCols = 7;
     for (int i = 0; i < m_filteredApps.size(); ++i) {
         const DockAppEntry entry = m_filteredApps[i];
         auto *tile = new AppGridTile(entry, this);

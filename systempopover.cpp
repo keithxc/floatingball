@@ -271,7 +271,127 @@ private:
     QString m_badgeText;
 };
 
+// ============================================================================
+// Apple iOS-style Capsule Toggle Switch
+// ============================================================================
+class IosToggleSwitch final : public QWidget
+{
+public:
+    explicit IosToggleSwitch(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setFixedSize(44, 26);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+    void setChecked(bool checked)
+    {
+        if (m_checked == checked) return;
+        m_checked = checked;
+        update();
+    }
+
+    bool isChecked() const { return m_checked; }
+
+    void setOnColor(const QColor &color)
+    {
+        m_onColor = color;
+        update();
+    }
+
+    std::function<void()> onToggled;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal rad = r.height() * 0.5;
+        QColor track = m_checked ? m_onColor : QColor(255, 255, 255, 34);
+        if (!isEnabled()) track.setAlpha(track.alpha() / 2);
+
+        p.setPen(QPen(m_checked ? QColor(255, 255, 255, 36) : QColor(255, 255, 255, 30), 1.0));
+        p.setBrush(track);
+        p.drawRoundedRect(r, rad, rad);
+
+        const qreal knobD = r.height() - 4.0;
+        const qreal knobX = m_checked ? (r.right() - knobD - 2.0) : (r.left() + 2.0);
+        const QRectF knob(knobX, r.top() + 2.0, knobD, knobD);
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 42));
+        p.drawEllipse(knob.translated(0.0, 1.0));
+        p.setBrush(isEnabled() ? QColor("#ffffff") : QColor(226, 232, 240, 180));
+        p.drawEllipse(knob);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        if (isEnabled() && e->button() == Qt::LeftButton && rect().contains(e->position().toPoint())) {
+            if (onToggled) onToggled();
+            e->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(e);
+    }
+
+private:
+    bool m_checked = false;
+    QColor m_onColor{QStringLiteral("#34c759")};
+};
+
 namespace {
+
+bool readSysfsNetBytes(const QString &iface, quint64 *rxOut, quint64 *txOut)
+{
+    if (iface.isEmpty()) return false;
+    QFile fRx(QStringLiteral("/sys/class/net/%1/statistics/rx_bytes").arg(iface));
+    QFile fTx(QStringLiteral("/sys/class/net/%1/statistics/tx_bytes").arg(iface));
+    if (!fRx.open(QIODevice::ReadOnly) || !fTx.open(QIODevice::ReadOnly)) return false;
+    bool okRx = false, okTx = false;
+    const quint64 rx = QString::fromLatin1(fRx.readAll()).trimmed().toULongLong(&okRx);
+    const quint64 tx = QString::fromLatin1(fTx.readAll()).trimmed().toULongLong(&okTx);
+    if (!okRx || !okTx) return false;
+    if (rxOut) *rxOut = rx;
+    if (txOut) *txOut = tx;
+    return true;
+}
+
+QString formatByteCount(quint64 bytes)
+{
+    if (bytes < 1024ULL) return QStringLiteral("%1 B").arg(bytes);
+    if (bytes < 1024ULL * 1024ULL) return QStringLiteral("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+    if (bytes < 1024ULL * 1024ULL * 1024ULL) return QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
+    return QStringLiteral("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
+}
+
+QString formatByteRate(quint64 bytesPerSec)
+{
+    if (bytesPerSec < 1024ULL) return QStringLiteral("%1 B/s").arg(bytesPerSec);
+    if (bytesPerSec < 1024ULL * 1024ULL) return QStringLiteral("%1 KB/s").arg(bytesPerSec / 1024.0, 0, 'f', 1);
+    return QStringLiteral("%1 MB/s").arg(bytesPerSec / (1024.0 * 1024.0), 0, 'f', 2);
+}
+
+QWidget *makeIosSwitchCard(QWidget *parent, const QString &label, IosToggleSwitch **outToggle,
+                           const QColor &onColor = QColor(QStringLiteral("#34c759")))
+{
+    auto *card = new QWidget(parent);
+    card->setObjectName(QStringLiteral("bentoGroup"));
+    card->setFixedHeight(46);
+    auto *hl = new QHBoxLayout(card);
+    hl->setContentsMargins(12, 6, 10, 6);
+    hl->setSpacing(8);
+    auto *lbl = new QLabel(label, card);
+    lbl->setObjectName(QStringLiteral("rowTitle"));
+    hl->addWidget(lbl, 1);
+    auto *sw = new IosToggleSwitch(card);
+    sw->setOnColor(onColor);
+    hl->addWidget(sw);
+    if (outToggle) *outToggle = sw;
+    return card;
+}
 
 class PopoverDragHeader final : public QWidget
 {
@@ -386,10 +506,12 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
     // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
-    setFixedSize(376, 488);
+    setFixedSize(344, 396);
+    setProperty("panelBlurInset", 10);
+    setProperty("panelBlurRadius", 26);
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 8);
+    outer->setContentsMargins(10, 10, 10, 10);
 
     auto *card = new QWidget(this);
     card->setObjectName(QStringLiteral("ccCard"));
@@ -397,81 +519,77 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 
     FloatingWindow::setPanelStyleSheet(
         card,
-        "QWidget#ccCard { background:@panelTint@; border:1px solid rgba(255,255,255,38); border-radius:24px; }"
-        "QWidget#bentoGroup { background:rgba(255,255,255,13); border:1px solid rgba(255,255,255,22); border-radius:18px; }"
-        "QLabel { color:#cbd5e1; font-size:12px; background:transparent; }"
-        "QLabel#ccTitle { color:#f8fafc; font-size:15px; font-weight:700; }"
-        "QLabel#ccMeta { color:#94a3b8; font-size:11px; font-weight:600; }"
-        "QLabel#ccSub { color:#94a3b8; font-size:11px; }"
-        "QLabel#rowTitle { color:#f8fafc; font-size:12.5px; font-weight:600; }"
-        "QLabel#rowSub { color:#94a3b8; font-size:11px; }"
-        "QLabel#sliderTag { color:#94a3b8; font-size:11px; font-weight:600; }"
-        "QLabel#sliderVal { color:#e2e8f0; font-size:11.5px; font-weight:600; }"
-        "QToolButton#hdrIconBtn { background:rgba(255,255,255,14); color:#e2e8f0; border:1px solid rgba(255,255,255,20); border-radius:15px; }"
-        "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,28); }"
-        "QToolButton#backPill { background:rgba(255,255,255,14); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
-        "                       border-radius:14px; padding:4px 10px 4px 6px; font-size:12px; font-weight:600; }"
-        "QToolButton#backPill:hover { background:rgba(255,255,255,28); }"
+        "QWidget#ccCard { background:transparent; border:none; }"
+        "QWidget#bentoGroup { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:18px; }"
+        "QLabel { color:#e2e8f0; font-size:12px; background:transparent; }"
+        "QLabel#ccTitle { color:#ffffff; font-size:14px; font-weight:700; }"
+        "QLabel#ccMeta { color:#cbd5e1; font-size:11px; font-weight:600; }"
+        "QLabel#ccSub { color:rgba(226,232,240,185); font-size:11px; }"
+        "QLabel#rowTitle { color:#ffffff; font-size:12.5px; font-weight:600; }"
+        "QLabel#rowSub { color:rgba(226,232,240,175); font-size:11px; }"
+        "QLabel#sliderTag { color:rgba(226,232,240,190); font-size:11px; font-weight:600; }"
+        "QLabel#sliderVal { color:#f8fafc; font-size:11.5px; font-weight:600; }"
+        "QToolButton#powerPill { background:rgba(255,255,255,18); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
+        "                        border-radius:11px; padding:2px 6px; font-size:10.5px; font-weight:600; }"
+        "QToolButton#powerPill:hover { background:rgba(255,255,255,30); }"
+        "QToolButton#powerPill[accent=\"green\"] { background:rgba(16,185,129,48); border:1px solid rgba(52,211,153,150); color:#d1fae5; }"
+        "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(59,130,246,44); border:1px solid rgba(96,165,250,145); color:#dbeafe; }"
+        "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(244,63,94,48);  border:1px solid rgba(251,113,133,150); color:#ffe4e6; }"
+        "QToolButton#hdrIconBtn { background:rgba(255,255,255,18); color:#f1f5f9; border:1px solid rgba(255,255,255,24); border-radius:13px; }"
+        "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,32); }"
+        "QToolButton#hdrDangerBtn { background:rgba(244,63,94,40); color:#ffe4e6; border:1px solid rgba(251,113,133,105); border-radius:13px; }"
+        "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,68); }"
+        "QToolButton#backPill { background:rgba(255,255,255,18); color:#f8fafc; border:1px solid rgba(255,255,255,26);"
+        "                       border-radius:13px; padding:3px 9px 3px 5px; font-size:12px; font-weight:600; }"
+        "QToolButton#backPill:hover { background:rgba(255,255,255,32); }"
         "QPushButton#connRow { background:transparent; border:none; border-radius:12px; text-align:left; }"
-        "QPushButton#connRow:hover { background:rgba(255,255,255,14); }"
-        "QPushButton#connRow:pressed { background:rgba(255,255,255,24); }"
-        "QPushButton#dndCard { background:rgba(255,255,255,13); border:1px solid rgba(255,255,255,22); border-radius:18px; text-align:left; }"
-        "QPushButton#dndCard:hover { background:rgba(255,255,255,22); }"
-        "QPushButton#dndCard[on=\"true\"] { background:rgba(139,92,246,48); border:1px solid rgba(167,139,250,150); }"
-        "QToolButton#miniTile { background:rgba(255,255,255,13); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
-        "                       border-radius:16px; padding:6px 4px; font-size:11.5px; font-weight:600; }"
-        "QToolButton#miniTile:hover { background:rgba(255,255,255,24); }"
-        "QToolButton#miniTile[accent=\"amber\"] { background:rgba(245,158,11,42); border:1px solid rgba(251,191,36,145); color:#fef3c7; }"
-        "QToolButton#miniTile[accent=\"green\"] { background:rgba(16,185,129,40); border:1px solid rgba(52,211,153,145); color:#d1fae5; }"
-        "QToolButton#miniTile[accent=\"blue\"]  { background:rgba(59,130,246,38); border:1px solid rgba(96,165,250,140); color:#dbeafe; }"
-        "QToolButton#miniTile[accent=\"rose\"]  { background:rgba(244,63,94,42);  border:1px solid rgba(251,113,133,150); color:#ffe4e6; }"
-        "QToolButton#muteBtn { background:rgba(255,255,255,16); border:1px solid rgba(255,255,255,22); border-radius:16px; }"
-        "QToolButton#muteBtn:hover { background:rgba(255,255,255,28); }"
-        "QToolButton#muteBtn[muted=\"true\"] { background:rgba(244,63,94,44); border:1px solid rgba(251,113,133,140); }"
-        "QToolButton#mediaBtn { background:rgba(255,255,255,14); border:1px solid rgba(255,255,255,20); border-radius:16px; }"
-        "QToolButton#mediaBtn:hover { background:rgba(255,255,255,28); }"
-        "QToolButton#footPill { background:rgba(255,255,255,12); color:#e2e8f0; border:1px solid rgba(255,255,255,20);"
-        "                       border-radius:14px; padding:7px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#footPill:hover { background:rgba(255,255,255,24); }"
-        "QToolButton#dangerPill { background:rgba(244,63,94,28); color:#fecdd3; border:1px solid rgba(251,113,133,70);"
-        "                         border-radius:14px; padding:7px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#dangerPill:hover { background:rgba(244,63,94,48); }"
-        "QToolButton#tabBtn { background:rgba(255,255,255,12); color:#cbd5e1; border:1px solid rgba(255,255,255,18);"
-        "                     border-radius:12px; padding:6px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#tabBtn:hover { background:rgba(255,255,255,24); }"
-        "QToolButton#tabBtn[active=\"true\"] { background:rgba(59,130,246,165); color:#ffffff; border:1px solid rgba(147,197,253,190); }"
-        "QToolButton#powerBtn { background:rgba(255,255,255,14); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
-        "                       border-radius:12px; padding:6px 12px; font-size:12px; font-weight:600; }"
-        "QToolButton#powerBtn[on=\"true\"] { background:rgba(16,185,129,48); color:#ecfdf5; border:1px solid rgba(52,211,153,165); }"
-        "QToolButton#modeBtn { background:rgba(255,255,255,12); color:#cbd5e1; border:1px solid rgba(255,255,255,18);"
-        "                      border-radius:11px; padding:6px 8px; font-size:12px; font-weight:600; }"
-        "QToolButton#modeBtn[active=\"true\"] { background:rgba(56,189,248,55); color:#f0f9ff; border:1px solid rgba(125,211,252,185); }"
-        "QPushButton#rowBtn { background:rgba(255,255,255,10); color:#f1f5f9; border:1px solid rgba(255,255,255,16);"
-        "                     border-radius:13px; padding:10px 12px; text-align:left; font-size:12.5px; font-weight:500; }"
-        "QPushButton#rowBtn:hover { background:rgba(255,255,255,22); }"
-        "QPushButton#rowBtn[connected=\"true\"] { background:rgba(56,189,248,34); border:1px solid rgba(125,211,252,135); color:#ffffff; }"
-        "QToolButton#footBtn { background:rgba(255,255,255,10); color:#cbd5e1; border:1px solid rgba(255,255,255,18);"
-        "                      border-radius:12px; padding:8px 10px; font-size:12px; font-weight:600; }"
-        "QToolButton#footBtn:hover { background:rgba(255,255,255,22); color:#ffffff; }"
-        "QLineEdit#hsInput { background:rgba(15,23,42,160); color:#f8fafc; border:1px solid rgba(255,255,255,28);"
-        "                    border-radius:10px; padding:6px 10px; font-size:12.5px; }"
-        "QLineEdit#hsInput:focus { border:1px solid rgba(96,165,250,200); }");
+        "QPushButton#connRow:hover { background:rgba(255,255,255,18); }"
+        "QPushButton#connRow:pressed { background:rgba(255,255,255,28); }"
+        "QPushButton#dndCard { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:18px; text-align:left; }"
+        "QPushButton#dndCard:hover { background:rgba(255,255,255,28); }"
+        "QPushButton#dndCard[on=\"true\"] { background:rgba(139,92,246,64); border:1px solid rgba(167,139,250,165); }"
+        "QToolButton#mediaBtn { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:15px; }"
+        "QToolButton#mediaBtn:hover { background:rgba(255,255,255,32); }"
+        "QToolButton#tabBtn { background:rgba(255,255,255,16); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "                     border-radius:11px; padding:4px 9px; font-size:11.5px; font-weight:600; }"
+        "QToolButton#tabBtn:hover { background:rgba(255,255,255,28); color:#ffffff; }"
+        "QToolButton#tabBtn[active=\"true\"] { background:rgba(59,130,246,175); color:#ffffff; border:1px solid rgba(147,197,253,195); }"
+        "QToolButton#modeBtn { background:rgba(255,255,255,15); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "                      border-radius:12px; padding:6px 6px; font-size:12px; font-weight:600; }"
+        "QToolButton#modeBtn:hover { background:rgba(255,255,255,26); }"
+        "QToolButton#modeBtn[active=\"true\"] { background:rgba(56,189,248,68); color:#ffffff; border:1px solid rgba(125,211,252,195); }"
+        "QToolButton#modeBtn[tone=\"green\"][active=\"true\"] { background:rgba(16,185,129,72); color:#ffffff; border:1px solid rgba(52,211,153,195); }"
+        "QToolButton#modeBtn[tone=\"blue\"][active=\"true\"]  { background:rgba(59,130,246,84); color:#ffffff; border:1px solid rgba(147,197,253,205); }"
+        "QToolButton#modeBtn[tone=\"amber\"][active=\"true\"] { background:rgba(245,158,11,76); color:#ffffff; border:1px solid rgba(251,191,36,205); }"
+        "QPushButton#rowBtn { background:rgba(255,255,255,14); color:#f8fafc; border:1px solid rgba(255,255,255,20);"
+        "                     border-radius:12px; padding:8px 11px; text-align:left; font-size:12px; font-weight:500; }"
+        "QPushButton#rowBtn:hover { background:rgba(255,255,255,26); }"
+        "QPushButton#rowBtn[connected=\"true\"] { background:rgba(56,189,248,44); border:1px solid rgba(125,211,252,150); color:#ffffff; }"
+        "QToolButton#footBtn { background:rgba(255,255,255,15); color:#e2e8f0; border:1px solid rgba(255,255,255,22);"
+        "                      border-radius:12px; padding:7px 10px; font-size:12px; font-weight:600; }"
+        "QToolButton#footBtn:hover { background:rgba(255,255,255,28); color:#ffffff; }"
+        "QToolButton#primaryBtn { background:rgba(59,130,246,165); color:#ffffff; border:1px solid rgba(147,197,253,190);"
+        "                         border-radius:12px; padding:7px 12px; font-size:12px; font-weight:600; }"
+        "QToolButton#primaryBtn:hover { background:rgba(59,130,246,210); }"
+        "QLineEdit#hsInput { background:rgba(12,18,32,145); color:#ffffff; border:1px solid rgba(255,255,255,30);"
+        "                    border-radius:10px; padding:5px 9px; font-size:12px; }"
+        "QLineEdit#hsInput:focus { border:1px solid rgba(96,165,250,210); }");
 
     auto *root = new QVBoxLayout(card);
-    root->setContentsMargins(14, 12, 14, 14);
-    root->setSpacing(10);
+    root->setContentsMargins(12, 12, 12, 12);
+    root->setSpacing(9);
 
     // ---- Shared Top Draggable Header ----
     auto *header = new PopoverDragHeader(card);
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(8);
+    hdrRow->setSpacing(4);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
-    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#e2e8f0"), 14));
-    m_backBtn->setText(QStringLiteral("控制中心"));
+    m_backBtn->setIcon(FloatingIcons::make(FloatingIcons::ChevronLeft, QColor("#f8fafc"), 13));
+    m_backBtn->setText(QStringLiteral("返回"));
     m_backBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->hide();
@@ -483,18 +601,62 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     hdrRow->addWidget(m_titleLbl);
 
+    // Clickable Battery + Power Profile Pill (cycles power-saver / balanced / performance)
+    m_powerPill = new QToolButton(header);
+    m_powerPill->setObjectName(QStringLiteral("powerPill"));
+    m_powerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_powerPill->setText(QStringLiteral("平衡"));
+    m_powerPill->setToolTip(QStringLiteral("点击切换功耗模式（节能 / 平衡 / 性能）"));
+    m_powerPill->setCursor(Qt::PointingHandCursor);
+    connect(m_powerPill, &QToolButton::clicked, this, [this] {
+        if (!m_monitor) return;
+        showStatusBanner(m_monitor->cyclePowerProfile());
+        syncHomeFromSnapshot();
+    });
+    hdrRow->addWidget(m_powerPill);
+
     hdrRow->addStretch(1);
 
-    m_metaLbl = new QLabel(header);
-    m_metaLbl->setObjectName(QStringLiteral("ccMeta"));
-    m_metaLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-    hdrRow->addWidget(m_metaLbl);
+    auto makeHdrBtn = [&](const QString &objName, FloatingIcons::Icon icon, const QColor &ink, const QString &tip) {
+        auto *b = new QToolButton(header);
+        b->setObjectName(objName);
+        b->setIcon(FloatingIcons::make(icon, ink, 13));
+        b->setIconSize(QSize(13, 13));
+        b->setToolTip(tip);
+        b->setFixedSize(26, 26);
+        b->setCursor(Qt::PointingHandCursor);
+        return b;
+    };
+
+    m_hdrSettingsBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Settings, QColor("#e2e8f0"),
+                                  QStringLiteral("系统设置"));
+    connect(m_hdrSettingsBtn, &QToolButton::clicked, this, [this] {
+        hide();
+        if (m_monitor) m_monitor->openKdeModule(QString());
+    });
+    hdrRow->addWidget(m_hdrSettingsBtn);
+
+    m_hdrLockBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Lock, QColor("#f1f5f9"),
+                              QStringLiteral("锁屏"));
+    connect(m_hdrLockBtn, &QToolButton::clicked, this, [this] {
+        hide();
+        if (m_monitor) m_monitor->lockScreen();
+    });
+    hdrRow->addWidget(m_hdrLockBtn);
+
+    m_hdrPowerBtn = makeHdrBtn(QStringLiteral("hdrDangerBtn"), FloatingIcons::Power, QColor("#fda4af"),
+                               QStringLiteral("关机 / 休眠"));
+    connect(m_hdrPowerBtn, &QToolButton::clicked, this, [this] {
+        hide();
+        if (m_monitor) m_monitor->openPowerMenu();
+    });
+    hdrRow->addWidget(m_hdrPowerBtn);
 
     m_refreshBtn = new QToolButton(header);
     m_refreshBtn->setObjectName(QStringLiteral("hdrIconBtn"));
     m_refreshBtn->setText(QStringLiteral("↻"));
     m_refreshBtn->setToolTip(QStringLiteral("刷新实时状态"));
-    m_refreshBtn->setFixedSize(30, 30);
+    m_refreshBtn->setFixedSize(26, 26);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     connect(m_refreshBtn, &QToolButton::clicked, this, [this] {
         if (m_currentPage == PageWifi) refreshWifi(true);
@@ -502,11 +664,8 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     });
     hdrRow->addWidget(m_refreshBtn);
 
-    auto *closeBtn = new QToolButton(header);
-    closeBtn->setObjectName(QStringLiteral("hdrIconBtn"));
-    closeBtn->setIcon(FloatingIcons::make(FloatingIcons::Close, QColor("#cbd5e1"), 14));
-    closeBtn->setFixedSize(30, 30);
-    closeBtn->setCursor(Qt::PointingHandCursor);
+    auto *closeBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Close, QColor("#cbd5e1"),
+                                QStringLiteral("关闭"));
     connect(closeBtn, &QToolButton::clicked, this, &QWidget::hide);
     hdrRow->addWidget(closeBtn);
     root->addWidget(header);
@@ -519,14 +678,20 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 
     loadHotspotPrefs();
 
-    // ---- Stacked Pages (0 = Bento Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo) ----
+    // ---- Stacked Pages (0 = Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo, 5 = 4G) ----
     m_stack = new QStackedWidget(card);
     m_stack->addWidget(buildHomePage(m_stack));
     m_stack->addWidget(buildWifiPage(m_stack));
     m_stack->addWidget(buildHotspotPage(m_stack));
     m_stack->addWidget(buildBluetoothPage(m_stack));
     m_stack->addWidget(buildMihomoPage(m_stack));
+    m_stack->addWidget(buildCellularPage(m_stack));
     root->addWidget(m_stack, 1);
+
+    // Live 1s net speed/traffic sampler (runs only when visible on Wi-Fi / 4G / Hotspot page)
+    m_netStatsTimer = new QTimer(this);
+    m_netStatsTimer->setInterval(1000);
+    connect(m_netStatsTimer, &QTimer::timeout, this, &SystemPopover::pollLiveNetStats);
 
     if (m_monitor) {
         connect(m_monitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &) {
@@ -608,8 +773,8 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                                    [this] { showPage(PageWifi); }));
     m_homeWwanRow = makeConnRow(QStringLiteral("4G 网络"), QStringLiteral("已关闭"),
                                 FloatingIcons::Cellular, QColor(255, 255, 255, 26),
-                                &m_homeWwanBadge, &m_homeWwanSub, false,
-                                [this] { toggleWwanRadio(); });
+                                &m_homeWwanBadge, &m_homeWwanSub, true,
+                                [this] { showPage(PageCellular); });
     m_homeWwanRow->hide();
     connCol->addWidget(m_homeWwanRow);
     connCol->addWidget(makeConnRow(QStringLiteral("个人热点"), m_hsSsid + QStringLiteral(" · WPA3"),
@@ -624,11 +789,11 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                                    FloatingIcons::Proxy, QColor("#10b981"),
                                    &m_homeMhBadge, &m_homeMhSub, true,
                                    [this] { showPage(PageMihomo); }));
-    upper->addWidget(connCard, 196);
+    upper->addWidget(connCard, 168);
 
     // Right Bento Column: DND wide pill on top + two slender iOS-style vertical sliders below
     auto *rightCol = new QVBoxLayout();
-    rightCol->setSpacing(10);
+    rightCol->setSpacing(9);
 
     // DND Wide Card
     m_dndTile = new QPushButton(page);
@@ -636,11 +801,11 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     m_dndTile->setCursor(Qt::PointingHandCursor);
     m_dndTile->setFixedHeight(52);
     auto *dndRow = new QHBoxLayout(m_dndTile);
-    dndRow->setContentsMargins(9, 6, 9, 6);
-    dndRow->setSpacing(8);
+    dndRow->setContentsMargins(8, 6, 8, 6);
+    dndRow->setSpacing(7);
     m_dndBadge = new QLabel(m_dndTile);
     m_dndBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    styleCircleBadge(m_dndBadge, FloatingIcons::Bell, QColor(255, 255, 255, 26), QColor("#cbd5e1"), 30);
+    styleCircleBadge(m_dndBadge, FloatingIcons::Bell, QColor(255, 255, 255, 26), QColor("#cbd5e1"), 28);
     dndRow->addWidget(m_dndBadge);
     auto *dndText = new QVBoxLayout();
     dndText->setContentsMargins(0, 0, 0, 0);
@@ -663,8 +828,8 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
 
     // Side-by-side slender iOS Vertical Brightness & Volume Sliders
     auto *slidersRow = new QHBoxLayout();
-    slidersRow->setContentsMargins(2, 0, 2, 0);
-    slidersRow->setSpacing(10);
+    slidersRow->setContentsMargins(0, 0, 0, 0);
+    slidersRow->setSpacing(8);
 
     m_brightnessSlider = new CapsuleSlider(
         FloatingIcons::Sun, QColor(248, 250, 252, 236), QColor("#fcd34d"), page);
@@ -719,66 +884,18 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
 
     rightCol->addLayout(slidersRow, 1);
 
-    upper->addLayout(rightCol, 130);
+    upper->addLayout(rightCol, 122);
     v->addLayout(upper);
-
-    // ---- Lower Half: 4-Column Quick Action Tiles (Night Light / Power / Display / Settings) ----
-    auto *tilesRow = new QHBoxLayout();
-    tilesRow->setSpacing(8);
-    auto makeMini = [&](const QString &label, FloatingIcons::Icon icon, const QColor &ink) {
-        auto *b = new QToolButton(page);
-        b->setObjectName(QStringLiteral("miniTile"));
-        b->setText(label);
-        b->setIcon(FloatingIcons::make(icon, ink, 19));
-        b->setIconSize(QSize(19, 19));
-        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        b->setFixedHeight(58);
-        b->setCursor(Qt::PointingHandCursor);
-        return b;
-    };
-
-    m_nightTile = makeMini(QStringLiteral("护眼"), FloatingIcons::Moon, QColor("#fbbf24"));
-    connect(m_nightTile, &QToolButton::clicked, this, [this] {
-        if (!m_monitor) return;
-        showStatusBanner(m_monitor->toggleNightLight());
-        syncHomeFromSnapshot();
-    });
-
-    m_powerTile = makeMini(QStringLiteral("平衡"), FloatingIcons::Bolt, QColor("#38bdf8"));
-    connect(m_powerTile, &QToolButton::clicked, this, [this] {
-        if (!m_monitor) return;
-        showStatusBanner(m_monitor->cyclePowerProfile());
-        syncHomeFromSnapshot();
-    });
-
-    auto *dispTile = makeMini(QStringLiteral("多屏"), FloatingIcons::Desktop, QColor("#93c5fd"));
-    connect(dispTile, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openKdeModule(QStringLiteral("kcm_kscreen"));
-    });
-
-    auto *cfgTile = makeMini(QStringLiteral("设置"), FloatingIcons::Settings, QColor("#cbd5e1"));
-    connect(cfgTile, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openKdeModule(QString());
-    });
-
-    tilesRow->addWidget(m_nightTile, 1);
-    tilesRow->addWidget(m_powerTile, 1);
-    tilesRow->addWidget(dispTile, 1);
-    tilesRow->addWidget(cfgTile, 1);
-    v->addLayout(tilesRow);
 
     // ---- MPRIS Now Playing Card (Auto-Hidden When Nothing Playing) ----
     m_mprisCard = new QWidget(page);
     m_mprisCard->setObjectName(QStringLiteral("bentoGroup"));
     auto *mRow = new QHBoxLayout(m_mprisCard);
-    mRow->setContentsMargins(10, 9, 10, 9);
-    mRow->setSpacing(10);
+    mRow->setContentsMargins(9, 8, 9, 8);
+    mRow->setSpacing(8);
 
     auto *artBadge = new QLabel(m_mprisCard);
-    styleCircleBadge(artBadge, FloatingIcons::Music, QColor(59, 130, 246, 75), QColor("#bae6fd"), 36);
+    styleCircleBadge(artBadge, FloatingIcons::Music, QColor(59, 130, 246, 75), QColor("#bae6fd"), 34);
     mRow->addWidget(artBadge);
 
     auto *mText = new QVBoxLayout();
@@ -795,8 +912,8 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     auto makeMediaBtn = [&](FloatingIcons::Icon icon, const QString &method) {
         auto *b = new QToolButton(m_mprisCard);
         b->setObjectName(QStringLiteral("mediaBtn"));
-        b->setIcon(FloatingIcons::make(icon, QColor("#f1f5f9"), 15));
-        b->setFixedSize(32, 32);
+        b->setIcon(FloatingIcons::make(icon, QColor("#f1f5f9"), 14));
+        b->setFixedSize(30, 30);
         b->setCursor(Qt::PointingHandCursor);
         connect(b, &QToolButton::clicked, this, [this, method] { triggerMprisAction(method); });
         return b;
@@ -808,61 +925,13 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
 
     m_mprisCard->hide();
     v->addWidget(m_mprisCard);
-
-    // ---- Bottom Compact Utility & Power Bar ----
-    auto *footRow = new QHBoxLayout();
-    footRow->setSpacing(8);
-
-    auto *deckBtn = new QToolButton(page);
-    deckBtn->setObjectName(QStringLiteral("footPill"));
-    deckBtn->setIcon(FloatingIcons::make(FloatingIcons::Deck, QColor("#cbd5e1"), 15));
-    deckBtn->setText(QStringLiteral(" 触控甲板"));
-    deckBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    deckBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    deckBtn->setMinimumHeight(36);
-    deckBtn->setCursor(Qt::PointingHandCursor);
-    connect(deckBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        emit quickDeckRequested();
-    });
-
-    auto *lockBtn = new QToolButton(page);
-    lockBtn->setObjectName(QStringLiteral("footPill"));
-    lockBtn->setIcon(FloatingIcons::make(FloatingIcons::Lock, QColor("#e2e8f0"), 15));
-    lockBtn->setText(QStringLiteral(" 锁屏"));
-    lockBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    lockBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    lockBtn->setMinimumHeight(36);
-    lockBtn->setCursor(Qt::PointingHandCursor);
-    connect(lockBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->lockScreen();
-    });
-
-    auto *pwrBtn = new QToolButton(page);
-    pwrBtn->setObjectName(QStringLiteral("dangerPill"));
-    pwrBtn->setIcon(FloatingIcons::make(FloatingIcons::Power, QColor("#fda4af"), 15));
-    pwrBtn->setText(QStringLiteral(" 关机"));
-    pwrBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    pwrBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    pwrBtn->setMinimumHeight(36);
-    pwrBtn->setCursor(Qt::PointingHandCursor);
-    connect(pwrBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openPowerMenu();
-    });
-
-    footRow->addWidget(deckBtn);
-    footRow->addWidget(lockBtn);
-    footRow->addWidget(pwrBtn);
     v->addStretch(1);
-    v->addLayout(footRow);
 
     return page;
 }
 
 // ============================================================================
-// Subpages 1..3: Wi-Fi / Bluetooth / Mihomo (Inline Drill-Down)
+// Subpages 1..5: Wi-Fi / 4G / Hotspot / Bluetooth / Mihomo (Pure Single-Purpose)
 // ============================================================================
 
 QWidget *SystemPopover::buildWifiPage(QWidget *parent)
@@ -872,37 +941,76 @@ QWidget *SystemPopover::buildWifiPage(QWidget *parent)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(8);
 
-    // Top Wi-Fi master switch (full width for clean touch & zero text crowding)
-    m_wifiPowerBtn = new QToolButton(page);
-    m_wifiPowerBtn->setObjectName(QStringLiteral("powerBtn"));
-    m_wifiPowerBtn->setText(QStringLiteral("Wi-Fi 已开"));
-    m_wifiPowerBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_wifiPowerBtn->setMinimumHeight(34);
-    m_wifiPowerBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_wifiPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleWifiRadio);
-    v->addWidget(m_wifiPowerBtn);
+    // iOS-style Wi-Fi capsule toggle row
+    v->addWidget(makeIosSwitchCard(page, QStringLiteral("Wi-Fi"), &m_wifiToggle, QColor("#34c759")));
+    m_wifiToggle->onToggled = [this] { toggleWifiRadio(); };
 
-    // Dedicated full-width summary line (never collides with radio switch)
-    m_wifiSummaryLbl = new QLabel(QStringLiteral("正在读取 Wi-Fi 状态…"), page);
-    m_wifiSummaryLbl->setObjectName(QStringLiteral("ccSub"));
-    m_wifiSummaryLbl->setWordWrap(true);
-    m_wifiSummaryLbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    v->addWidget(m_wifiSummaryLbl);
+    // Connected Wi-Fi live details card (SSID, signal, security, IP, rate/band, live speed)
+    m_wifiDetailCard = new QWidget(page);
+    m_wifiDetailCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *dv = new QVBoxLayout(m_wifiDetailCard);
+    dv->setContentsMargins(12, 9, 12, 9);
+    dv->setSpacing(3);
+    m_wifiDetailTitle = new QLabel(m_wifiDetailCard);
+    m_wifiDetailTitle->setObjectName(QStringLiteral("rowTitle"));
+    m_wifiDetailMeta = new QLabel(m_wifiDetailCard);
+    m_wifiDetailMeta->setObjectName(QStringLiteral("ccSub"));
+    m_wifiDetailMeta->setWordWrap(true);
+    m_wifiSpeedLbl = new QLabel(QStringLiteral("网速  ↓ 0 B/s  ·  ↑ 0 B/s"), m_wifiDetailCard);
+    m_wifiSpeedLbl->setObjectName(QStringLiteral("sliderVal"));
+    dv->addWidget(m_wifiDetailTitle);
+    dv->addWidget(m_wifiDetailMeta);
+    dv->addWidget(m_wifiSpeedLbl);
+    m_wifiDetailCard->hide();
+    v->addWidget(m_wifiDetailCard);
 
     auto *scroll = makeTouchScrollArea(page, &m_wifiListLayout);
     v->addWidget(scroll, 1);
 
-    auto *foot = new QToolButton(page);
-    foot->setObjectName(QStringLiteral("footBtn"));
-    foot->setText(QStringLiteral("打开 KDE 完整网络 / VPN 设置…"));
-    foot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    foot->setMinimumHeight(36);
-    foot->setCursor(Qt::PointingHandCursor);
-    connect(foot, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openKdeModule(QStringLiteral("kcm_networkmanagement"));
-    });
-    v->addWidget(foot);
+    return page;
+}
+
+QWidget *SystemPopover::buildCellularPage(QWidget *parent)
+{
+    auto *page = new QWidget(parent);
+    auto *v = new QVBoxLayout(page);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(8);
+
+    v->addWidget(makeIosSwitchCard(page, QStringLiteral("4G 移动网络"), &m_cellToggle, QColor("#34c759")));
+    m_cellToggle->onToggled = [this] { toggleWwanRadio(); };
+
+    auto *infoCard = new QWidget(page);
+    infoCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *iv = new QVBoxLayout(infoCard);
+    iv->setContentsMargins(12, 10, 12, 12);
+    iv->setSpacing(7);
+
+    auto addInfoRow = [&](const QString &k, QLabel **outVal, const QString &init) {
+        auto *r = new QHBoxLayout();
+        r->setContentsMargins(0, 0, 0, 0);
+        r->setSpacing(8);
+        auto *kl = new QLabel(k, infoCard);
+        kl->setObjectName(QStringLiteral("sliderTag"));
+        kl->setFixedWidth(64);
+        auto *vl = new QLabel(init, infoCard);
+        vl->setObjectName(QStringLiteral("rowTitle"));
+        vl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        vl->setWordWrap(true);
+        r->addWidget(kl);
+        r->addWidget(vl, 1);
+        iv->addLayout(r);
+        if (outVal) *outVal = vl;
+    };
+
+    addInfoRow(QStringLiteral("运营商"), &m_cellOpLbl, QStringLiteral("检测中…"));
+    addInfoRow(QStringLiteral("信号状态"), &m_cellSignalLbl, QStringLiteral("--"));
+    addInfoRow(QStringLiteral("IP / 接口"), &m_cellIpLbl, QStringLiteral("--"));
+    addInfoRow(QStringLiteral("实时网速"), &m_cellSpeedLbl, QStringLiteral("↓ 0 B/s  ·  ↑ 0 B/s"));
+    addInfoRow(QStringLiteral("本次流量"), &m_cellTrafficLbl, QStringLiteral("↓ 0 B  ·  ↑ 0 B"));
+
+    v->addWidget(infoCard);
+    v->addStretch(1);
     return page;
 }
 
@@ -911,128 +1019,154 @@ QWidget *SystemPopover::buildHotspotPage(QWidget *parent)
     auto *page = new QWidget(parent);
     auto *v = new QVBoxLayout(page);
     v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(9);
+    v->setSpacing(8);
 
-    // Top master Hotspot switch
-    m_hsPowerBtn = new QToolButton(page);
-    m_hsPowerBtn->setObjectName(QStringLiteral("powerBtn"));
-    m_hsPowerBtn->setText(QStringLiteral("开启热点"));
-    m_hsPowerBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_hsPowerBtn->setMinimumHeight(36);
-    m_hsPowerBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_hsPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleHotspot);
-    v->addWidget(m_hsPowerBtn);
+    // Pure iOS Hotspot capsule toggle row
+    v->addWidget(makeIosSwitchCard(page, QStringLiteral("个人热点"), &m_hsToggle, QColor("#34c759")));
+    m_hsToggle->onToggled = [this] { toggleHotspot(); };
 
-    m_hsSummaryLbl = new QLabel(QStringLiteral("正在检测 4G / 有线上游与 Wi-Fi 网卡…"), page);
-    m_hsSummaryLbl->setObjectName(QStringLiteral("ccSub"));
-    m_hsSummaryLbl->setWordWrap(true);
-    m_hsSummaryLbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    v->addWidget(m_hsSummaryLbl);
+    // ---- View Mode Card (Default: SSID / Band / Security / Password + Edit button + Live Traffic) ----
+    m_hsViewCard = new QWidget(page);
+    m_hsViewCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *vv = new QVBoxLayout(m_hsViewCard);
+    vv->setContentsMargins(12, 9, 10, 10);
+    vv->setSpacing(6);
 
-    // Config glass card: SSID, Password (mask/copy), WPA3/WPA2, Band 2.4G/5G
-    auto *cfgCard = new QWidget(page);
-    cfgCard->setObjectName(QStringLiteral("bentoGroup"));
-    auto *cv = new QVBoxLayout(cfgCard);
-    cv->setContentsMargins(12, 10, 12, 12);
-    cv->setSpacing(8);
+    auto *vh = new QHBoxLayout();
+    vh->setSpacing(6);
+    m_hsInfoTitle = new QLabel(m_hsViewCard);
+    m_hsInfoTitle->setObjectName(QStringLiteral("rowTitle"));
+    vh->addWidget(m_hsInfoTitle, 1);
+    auto *editBtn = new QToolButton(m_hsViewCard);
+    editBtn->setObjectName(QStringLiteral("tabBtn"));
+    editBtn->setText(QStringLiteral("编辑"));
+    editBtn->setCursor(Qt::PointingHandCursor);
+    connect(editBtn, &QToolButton::clicked, this, [this] { setHotspotEditMode(true); });
+    vh->addWidget(editBtn);
+    vv->addLayout(vh);
 
-    // SSID row
-    auto *ssidRow = new QHBoxLayout();
-    ssidRow->setSpacing(8);
-    auto *ssidLbl = new QLabel(QStringLiteral("热点名称"), cfgCard);
-    ssidLbl->setObjectName(QStringLiteral("sliderTag"));
-    ssidLbl->setFixedWidth(56);
-    m_hsSsidEdit = new QLineEdit(m_hsSsid, cfgCard);
-    m_hsSsidEdit->setObjectName(QStringLiteral("hsInput"));
-    m_hsSsidEdit->setPlaceholderText(defaultHotspotSsid());
-    ssidRow->addWidget(ssidLbl);
-    ssidRow->addWidget(m_hsSsidEdit, 1);
-    cv->addLayout(ssidRow);
+    auto *vp = new QHBoxLayout();
+    vp->setSpacing(6);
+    auto *pTag = new QLabel(QStringLiteral("密码"), m_hsViewCard);
+    pTag->setObjectName(QStringLiteral("sliderTag"));
+    m_hsPassValueLbl = new QLabel(QStringLiteral("••••••••"), m_hsViewCard);
+    m_hsPassValueLbl->setObjectName(QStringLiteral("ccMeta"));
+    vp->addWidget(pTag);
+    vp->addWidget(m_hsPassValueLbl, 1);
 
-    // Password row + Show/Hide + Copy
-    auto *passRow = new QHBoxLayout();
-    passRow->setSpacing(6);
-    auto *passLbl = new QLabel(QStringLiteral("连接密码"), cfgCard);
-    passLbl->setObjectName(QStringLiteral("sliderTag"));
-    passLbl->setFixedWidth(56);
-    m_hsPassEdit = new QLineEdit(m_hsPassword, cfgCard);
-    m_hsPassEdit->setObjectName(QStringLiteral("hsInput"));
-    m_hsPassEdit->setEchoMode(QLineEdit::Password);
-    m_hsPassEdit->setPlaceholderText(QStringLiteral("至少 8 位密码"));
-    passRow->addWidget(passLbl);
-    passRow->addWidget(m_hsPassEdit, 1);
-
-    m_hsEyeBtn = new QToolButton(cfgCard);
-    m_hsEyeBtn->setObjectName(QStringLiteral("tabBtn"));
-    m_hsEyeBtn->setText(QStringLiteral("显示"));
-    m_hsEyeBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_hsEyeBtn, &QToolButton::clicked, this, [this] {
-        const bool hidden = (m_hsPassEdit->echoMode() == QLineEdit::Password);
-        m_hsPassEdit->setEchoMode(hidden ? QLineEdit::Normal : QLineEdit::Password);
-        m_hsEyeBtn->setText(hidden ? QStringLiteral("隐藏") : QStringLiteral("显示"));
+    m_hsViewEyeBtn = new QToolButton(m_hsViewCard);
+    m_hsViewEyeBtn->setObjectName(QStringLiteral("tabBtn"));
+    m_hsViewEyeBtn->setText(QStringLiteral("显示"));
+    m_hsViewEyeBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_hsViewEyeBtn, &QToolButton::clicked, this, [this] {
+        m_hsPassRevealed = !m_hsPassRevealed;
+        rebuildHotspotView();
     });
-    passRow->addWidget(m_hsEyeBtn);
+    vp->addWidget(m_hsViewEyeBtn);
 
-    auto *copyBtn = new QToolButton(cfgCard);
+    auto *copyBtn = new QToolButton(m_hsViewCard);
     copyBtn->setObjectName(QStringLiteral("tabBtn"));
     copyBtn->setText(QStringLiteral("复制"));
     copyBtn->setCursor(Qt::PointingHandCursor);
     connect(copyBtn, &QToolButton::clicked, this, [this] {
-        const QString psk = m_hsPassEdit->text();
-        if (psk.isEmpty()) return;
-        if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(psk);
+        if (m_hsPassword.isEmpty()) return;
+        if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(m_hsPassword);
         showStatusBanner(QStringLiteral("✓ 已复制热点密码"));
     });
-    passRow->addWidget(copyBtn);
-    cv->addLayout(passRow);
+    vp->addWidget(copyBtn);
+    vv->addLayout(vp);
 
-    // Security pills: WPA3 (default) vs WPA2 compat
+    m_hsTrafficLbl = new QLabel(QStringLiteral("速率  ↓ 0 B/s · ↑ 0 B/s   |   累计  ↓ 0 B · ↑ 0 B"), m_hsViewCard);
+    m_hsTrafficLbl->setObjectName(QStringLiteral("ccSub"));
+    m_hsTrafficLbl->setWordWrap(true);
+    vv->addWidget(m_hsTrafficLbl);
+    v->addWidget(m_hsViewCard);
+
+    // ---- Edit Mode Card (Shown when user clicks "编辑", saves & returns to View Mode) ----
+    m_hsEditCard = new QWidget(page);
+    m_hsEditCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *ev = new QVBoxLayout(m_hsEditCard);
+    ev->setContentsMargins(11, 9, 11, 10);
+    ev->setSpacing(7);
+
+    auto *ssidRow = new QHBoxLayout();
+    ssidRow->setSpacing(6);
+    auto *ssidLbl = new QLabel(QStringLiteral("名称"), m_hsEditCard);
+    ssidLbl->setObjectName(QStringLiteral("sliderTag"));
+    ssidLbl->setFixedWidth(44);
+    m_hsSsidEdit = new QLineEdit(m_hsSsid, m_hsEditCard);
+    m_hsSsidEdit->setObjectName(QStringLiteral("hsInput"));
+    m_hsSsidEdit->setPlaceholderText(defaultHotspotSsid());
+    ssidRow->addWidget(ssidLbl);
+    ssidRow->addWidget(m_hsSsidEdit, 1);
+    ev->addLayout(ssidRow);
+
+    auto *passRow = new QHBoxLayout();
+    passRow->setSpacing(6);
+    auto *passLbl = new QLabel(QStringLiteral("密码"), m_hsEditCard);
+    passLbl->setObjectName(QStringLiteral("sliderTag"));
+    passLbl->setFixedWidth(44);
+    m_hsPassEdit = new QLineEdit(m_hsPassword, m_hsEditCard);
+    m_hsPassEdit->setObjectName(QStringLiteral("hsInput"));
+    m_hsPassEdit->setPlaceholderText(QStringLiteral("至少 8 位密码"));
+    passRow->addWidget(passLbl);
+    passRow->addWidget(m_hsPassEdit, 1);
+    ev->addLayout(passRow);
+
     auto *secRow = new QHBoxLayout();
     secRow->setSpacing(6);
-    auto *secLbl = new QLabel(QStringLiteral("加密协议"), cfgCard);
+    auto *secLbl = new QLabel(QStringLiteral("加密"), m_hsEditCard);
     secLbl->setObjectName(QStringLiteral("sliderTag"));
-    secLbl->setFixedWidth(56);
+    secLbl->setFixedWidth(44);
     secRow->addWidget(secLbl);
     static const char *kSecLabels[2]{"WPA3 (推荐)", "WPA2 兼容"};
     for (int i = 0; i < 2; ++i) {
-        auto *b = new QToolButton(cfgCard);
+        auto *b = new QToolButton(m_hsEditCard);
         b->setObjectName(QStringLiteral("modeBtn"));
         b->setText(QString::fromUtf8(kSecLabels[i]));
         b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        b->setMinimumHeight(30);
+        b->setMinimumHeight(28);
         b->setCursor(Qt::PointingHandCursor);
         const bool wantWpa3 = (i == 0);
         connect(b, &QToolButton::clicked, this, [this, wantWpa3] {
-            if (m_hsUseWpa3 == wantWpa3) return;
             m_hsUseWpa3 = wantWpa3;
-            saveHotspotPrefs();
             rebuildHotspotView();
-            if (m_hsActive) applyHotspotConfig(true);
         });
         secRow->addWidget(b);
         m_hsSecBtns[i] = b;
     }
-    cv->addLayout(secRow);
+    ev->addLayout(secRow);
 
-    // Apply button (saves SSID/Password and restarts AP if active)
-    auto *applyBtn = new QToolButton(cfgCard);
-    applyBtn->setObjectName(QStringLiteral("footBtn"));
-    applyBtn->setText(QStringLiteral("保存热点配置"));
-    applyBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    applyBtn->setMinimumHeight(32);
-    applyBtn->setCursor(Qt::PointingHandCursor);
-    connect(applyBtn, &QToolButton::clicked, this, [this] { applyHotspotConfig(m_hsActive); });
-    cv->addWidget(applyBtn);
+    auto *actRow = new QHBoxLayout();
+    actRow->setSpacing(8);
+    auto *cancelBtn = new QToolButton(m_hsEditCard);
+    cancelBtn->setObjectName(QStringLiteral("footBtn"));
+    cancelBtn->setText(QStringLiteral("取消"));
+    cancelBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    cancelBtn->setMinimumHeight(30);
+    cancelBtn->setCursor(Qt::PointingHandCursor);
+    connect(cancelBtn, &QToolButton::clicked, this, [this] { setHotspotEditMode(false); });
 
-    v->addWidget(cfgCard);
+    auto *saveBtn = new QToolButton(m_hsEditCard);
+    saveBtn->setObjectName(QStringLiteral("primaryBtn"));
+    saveBtn->setText(QStringLiteral("保存"));
+    saveBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    saveBtn->setMinimumHeight(30);
+    saveBtn->setCursor(Qt::PointingHandCursor);
+    connect(saveBtn, &QToolButton::clicked, this, [this] { applyHotspotConfig(m_hsActive); });
+    actRow->addWidget(cancelBtn, 1);
+    actRow->addWidget(saveBtn, 1);
+    ev->addLayout(actRow);
 
-    // Connected hotspot clients list
-    auto *cliTag = new QLabel(QStringLiteral("已接入热点的设备"), page);
-    cliTag->setObjectName(QStringLiteral("sliderTag"));
-    v->addWidget(cliTag);
+    m_hsEditCard->hide();
+    v->addWidget(m_hsEditCard);
+
+    // Connected hotspot clients section
+    m_hsClientsHeader = new QLabel(QStringLiteral("已连接客户端 (0)"), page);
+    m_hsClientsHeader->setObjectName(QStringLiteral("sliderTag"));
+    v->addWidget(m_hsClientsHeader);
 
     auto *scroll = makeTouchScrollArea(page, &m_hsClientsLayout);
-    scroll->setMinimumHeight(110);
     v->addWidget(scroll, 1);
 
     rebuildHotspotView();
@@ -1046,35 +1180,16 @@ QWidget *SystemPopover::buildBluetoothPage(QWidget *parent)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(8);
 
-    auto *bar = new QHBoxLayout();
+    v->addWidget(makeIosSwitchCard(page, QStringLiteral("蓝牙"), &m_btToggle, QColor("#3b82f6")));
+    m_btToggle->onToggled = [this] { toggleBluetoothPower(); };
+
     m_btSummaryLbl = new QLabel(QStringLiteral("正在读取蓝牙设备…"), page);
     m_btSummaryLbl->setObjectName(QStringLiteral("ccSub"));
     m_btSummaryLbl->setWordWrap(true);
-    bar->addWidget(m_btSummaryLbl, 1);
-
-    m_btPowerBtn = new QToolButton(page);
-    m_btPowerBtn->setObjectName(QStringLiteral("powerBtn"));
-    m_btPowerBtn->setText(QStringLiteral("蓝牙已开"));
-    m_btPowerBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_btPowerBtn, &QToolButton::clicked, this, &SystemPopover::toggleBluetoothPower);
-    bar->addWidget(m_btPowerBtn);
-    v->addLayout(bar);
+    v->addWidget(m_btSummaryLbl);
 
     auto *scroll = makeTouchScrollArea(page, &m_btListLayout);
-    scroll->setMinimumHeight(290);
     v->addWidget(scroll, 1);
-
-    auto *foot = new QToolButton(page);
-    foot->setObjectName(QStringLiteral("footBtn"));
-    foot->setText(QStringLiteral("配对新设备 / 打开 KDE 蓝牙设置…"));
-    foot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    foot->setMinimumHeight(36);
-    foot->setCursor(Qt::PointingHandCursor);
-    connect(foot, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openKdeModule(QStringLiteral("kcm_bluetooth"));
-    });
-    v->addWidget(foot);
     return page;
 }
 
@@ -1085,17 +1200,19 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(8);
 
-    // Mode 3-way pill bar
+    // Prominent 3-way Quick Proxy Mode Switcher (走规则 / 全局代理 / 全部直连)
     auto *modeRow = new QHBoxLayout();
     modeRow->setSpacing(6);
     static const char *kModeIds[3]{"rule", "global", "direct"};
-    static const char *kModeLabels[3]{"规则 Rule", "全局 Global", "直连 Direct"};
+    static const char *kModeLabels[3]{"走规则", "全局代理", "全部直连"};
+    static const char *kModeTones[3]{"green", "blue", "amber"};
     for (int i = 0; i < 3; ++i) {
         auto *mb = new QToolButton(page);
         mb->setObjectName(QStringLiteral("modeBtn"));
+        mb->setProperty("tone", QString::fromLatin1(kModeTones[i]));
         mb->setText(QString::fromUtf8(kModeLabels[i]));
         mb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        mb->setMinimumHeight(34);
+        mb->setMinimumHeight(36);
         mb->setCursor(Qt::PointingHandCursor);
         const QString modeId = QString::fromLatin1(kModeIds[i]);
         connect(mb, &QToolButton::clicked, this, [this, modeId] { setMihomoMode(modeId); });
@@ -1104,21 +1221,18 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
     }
     v->addLayout(modeRow);
 
-    // TUN toggle + delay test + status summary
-    auto *tunRow = new QHBoxLayout();
-    tunRow->setSpacing(6);
-    m_mhSummaryLbl = new QLabel(QStringLiteral("正在连接 Mihomo API…"), page);
-    m_mhSummaryLbl->setObjectName(QStringLiteral("ccSub"));
+    // Compact iOS TUN toggle + Delay test bar
+    auto *tunCard = new QWidget(page);
+    tunCard->setObjectName(QStringLiteral("bentoGroup"));
+    tunCard->setFixedHeight(44);
+    auto *tunRow = new QHBoxLayout(tunCard);
+    tunRow->setContentsMargins(12, 6, 10, 6);
+    tunRow->setSpacing(8);
+    m_mhSummaryLbl = new QLabel(QStringLiteral("TUN 透明代理"), tunCard);
+    m_mhSummaryLbl->setObjectName(QStringLiteral("rowTitle"));
     tunRow->addWidget(m_mhSummaryLbl, 1);
 
-    m_mhTunBtn = new QToolButton(page);
-    m_mhTunBtn->setObjectName(QStringLiteral("powerBtn"));
-    m_mhTunBtn->setText(QStringLiteral("TUN 关"));
-    m_mhTunBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_mhTunBtn, &QToolButton::clicked, this, &SystemPopover::toggleMihomoTun);
-    tunRow->addWidget(m_mhTunBtn);
-
-    m_mhDelayBtn = new QToolButton(page);
+    m_mhDelayBtn = new QToolButton(tunCard);
     m_mhDelayBtn->setObjectName(QStringLiteral("tabBtn"));
     m_mhDelayBtn->setText(QStringLiteral("测速"));
     m_mhDelayBtn->setCursor(Qt::PointingHandCursor);
@@ -1126,7 +1240,12 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
         if (!m_mhSelectedGroup.isEmpty()) testMihomoGroupDelay(m_mhSelectedGroup);
     });
     tunRow->addWidget(m_mhDelayBtn);
-    v->addLayout(tunRow);
+
+    m_mhTunToggle = new IosToggleSwitch(tunCard);
+    m_mhTunToggle->setOnColor(QColor("#10b981"));
+    m_mhTunToggle->onToggled = [this] { toggleMihomoTun(); };
+    tunRow->addWidget(m_mhTunToggle);
+    v->addWidget(tunCard);
 
     // Group selector pills container
     auto *groupHost = new QWidget(page);
@@ -1137,20 +1256,7 @@ QWidget *SystemPopover::buildMihomoPage(QWidget *parent)
 
     // Node scroll list
     auto *scroll = makeTouchScrollArea(page, &m_mhNodeListLayout);
-    scroll->setMinimumHeight(210);
     v->addWidget(scroll, 1);
-
-    auto *foot = new QToolButton(page);
-    foot->setObjectName(QStringLiteral("footBtn"));
-    foot->setText(QStringLiteral("打开 Mihomo Web 面板 (MetacubeXD)…"));
-    foot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    foot->setMinimumHeight(36);
-    foot->setCursor(Qt::PointingHandCursor);
-    connect(foot, &QToolButton::clicked, this, [this] {
-        hide();
-        QDesktopServices::openUrl(QUrl(mihomoBaseUrl() + QStringLiteral("/ui/")));
-    });
-    v->addWidget(foot);
     return page;
 }
 
@@ -1200,6 +1306,55 @@ void SystemPopover::positionNear(const QPoint &anchorGlobal)
     move(x, y);
 }
 
+void SystemPopover::hideEvent(QHideEvent *event)
+{
+    if (m_netStatsTimer) m_netStatsTimer->stop();
+    m_hasLastStats = false;
+    QWidget::hideEvent(event);
+}
+
+void SystemPopover::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+
+    // Borderless iPadOS / macOS Liquid Glass edge feathering (smooth alpha gradient
+    // fading outward into the desktop with ZERO hard border line)
+    const QRectF base = QRectF(rect()).adjusted(10.0, 10.0, -10.0, -10.0);
+    struct FeatherStep {
+        qreal expand;
+        int alpha;
+    };
+    static const FeatherStep kFeather[] = {
+        {10.0, 7},
+        {7.5, 13},
+        {5.0, 21},
+        {2.5, 32},
+    };
+    for (const FeatherStep &s : kFeather) {
+        const QRectF hr = base.adjusted(-s.expand, -s.expand, s.expand, s.expand);
+        p.setBrush(QColor(14, 19, 32, s.alpha));
+        p.drawRoundedRect(hr, 26.0 + s.expand * 0.5, 26.0 + s.expand * 0.5);
+    }
+
+    // Translucent frosted glass tint over real Wayland Gaussian blur
+    QLinearGradient glass(base.topLeft(), base.bottomRight());
+    glass.setColorAt(0.0, QColor(36, 46, 70, 126));
+    glass.setColorAt(0.45, QColor(19, 25, 40, 132));
+    glass.setColorAt(1.0, QColor(12, 16, 28, 144));
+    p.setBrush(glass);
+    p.drawRoundedRect(base, 26.0, 26.0);
+
+    // Subtle iPadOS / macOS frosted top-left specular sheen gradient
+    QRadialGradient sheen(base.topLeft() + QPointF(base.width() * 0.25, 0.0), base.width() * 0.9);
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 28));
+    sheen.setColorAt(0.55, QColor(255, 255, 255, 7));
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+    p.setBrush(sheen);
+    p.drawRoundedRect(base, 26.0, 26.0);
+}
+
 void SystemPopover::showStatusBanner(const QString &msg, bool isError)
 {
     if (msg.isEmpty()) {
@@ -1223,7 +1378,7 @@ void SystemPopover::revealHome(const QPoint &anchorGlobal, bool toggle)
 
 void SystemPopover::revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle)
 {
-    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), 4));
+    const Page target = static_cast<Page>(qBound(0, static_cast<int>(tab), 5));
     if (isVisible() && toggle && m_currentPage == target) {
         hide();
         return;
@@ -1234,14 +1389,20 @@ void SystemPopover::revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle)
     show();
     raise();
     activateWindow();
+    syncNetStatsTimer();
 }
 
 void SystemPopover::showPage(Page page)
 {
     m_currentPage = page;
     m_stack->setCurrentIndex(static_cast<int>(page));
+    if (page != PageHotspot && m_hsEditing) {
+        m_hsEditing = false;
+        if (m_hsViewCard) m_hsViewCard->show();
+        if (m_hsEditCard) m_hsEditCard->hide();
+    }
     syncHeaderForPage();
-    adjustSize();
+    syncNetStatsTimer();
     refreshCurrentPage();
 }
 
@@ -1249,12 +1410,16 @@ void SystemPopover::syncHeaderForPage()
 {
     const bool isHome = (m_currentPage == PageHome);
     m_backBtn->setVisible(!isHome);
-    m_metaLbl->setVisible(isHome);
+    if (m_powerPill) m_powerPill->setVisible(isHome);
+    if (m_hdrSettingsBtn) m_hdrSettingsBtn->setVisible(isHome);
+    if (m_hdrLockBtn) m_hdrLockBtn->setVisible(isHome);
+    if (m_hdrPowerBtn) m_hdrPowerBtn->setVisible(isHome);
     if (m_currentPage == PageHome) m_titleLbl->setText(QStringLiteral("控制中心"));
-    else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi 网络"));
+    else if (m_currentPage == PageWifi) m_titleLbl->setText(QStringLiteral("Wi-Fi"));
+    else if (m_currentPage == PageCellular) m_titleLbl->setText(QStringLiteral("4G 网络"));
     else if (m_currentPage == PageHotspot) m_titleLbl->setText(QStringLiteral("个人热点"));
-    else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙设备"));
-    else m_titleLbl->setText(QStringLiteral("Mihomo 代理"));
+    else if (m_currentPage == PageBluetooth) m_titleLbl->setText(QStringLiteral("蓝牙"));
+    else m_titleLbl->setText(QStringLiteral("Mihomo"));
 }
 
 void SystemPopover::refreshCurrentPage()
@@ -1264,13 +1429,15 @@ void SystemPopover::refreshCurrentPage()
         syncVolume();
         syncBrightness();
         refreshMpris();
-        // Prefetch lightweight connectivity summaries so all 4 Bento rows stay live!
         refreshWifi(false);
+        refreshCellular();
         refreshHotspot();
         refreshBluetooth();
         refreshMihomo();
     } else if (m_currentPage == PageWifi) {
         refreshWifi(false);
+    } else if (m_currentPage == PageCellular) {
+        refreshCellular();
     } else if (m_currentPage == PageHotspot) {
         refreshHotspot();
     } else if (m_currentPage == PageBluetooth) {
@@ -1278,26 +1445,108 @@ void SystemPopover::refreshCurrentPage()
     } else {
         refreshMihomo();
     }
+    pollLiveNetStats();
+}
+
+void SystemPopover::syncNetStatsTimer()
+{
+    if (!m_netStatsTimer) return;
+    m_hasLastStats = false;
+    m_lastStatsIface.clear();
+    const bool needLive = isVisible() &&
+        (m_currentPage == PageWifi || m_currentPage == PageCellular || m_currentPage == PageHotspot);
+    if (needLive) {
+        pollLiveNetStats();
+        if (!m_netStatsTimer->isActive()) m_netStatsTimer->start();
+    } else {
+        m_netStatsTimer->stop();
+    }
+}
+
+void SystemPopover::pollLiveNetStats()
+{
+#ifdef Q_OS_LINUX
+    QString iface;
+    if (m_currentPage == PageWifi && !m_cachedWifiSsid.isEmpty() && !m_hsActive) {
+        iface = m_wifiIface;
+    } else if (m_currentPage == PageCellular && m_wwanConnected) {
+        iface = m_cellNetIface;
+    } else if (m_currentPage == PageHotspot && m_hsActive) {
+        iface = m_hsWifiDev;
+    }
+
+    if (iface.isEmpty()) {
+        if (m_currentPage == PageCellular) {
+            if (m_cellSpeedLbl) m_cellSpeedLbl->setText(QStringLiteral("↓ 0 B/s  ·  ↑ 0 B/s"));
+            if (m_cellTrafficLbl) m_cellTrafficLbl->setText(QStringLiteral("↓ 0 B  ·  ↑ 0 B"));
+        } else if (m_currentPage == PageHotspot && m_hsTrafficLbl) {
+            m_hsTrafficLbl->setText(QStringLiteral("速率  ↓ 0 B/s · ↑ 0 B/s  |  累计  ↓ 0 B · ↑ 0 B"));
+        }
+        return;
+    }
+
+    quint64 rx = 0, tx = 0;
+    if (!readSysfsNetBytes(iface, &rx, &tx)) return;
+
+    quint64 rxRate = 0, txRate = 0;
+    if (m_hasLastStats && m_lastStatsIface == iface) {
+        rxRate = (rx >= m_lastRxBytes) ? (rx - m_lastRxBytes) : 0;
+        txRate = (tx >= m_lastTxBytes) ? (tx - m_lastTxBytes) : 0;
+    }
+    m_lastStatsIface = iface;
+    m_lastRxBytes = rx;
+    m_lastTxBytes = tx;
+    m_hasLastStats = true;
+
+    if (m_currentPage == PageWifi && m_wifiSpeedLbl) {
+        m_wifiSpeedLbl->setText(QStringLiteral("实时网速  ↓ %1  ·  ↑ %2")
+                                    .arg(formatByteRate(rxRate), formatByteRate(txRate)));
+    } else if (m_currentPage == PageCellular) {
+        if (m_cellSpeedLbl)
+            m_cellSpeedLbl->setText(QStringLiteral("↓ %1  ·  ↑ %2")
+                                        .arg(formatByteRate(rxRate), formatByteRate(txRate)));
+        if (m_cellTrafficLbl)
+            m_cellTrafficLbl->setText(QStringLiteral("↓ %1  ·  ↑ %2")
+                                          .arg(formatByteCount(rx), formatByteCount(tx)));
+    } else if (m_currentPage == PageHotspot && m_hsTrafficLbl) {
+        // On AP interface, tx_bytes = downstream delivered to clients, rx_bytes = upstream from clients
+        m_hsTrafficLbl->setText(QStringLiteral("速率  ↓ %1 · ↑ %2\n累计  ↓ %3 · ↑ %4")
+                                    .arg(formatByteRate(txRate), formatByteRate(rxRate),
+                                         formatByteCount(tx), formatByteCount(rx)));
+    }
+#endif
 }
 
 void SystemPopover::syncHomeFromSnapshot()
 {
-    const QString clock = QTime::currentTime().toString(QStringLiteral("HH:mm"));
-    if (!m_monitor) {
-        m_metaLbl->setText(clock);
-        return;
-    }
+    if (!m_monitor) return;
     const SystemStatusSnapshot &st = m_monitor->snapshot();
-    QStringList meta;
-    if (st.batteryPresent)
-        meta.append(QStringLiteral("%1%%2").arg(st.batteryPercent).arg(st.batteryPluggedIn ? QStringLiteral("⚡") : QString()));
-    meta.append(clock);
-    m_metaLbl->setText(meta.join(QStringLiteral(" · ")));
+
+    // Header integrated Battery + Power Profile Pill
+    if (m_powerPill) {
+        QString pwrTxt = QStringLiteral("平衡");
+        QString pwrAcc = QStringLiteral("blue");
+        if (st.powerProfile == QLatin1String("power-saver")) {
+            pwrTxt = QStringLiteral("节能");
+            pwrAcc = QStringLiteral("green");
+        } else if (st.powerProfile == QLatin1String("performance")) {
+            pwrTxt = QStringLiteral("性能");
+            pwrAcc = QStringLiteral("rose");
+        }
+        const QString label = st.batteryPresent
+            ? QStringLiteral("%1%%2 %3")
+                  .arg(st.batteryPercent)
+                  .arg(st.batteryPluggedIn ? QStringLiteral("⚡") : QString(), pwrTxt)
+            : pwrTxt;
+        m_powerPill->setText(label);
+        m_powerPill->setProperty("accent", pwrAcc);
+        repolish(m_powerPill);
+    }
 
     // Home Wi-Fi row
     const bool wifiOn = !m_cachedWifiSsid.isEmpty() && m_wifiRadioEnabled && !m_hsActive;
     styleCircleBadge(m_homeWifiBadge, FloatingIcons::Wifi,
-                     wifiOn ? QColor("#2563eb") : QColor(255, 255, 255, 26),
+                     wifiOn ? QColor("#2563eb") : QColor(255, 255, 255, 28),
                      wifiOn ? QColor("#ffffff") : QColor("#94a3b8"), 30);
     if (m_hsActive) {
         m_homeWifiSub->setText(QStringLiteral("热点共享中"));
@@ -1307,20 +1556,24 @@ void SystemPopover::syncHomeFromSnapshot()
         m_homeWifiSub->setText(m_wifiRadioEnabled ? QStringLiteral("未连接") : QStringLiteral("已关闭"));
     }
 
-    // Home 4G WWAN row (peer of Wi-Fi / Hotspot / Bluetooth / Mihomo, auto-hidden if no modem)
+    // Home 4G WWAN row
     if (m_homeWwanRow) {
         m_homeWwanRow->setVisible(m_wwanAvailable);
         styleCircleBadge(m_homeWwanBadge, FloatingIcons::Cellular,
-                         m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 26),
+                         m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 28),
                          m_wwanEnabled ? QColor("#ffffff") : QColor("#94a3b8"), 30);
         if (!m_wwanEnabled) m_homeWwanSub->setText(QStringLiteral("已关闭"));
-        else if (m_wwanConnected) m_homeWwanSub->setText(QStringLiteral("已连接 · 4G"));
-        else m_homeWwanSub->setText(QStringLiteral("已开启"));
+        else if (m_wwanConnected) {
+            const QString tech = m_cellTech.isEmpty() ? QStringLiteral("4G") : m_cellTech;
+            m_homeWwanSub->setText(m_cellSignal >= 0
+                ? QStringLiteral("%1 · %2%").arg(tech).arg(m_cellSignal)
+                : QStringLiteral("已连接 · %1").arg(tech));
+        } else m_homeWwanSub->setText(QStringLiteral("已开启"));
     }
 
     // Home Hotspot row
     styleCircleBadge(m_homeHotspotBadge, FloatingIcons::Hotspot,
-                     m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 26),
+                     m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 28),
                      m_hsActive ? QColor("#ffffff") : QColor("#94a3b8"), 30);
     if (m_hsActive) {
         const QString sec = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
@@ -1328,8 +1581,6 @@ void SystemPopover::syncHomeFromSnapshot()
             ? QStringLiteral("%1 · %2").arg(m_hsSsid, sec)
             : QStringLiteral("%1 · %2台").arg(m_hsSsid).arg(m_hsClients.size());
         m_homeHotspotSub->setText(elideText(sub, 13));
-    } else if (m_hsHasUpstream) {
-        m_homeHotspotSub->setText(elideText(QStringLiteral("%1 · 可共享").arg(m_hsSsid), 13));
     } else {
         m_homeHotspotSub->setText(QStringLiteral("已关闭"));
     }
@@ -1337,20 +1588,22 @@ void SystemPopover::syncHomeFromSnapshot()
     // Home Bluetooth row
     const bool btOn = st.bluetoothPowered || m_btPowered;
     styleCircleBadge(m_homeBtBadge, FloatingIcons::Bluetooth,
-                     btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 26),
+                     btOn ? QColor("#3b82f6") : QColor(255, 255, 255, 28),
                      btOn ? QColor("#ffffff") : QColor("#94a3b8"), 30);
     if (!btOn) m_homeBtSub->setText(QStringLiteral("已关闭"));
     else if (!m_cachedBtSummary.isEmpty()) m_homeBtSub->setText(elideText(m_cachedBtSummary, 13));
     else m_homeBtSub->setText(QStringLiteral("已开启"));
 
     // Home Mihomo row
-    const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 26)
+    const QColor mhBg = !m_mhReachable ? QColor(255, 255, 255, 28)
                         : (m_mhMode == QLatin1String("direct") ? QColor("#f59e0b") : QColor("#10b981"));
     styleCircleBadge(m_homeMhBadge, FloatingIcons::Proxy, mhBg,
                      m_mhReachable ? QColor("#ffffff") : QColor("#94a3b8"), 30);
     if (m_mhReachable) {
+        const QString modeCn = (m_mhMode == QLatin1String("global")) ? QStringLiteral("全局")
+                             : (m_mhMode == QLatin1String("direct") ? QStringLiteral("直连") : QStringLiteral("规则"));
         const QString tunTxt = m_mhTunEnabled ? QStringLiteral("TUN 开") : QStringLiteral("无TUN");
-        m_homeMhSub->setText(QStringLiteral("%1 · %2").arg(m_mhMode.toUpper(), tunTxt));
+        m_homeMhSub->setText(QStringLiteral("%1 · %2").arg(modeCn, tunTxt));
     } else {
         m_homeMhSub->setText(QStringLiteral("本地未连接"));
     }
@@ -1359,32 +1612,9 @@ void SystemPopover::syncHomeFromSnapshot()
     m_dndTile->setProperty("on", st.dndEnabled);
     repolish(m_dndTile);
     styleCircleBadge(m_dndBadge, FloatingIcons::Bell,
-                     st.dndEnabled ? QColor("#8b5cf6") : QColor(255, 255, 255, 24),
-                     st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 30);
+                     st.dndEnabled ? QColor("#8b5cf6") : QColor(255, 255, 255, 28),
+                     st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 28);
     m_dndSub->setText(st.dndEnabled ? QStringLiteral("已开启") : QStringLiteral("已关闭"));
-
-    // Night Light mini tile
-    m_nightTile->setProperty("accent", st.nightLightEnabled ? QStringLiteral("amber") : QString());
-    m_nightTile->setText(st.nightLightEnabled ? QStringLiteral("护眼开") : QStringLiteral("护眼"));
-    repolish(m_nightTile);
-
-    // Power Profile mini tile
-    QString pwrTxt = QStringLiteral("平衡");
-    QString pwrAcc = QStringLiteral("blue");
-    QColor pwrInk("#7cc8ff");
-    if (st.powerProfile == QLatin1String("power-saver")) {
-        pwrTxt = QStringLiteral("节能");
-        pwrAcc = QStringLiteral("green");
-        pwrInk = QColor("#34d399");
-    } else if (st.powerProfile == QLatin1String("performance")) {
-        pwrTxt = QStringLiteral("性能");
-        pwrAcc = QStringLiteral("rose");
-        pwrInk = QColor("#fb7185");
-    }
-    m_powerTile->setText(pwrTxt);
-    m_powerTile->setProperty("accent", pwrAcc);
-    m_powerTile->setIcon(FloatingIcons::make(FloatingIcons::Bolt, pwrInk, 19));
-    repolish(m_powerTile);
 }
 
 // ============================================================================
@@ -1453,11 +1683,11 @@ void SystemPopover::applyMprisVisuals()
     m_mprisCard->setVisible(m_mprisVisible);
     if (m_mprisVisible) {
         const QString artist = m_mprisArtist.isEmpty() ? QStringLiteral("正在播放") : m_mprisArtist;
-        m_mprisTitleLbl->setText(m_mprisTitleLbl->fontMetrics().elidedText(m_mprisTitle, Qt::ElideRight, 150));
-        m_mprisArtistLbl->setText(m_mprisArtistLbl->fontMetrics().elidedText(artist, Qt::ElideRight, 150));
+        m_mprisTitleLbl->setText(m_mprisTitleLbl->fontMetrics().elidedText(m_mprisTitle, Qt::ElideRight, 130));
+        m_mprisArtistLbl->setText(m_mprisArtistLbl->fontMetrics().elidedText(artist, Qt::ElideRight, 130));
         m_mprisPlayBtn->setIcon(FloatingIcons::make(
             m_mprisPlaying ? FloatingIcons::MediaPause : FloatingIcons::MediaPlay,
-            QColor("#ffffff"), 15));
+            QColor("#ffffff"), 14));
     }
     adjustSize();
 }
@@ -1584,7 +1814,7 @@ void SystemPopover::triggerMprisAction(const QString &method)
 }
 
 // ============================================================================
-// Wi-Fi Subpage Implementation (nmcli async — zero GUI blocking)
+// Wi-Fi Subpage Implementation (Pure Wi-Fi: nmcli async + live speed)
 // ============================================================================
 
 void SystemPopover::refreshWifi(bool rescan)
@@ -1592,10 +1822,7 @@ void SystemPopover::refreshWifi(bool rescan)
 #ifdef Q_OS_LINUX
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
-    if (nm.isEmpty()) {
-        m_wifiSummaryLbl->setText(QStringLiteral("未找到 nmcli"));
-        return;
-    }
+    if (nm.isEmpty()) return;
     if (rescan) showStatusBanner(QStringLiteral("正在扫描附近 Wi-Fi…"));
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
@@ -1606,40 +1833,22 @@ void SystemPopover::refreshWifi(bool rescan)
         if (!self) return;
 
         bool wifiEnabled = true;
-        bool wwanAvailable = false;
-        bool wwanEnabled = false;
-        self->m_wwanConnected = false;
-        QStringList vpnLinks;
+        QString wifiIface;
+        QString wifiIp;
         QList<WifiEntry> entries;
         QHash<QString, int> seenIndex;
         int section = 0;
-        const QStringList lines = out.split(QLatin1Char('\n'));
-        for (const QString &raw : lines) {
+        for (const QString &raw : out.split(QLatin1Char('\n'))) {
             const QString line = raw.trimmed();
-            if (line == QLatin1String("---ACTIVE---")) { section = 1; continue; }
+            if (line == QLatin1String("---DEV---")) { section = 1; continue; }
             if (line == QLatin1String("---WIFI---")) { section = 2; continue; }
             if (line.isEmpty()) continue;
 
             if (section == 0) {
-                // WIFI:WWAN-HW:WWAN
-                const QStringList r = line.split(QLatin1Char(':'));
-                if (r.size() >= 3) {
-                    wifiEnabled = (r[0].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
-                    wwanAvailable = (r[1].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
-                    wwanEnabled = (r[2].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
-                } else {
-                    wifiEnabled = (line.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
-                }
+                wifiEnabled = (line.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
             } else if (section == 1) {
-                const QStringList p = line.split(QLatin1Char(':'));
-                if (p.size() >= 2) {
-                    if (p[1] == QLatin1String("tun") || p[1] == QLatin1String("vpn") ||
-                        p[1] == QLatin1String("wireguard")) {
-                        if (!vpnLinks.contains(p[0])) vpnLinks.append(p[0]);
-                    } else if (p[1] == QLatin1String("gsm") || p[1] == QLatin1String("cdma")) {
-                        self->m_wwanConnected = true;
-                    }
-                }
+                if (line.startsWith(QLatin1String("IFACE="))) wifiIface = line.mid(6).trimmed();
+                else if (line.startsWith(QLatin1String("IP="))) wifiIp = line.mid(3).trimmed().section(QLatin1Char('/'), 0, 0);
             } else if (section == 2) {
                 QStringList parts;
                 QString cur;
@@ -1663,9 +1872,15 @@ void SystemPopover::refreshWifi(bool rescan)
                 e.ssid = ssid;
                 e.signal = parts[2].toInt();
                 e.security = parts[3].trimmed();
+                if (parts.size() >= 5) e.rate = parts[4].trimmed();
+                if (parts.size() >= 6) e.freq = parts[5].trimmed();
                 if (seenIndex.contains(ssid)) {
                     WifiEntry &ex = entries[seenIndex[ssid]];
-                    if (e.active) ex.active = true;
+                    if (e.active) {
+                        ex.active = true;
+                        if (!e.rate.isEmpty()) ex.rate = e.rate;
+                        if (!e.freq.isEmpty()) ex.freq = e.freq;
+                    }
                     ex.signal = qMax(ex.signal, e.signal);
                 } else {
                     seenIndex.insert(ssid, entries.size());
@@ -1677,51 +1892,81 @@ void SystemPopover::refreshWifi(bool rescan)
             if (a.active != b.active) return a.active;
             return a.signal > b.signal;
         });
-        self->rebuildWifiList(wifiEnabled, wwanAvailable, wwanEnabled, vpnLinks, entries);
+        self->m_wifiIface = wifiIface;
+        self->m_wifiIp = wifiIp;
+        self->rebuildWifiList(wifiEnabled, entries);
     });
     const QString rescanFlag = rescan ? QStringLiteral("yes") : QStringLiteral("no");
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
-                 QStringLiteral("nmcli -t -f WIFI,WWAN-HW,WWAN radio all; echo '---ACTIVE---'; "
-                                "nmcli -t -f NAME,TYPE connection show --active; echo '---WIFI---'; "
-                                "nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY device wifi list --rescan %1").arg(rescanFlag)});
+                 QStringLiteral(
+                     "nmcli -t -f WIFI radio wifi; echo '---DEV---'; "
+                     "WDEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
+                     "echo \"IFACE=$WDEV\"; "
+                     "[ -n \"$WDEV\" ] && echo \"IP=$(nmcli -g IP4.ADDRESS device show \"$WDEV\" 2>/dev/null | head -n1)\"; "
+                     "echo '---WIFI---'; "
+                     "nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan %1").arg(rescanFlag)});
 #else
     Q_UNUSED(rescan);
 #endif
 }
 
-void SystemPopover::rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool wwanEnabled,
-                                    const QStringList &vpnLinks, const QList<WifiEntry> &entries)
+void SystemPopover::rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &entries)
 {
     m_wifiRadioEnabled = wifiEnabled;
-    m_wwanAvailable = wwanAvailable;
-    m_wwanEnabled = wwanEnabled;
-
-    m_wifiPowerBtn->setText(wifiEnabled ? QStringLiteral("Wi-Fi 已开") : QStringLiteral("Wi-Fi 已关"));
-    m_wifiPowerBtn->setProperty("on", wifiEnabled);
-    repolish(m_wifiPowerBtn);
+    if (m_wifiToggle) m_wifiToggle->setChecked(wifiEnabled);
 
     m_cachedWifiSsid.clear();
     m_cachedWifiSignal = 0;
+    m_wifiRate.clear();
+    m_wifiFreq.clear();
+    m_wifiSecurity.clear();
     for (const WifiEntry &e : entries) {
         if (e.active) {
             m_cachedWifiSsid = e.ssid;
             m_cachedWifiSignal = e.signal;
+            m_wifiSecurity = e.security;
+            m_wifiRate = e.rate;
+            m_wifiFreq = e.freq;
             break;
         }
     }
     syncHomeFromSnapshot();
 
-    QStringList parts;
-    if (!wifiEnabled) parts.append(QStringLiteral("Wi-Fi 已关"));
-    else if (m_cachedWifiSsid.isEmpty()) parts.append(QStringLiteral("Wi-Fi 未连接"));
-    else parts.append(QStringLiteral("已连 %1").arg(elideText(m_cachedWifiSsid, 18)));
-    if (!vpnLinks.isEmpty()) parts.append(QStringLiteral("隧道: ") + vpnLinks.join(QStringLiteral(", ")));
-    m_wifiSummaryLbl->setText(parts.join(QStringLiteral(" · ")));
+    // Update Connected Wi-Fi Info Card (SSID, signal, security, IP, band/rate, live speed)
+    const bool showDetails = wifiEnabled && !m_cachedWifiSsid.isEmpty() && !m_hsActive;
+    if (m_wifiDetailCard) {
+        m_wifiDetailCard->setVisible(showDetails);
+        if (showDetails) {
+            const QString sec = (m_wifiSecurity.isEmpty() || m_wifiSecurity == QLatin1String("--"))
+                ? QStringLiteral("开放") : m_wifiSecurity;
+            m_wifiDetailTitle->setText(QStringLiteral("✓ %1  ·  %2%")
+                                           .arg(elideText(m_cachedWifiSsid, 18)).arg(m_cachedWifiSignal));
+            QStringList meta;
+            if (!m_wifiIp.isEmpty()) meta.append(QStringLiteral("IP ") + m_wifiIp);
+            if (!m_wifiFreq.isEmpty()) {
+                const int mhz = m_wifiFreq.section(QLatin1Char(' '), 0, 0).toInt();
+                if (mhz >= 5900) meta.append(QStringLiteral("6GHz"));
+                else if (mhz >= 4900) meta.append(QStringLiteral("5GHz"));
+                else if (mhz > 0) meta.append(QStringLiteral("2.4GHz"));
+            }
+            if (!m_wifiRate.isEmpty()) meta.append(m_wifiRate);
+            meta.append(sec);
+            m_wifiDetailMeta->setText(meta.join(QStringLiteral(" · ")));
+            pollLiveNetStats();
+        }
+    }
 
     clearLayout(m_wifiListLayout);
     if (!wifiEnabled) {
-        auto *lbl = new QLabel(QStringLiteral("Wi-Fi 已关闭（点上方「Wi-Fi 已关」重新开启）"), m_wifiListLayout->parentWidget());
+        auto *lbl = new QLabel(QStringLiteral("Wi-Fi 已关闭"), m_wifiListLayout->parentWidget());
+        lbl->setAlignment(Qt::AlignCenter);
+        m_wifiListLayout->addWidget(lbl);
+        m_wifiListLayout->addStretch(1);
+        return;
+    }
+    if (m_hsActive) {
+        auto *lbl = new QLabel(QStringLiteral("当前无线网卡正在提供个人热点"), m_wifiListLayout->parentWidget());
         lbl->setWordWrap(true);
         lbl->setAlignment(Qt::AlignCenter);
         m_wifiListLayout->addWidget(lbl);
@@ -1729,7 +1974,7 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool w
         return;
     }
     if (entries.isEmpty()) {
-        auto *lbl = new QLabel(QStringLiteral("附近暂未发现 Wi-Fi 热点（点右上角 ↻ 扫描）"), m_wifiListLayout->parentWidget());
+        auto *lbl = new QLabel(QStringLiteral("附近暂未发现 Wi-Fi（点右上角 ↻ 扫描）"), m_wifiListLayout->parentWidget());
         lbl->setWordWrap(true);
         lbl->setAlignment(Qt::AlignCenter);
         m_wifiListLayout->addWidget(lbl);
@@ -1745,13 +1990,13 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool w
         btn->setObjectName(QStringLiteral("rowBtn"));
         btn->setProperty("connected", entry.active);
         btn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        btn->setMinimumHeight(44);
+        btn->setMinimumHeight(40);
         const QString lock = (!entry.security.isEmpty() && entry.security != QLatin1String("--"))
             ? QStringLiteral("🔒 ") : QString();
         const QString rightTag = entry.active
             ? QStringLiteral("已连 · %1%").arg(entry.signal)
             : QStringLiteral("%1%").arg(entry.signal);
-        btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, elideText(entry.ssid, 19), rightTag));
+        btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, elideText(entry.ssid, 17), rightTag));
         btn->setToolTip(entry.ssid);
         connect(btn, &QPushButton::clicked, this, [this, entry] { connectWifi(entry); });
         m_wifiListLayout->addWidget(btn);
@@ -1772,6 +2017,130 @@ void SystemPopover::toggleWifiRadio()
 #endif
 }
 
+// ============================================================================
+// 4G Cellular Subpage Implementation (Pure 4G: nmcli + mmcli + live traffic)
+// ============================================================================
+
+void SystemPopover::refreshCellular()
+{
+#ifdef Q_OS_LINUX
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) return;
+    auto *proc = new QProcess(this);
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc](int, QProcess::ExitStatus) {
+        const QString out = QString::fromUtf8(proc->readAllStandardOutput());
+        proc->deleteLater();
+        if (!self) return;
+
+        bool wwanHw = false;
+        bool wwanOn = false;
+        bool connected = false;
+        QString ipIface;
+        QString ipAddr;
+        QString opName;
+        QString tech;
+        QString mmState;
+        QString model;
+        int signal = -1;
+
+        int section = 0;
+        for (const QString &raw : out.split(QLatin1Char('\n'))) {
+            const QString line = raw.trimmed();
+            if (line == QLatin1String("---DEV---")) { section = 1; continue; }
+            if (line == QLatin1String("---MM---")) { section = 2; continue; }
+            if (line.isEmpty()) continue;
+
+            if (section == 0) {
+                const QStringList r = line.split(QLatin1Char(':'));
+                if (r.size() >= 2) {
+                    wwanHw = (r[0].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                    wwanOn = (r[1].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+                }
+            } else if (section == 1) {
+                if (line.startsWith(QLatin1String("STATE="))) {
+                    connected = line.mid(6).contains(QLatin1String("connected"), Qt::CaseInsensitive)
+                             && !line.mid(6).contains(QLatin1String("disconnected"), Qt::CaseInsensitive);
+                } else if (line.startsWith(QLatin1String("IPIF="))) {
+                    ipIface = line.mid(5).trimmed();
+                } else if (line.startsWith(QLatin1String("IP="))) {
+                    ipAddr = line.mid(3).trimmed().section(QLatin1Char('/'), 0, 0);
+                }
+            } else if (section == 2) {
+                const int colon = line.indexOf(QLatin1Char(':'));
+                if (colon <= 0) continue;
+                const QString k = line.left(colon).trimmed();
+                const QString v = line.mid(colon + 1).trimmed();
+                if (v.isEmpty() || v == QLatin1String("--")) continue;
+                if (k == QLatin1String("modem.3gpp.operator-name")) opName = v;
+                else if (k == QLatin1String("modem.generic.access-technologies.value[1]")) tech = v.toUpper();
+                else if (k == QLatin1String("modem.generic.signal-quality.value")) signal = v.toInt();
+                else if (k == QLatin1String("modem.generic.state")) mmState = v;
+                else if (k == QLatin1String("modem.generic.model")) model = v;
+            }
+        }
+
+        self->m_wwanAvailable = wwanHw;
+        self->m_wwanEnabled = wwanOn;
+        self->m_wwanConnected = connected || (mmState == QLatin1String("connected"));
+        self->m_cellNetIface = ipIface;
+        self->m_cellIp = ipAddr;
+        self->m_cellOperator = opName;
+        self->m_cellTech = (tech == QLatin1String("LTE")) ? QStringLiteral("4G LTE") : tech;
+        self->m_cellSignal = signal;
+        self->m_cellStateText = mmState;
+        self->m_cellModemModel = model;
+        self->rebuildCellularView();
+        self->syncHomeFromSnapshot();
+    });
+    proc->start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"),
+                 QStringLiteral(
+                     "nmcli -t -f WWAN-HW,WWAN radio all; echo '---DEV---'; "
+                     "GDEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"gsm\" || $2==\"cdma\"{print $1; exit}'); "
+                     "if [ -n \"$GDEV\" ]; then "
+                     "  echo \"STATE=$(nmcli -g GENERAL.STATE device show \"$GDEV\" 2>/dev/null | head -n1)\"; "
+                     "  echo \"IPIF=$(nmcli -g GENERAL.IP-IFACE device show \"$GDEV\" 2>/dev/null | head -n1)\"; "
+                     "  echo \"IP=$(nmcli -g IP4.ADDRESS device show \"$GDEV\" 2>/dev/null | head -n1)\"; "
+                     "fi; echo '---MM---'; "
+                     "command -v mmcli >/dev/null 2>&1 && mmcli -m any -K 2>/dev/null || true")});
+#endif
+}
+
+void SystemPopover::rebuildCellularView()
+{
+    if (m_cellToggle) m_cellToggle->setChecked(m_wwanEnabled);
+    if (!m_cellOpLbl) return;
+
+    if (!m_wwanEnabled) {
+        m_cellOpLbl->setText(QStringLiteral("已关闭"));
+        m_cellSignalLbl->setText(QStringLiteral("无信号"));
+        m_cellIpLbl->setText(QStringLiteral("--"));
+        m_cellSpeedLbl->setText(QStringLiteral("↓ 0 B/s  ·  ↑ 0 B/s"));
+        m_cellTrafficLbl->setText(QStringLiteral("↓ 0 B  ·  ↑ 0 B"));
+        return;
+    }
+
+    QString opStr = m_cellOperator.isEmpty() ? QStringLiteral("搜网中…") : m_cellOperator;
+    if (!m_cellTech.isEmpty()) opStr += QStringLiteral(" · ") + m_cellTech;
+    m_cellOpLbl->setText(opStr);
+
+    const QString stCn = m_wwanConnected ? QStringLiteral("已连接")
+        : (m_cellStateText == QLatin1String("registered") ? QStringLiteral("已注册") : QStringLiteral("连接中…"));
+    m_cellSignalLbl->setText(m_cellSignal >= 0
+        ? QStringLiteral("%1 · %2%").arg(stCn).arg(m_cellSignal)
+        : stCn);
+
+    QStringList ipParts;
+    if (!m_cellIp.isEmpty()) ipParts.append(m_cellIp);
+    if (!m_cellNetIface.isEmpty()) ipParts.append(m_cellNetIface);
+    m_cellIpLbl->setText(ipParts.isEmpty() ? QStringLiteral("未分配") : ipParts.join(QStringLiteral(" · ")));
+
+    pollLiveNetStats();
+}
+
 void SystemPopover::toggleWwanRadio()
 {
 #ifdef Q_OS_LINUX
@@ -1783,15 +2152,11 @@ void SystemPopover::toggleWwanRadio()
     showStatusBanner(turnOn ? QStringLiteral("正在开启 4G 移动网络…") : QStringLiteral("已关闭 4G 移动网络"));
     QPointer<SystemPopover> self(this);
     QTimer::singleShot(1400, this, [self] {
-        if (!self) return;
-        self->refreshWifi(false);
-        self->refreshHotspot();
+        if (self) self->refreshCellular();
     });
     if (turnOn) {
         QTimer::singleShot(4000, this, [self] {
-            if (!self) return;
-            self->refreshWifi(false);
-            self->refreshHotspot();
+            if (self) self->refreshCellular();
         });
     }
 #endif
@@ -1912,9 +2277,7 @@ void SystemPopover::refreshBluetooth()
 void SystemPopover::rebuildBluetoothList(bool powered, const QList<BluetoothDevice> &devices)
 {
     m_btPowered = powered;
-    m_btPowerBtn->setText(powered ? QStringLiteral("蓝牙已开") : QStringLiteral("蓝牙已关"));
-    m_btPowerBtn->setProperty("on", powered);
-    repolish(m_btPowerBtn);
+    if (m_btToggle) m_btToggle->setChecked(powered);
 
     int connectedCount = 0;
     QString firstConnected;
@@ -2130,14 +2493,11 @@ void SystemPopover::rebuildMihomoView()
         repolish(m_mhModeBtns[i]);
     }
 
-    m_mhTunBtn->setText(m_mhTunEnabled ? QStringLiteral("TUN 开") : QStringLiteral("TUN 关"));
-    m_mhTunBtn->setProperty("on", m_mhTunEnabled);
-    repolish(m_mhTunBtn);
+    if (m_mhTunToggle) m_mhTunToggle->setChecked(m_mhTunEnabled);
 
-    m_mhSummaryLbl->setText(QStringLiteral("模式 %1 · %2 · %3 个策略组")
-                                .arg(m_mhMode.toUpper(),
-                                     m_mhTunEnabled ? (m_mhTunDevice.isEmpty() ? QStringLiteral("TUN") : m_mhTunDevice) : QStringLiteral("无TUN"))
-                                .arg(m_mhGroups.size()));
+    m_mhSummaryLbl->setText(m_mhTunEnabled
+        ? QStringLiteral("TUN 透明代理 · 已开启")
+        : QStringLiteral("TUN 透明代理 · 已关闭"));
 
     clearLayout(m_mhGroupBarLayout);
     if (!m_mhGroups.isEmpty()) {
@@ -2350,10 +2710,7 @@ void SystemPopover::refreshHotspot()
 #ifdef Q_OS_LINUX
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
-    if (nm.isEmpty()) {
-        if (m_hsSummaryLbl) m_hsSummaryLbl->setText(QStringLiteral("未找到 nmcli"));
-        return;
-    }
+    if (nm.isEmpty()) return;
 
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
@@ -2364,8 +2721,6 @@ void SystemPopover::refreshHotspot()
         if (!self) return;
 
         QString wifiDev;
-        QString wifiActiveCon;
-        QStringList upstreams;
         bool apActive = false;
         QString apSsid;
         QString apBand;
@@ -2381,20 +2736,9 @@ void SystemPopover::refreshHotspot()
             if (line.isEmpty()) continue;
 
             if (section == 0) {
-                // DEVICE:TYPE:STATE:CONNECTION
                 const QStringList p = line.split(QLatin1Char(':'));
-                if (p.size() < 4) continue;
-                const QString dev = p[0];
-                const QString type = p[1];
-                const QString state = p[2];
-                const QString con = p.mid(3).join(QLatin1Char(':'));
-                if (type == QLatin1String("wifi") && wifiDev.isEmpty()) {
-                    wifiDev = dev;
-                    if (state == QLatin1String("connected")) wifiActiveCon = con;
-                } else if (type == QLatin1String("gsm") && state == QLatin1String("connected")) {
-                    upstreams.append(QStringLiteral("4G (%1)").arg(dev));
-                } else if (type == QLatin1String("ethernet") && state == QLatin1String("connected")) {
-                    upstreams.append(QStringLiteral("有线 (%1)").arg(dev));
+                if (p.size() >= 2 && p[1] == QLatin1String("wifi") && wifiDev.isEmpty()) {
+                    wifiDev = p[0];
                 }
             } else if (section == 1) {
                 if (line.startsWith(QLatin1String("MODE="))) {
@@ -2407,7 +2751,6 @@ void SystemPopover::refreshHotspot()
                     else if (b == QLatin1String("bg")) apBand = QStringLiteral("2.4GHz");
                 }
             } else if (section == 2) {
-                // dnsmasq lease: <ts> <mac> <ip> <hostname> <clientid>
                 const QStringList p = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
                 if (p.size() >= 4) {
                     const QString mac = p[1].toLower();
@@ -2415,7 +2758,6 @@ void SystemPopover::refreshHotspot()
                     if (!host.isEmpty()) macToHost.insert(mac, host);
                 }
             } else if (section == 3) {
-                // ip -4 neigh show dev <dev>: <ip> lladdr <mac> <STATE>
                 const QStringList p = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
                 if (p.size() >= 4 && p[1] == QLatin1String("lladdr")) {
                     const QString state = p.last().toUpper();
@@ -2431,8 +2773,6 @@ void SystemPopover::refreshHotspot()
         }
 
         self->m_hsWifiDev = wifiDev;
-        self->m_hsHasUpstream = !upstreams.isEmpty();
-        self->m_hsUpstreamSummary = upstreams.join(QStringLiteral(" + "));
         self->m_hsActive = apActive;
         if (apActive && !apSsid.isEmpty()) self->m_hsSsid = apSsid;
         self->m_hsActiveBand = apActive ? apBand : QString();
@@ -2460,36 +2800,43 @@ void SystemPopover::refreshHotspot()
 #endif
 }
 
+void SystemPopover::setHotspotEditMode(bool editing)
+{
+    m_hsEditing = editing;
+    if (editing) {
+        if (m_hsSsidEdit) m_hsSsidEdit->setText(m_hsSsid);
+        if (m_hsPassEdit) {
+            m_hsPassEdit->setText(m_hsPassword);
+            m_hsPassEdit->setCursorPosition(0);
+        }
+    }
+    if (m_hsViewCard) m_hsViewCard->setVisible(!editing);
+    if (m_hsEditCard) m_hsEditCard->setVisible(editing);
+    rebuildHotspotView();
+}
+
 void SystemPopover::rebuildHotspotView()
 {
-    if (!m_hsPowerBtn || !m_hsSummaryLbl) return;
-
-    m_hsPowerBtn->setEnabled(!m_hsBusy);
-    if (m_hsBusy) {
-        m_hsPowerBtn->setText(m_hsActive ? QStringLiteral("关闭中…") : QStringLiteral("启动中…"));
-    } else {
-        m_hsPowerBtn->setText(m_hsActive ? QStringLiteral("热点已开") : QStringLiteral("开启热点"));
+    if (m_hsToggle) {
+        m_hsToggle->setEnabled(!m_hsBusy);
+        m_hsToggle->setChecked(m_hsActive);
     }
-    m_hsPowerBtn->setProperty("on", m_hsActive);
-    repolish(m_hsPowerBtn);
 
     const QString secTxt = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
-    QString summary;
-    if (m_hsActive) {
-        const QString bandPart = m_hsActiveBand.isEmpty() ? QString() : (QStringLiteral(" / ") + m_hsActiveBand);
-        summary = QStringLiteral("运行中 · %1 (%2%3)").arg(m_hsSsid, secTxt, bandPart);
-        if (m_hsHasUpstream) summary += QStringLiteral("\n共享上游: %1").arg(m_hsUpstreamSummary);
-    } else if (m_hsHasUpstream) {
-        summary = QStringLiteral("就绪 · 共享上游: %1").arg(m_hsUpstreamSummary);
-    } else {
-        summary = QStringLiteral("当前未检测到 4G 或有线上游（仍可开启本地热点）");
+    if (m_hsInfoTitle) {
+        const QString bandPart = (m_hsActive && !m_hsActiveBand.isEmpty())
+            ? (QStringLiteral(" · ") + m_hsActiveBand) : QString();
+        const QString stateTxt = m_hsBusy ? QStringLiteral("切换中…")
+                                          : (m_hsActive ? QStringLiteral("运行中") : QStringLiteral("已关闭"));
+        m_hsInfoTitle->setText(QStringLiteral("%1 · %2%3 (%4)")
+                                   .arg(m_hsSsid, secTxt, bandPart, stateTxt));
     }
-    m_hsSummaryLbl->setText(summary);
-
-    if (m_hsSsidEdit && !m_hsSsidEdit->hasFocus()) m_hsSsidEdit->setText(m_hsSsid);
-    if (m_hsPassEdit && !m_hsPassEdit->hasFocus()) {
-        m_hsPassEdit->setText(m_hsPassword);
-        m_hsPassEdit->setCursorPosition(0);
+    if (m_hsPassValueLbl) {
+        m_hsPassValueLbl->setText(m_hsPassRevealed ? m_hsPassword
+                                                   : QString(qMin(10, qMax(8, m_hsPassword.size())), QChar(0x2022)));
+    }
+    if (m_hsViewEyeBtn) {
+        m_hsViewEyeBtn->setText(m_hsPassRevealed ? QStringLiteral("隐藏") : QStringLiteral("显示"));
     }
 
     if (m_hsSecBtns[0] && m_hsSecBtns[1]) {
@@ -2499,36 +2846,39 @@ void SystemPopover::rebuildHotspotView()
         repolish(m_hsSecBtns[1]);
     }
 
+    if (m_hsClientsHeader) {
+        m_hsClientsHeader->setText(QStringLiteral("已连接客户端 (%1)").arg(m_hsClients.size()));
+    }
+
     clearLayout(m_hsClientsLayout);
     if (!m_hsActive) {
-        auto *lbl = new QLabel(QStringLiteral("开启热点后，接入设备（4G/有线经 Mihomo 分流）将显示在这里"), this);
+        auto *lbl = new QLabel(QStringLiteral("开启热点后将在此显示接入设备"), m_hsClientsLayout->parentWidget());
         lbl->setWordWrap(true);
         lbl->setAlignment(Qt::AlignCenter);
         m_hsClientsLayout->addWidget(lbl);
         m_hsClientsLayout->addStretch(1);
-        return;
-    }
-    if (m_hsClients.isEmpty()) {
-        auto *lbl = new QLabel(QStringLiteral("热点已广播（10.42.0.1/24），等待设备接入…"), this);
+    } else if (m_hsClients.isEmpty()) {
+        auto *lbl = new QLabel(QStringLiteral("热点已广播（10.42.0.1/24），等待设备连接…"), m_hsClientsLayout->parentWidget());
         lbl->setAlignment(Qt::AlignCenter);
         m_hsClientsLayout->addWidget(lbl);
         m_hsClientsLayout->addStretch(1);
-        return;
+    } else {
+        for (const HotspotClient &c : m_hsClients) {
+            auto *row = new QPushButton(m_hsClientsLayout->parentWidget());
+            row->setObjectName(QStringLiteral("rowBtn"));
+            row->setProperty("connected", true);
+            row->setMinimumHeight(38);
+            const QString title = c.host.isEmpty() ? c.ip : QStringLiteral("%1 (%2)").arg(c.host, c.ip);
+            row->setText(QStringLiteral("📱 %1 · %2").arg(title, c.mac));
+            connect(row, &QPushButton::clicked, this, [this, c] {
+                if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(c.ip);
+                showStatusBanner(QStringLiteral("✓ 已复制设备 IP: %1").arg(c.ip));
+            });
+            m_hsClientsLayout->addWidget(row);
+        }
+        m_hsClientsLayout->addStretch(1);
     }
-    for (const HotspotClient &c : m_hsClients) {
-        auto *row = new QPushButton(this);
-        row->setObjectName(QStringLiteral("rowBtn"));
-        row->setProperty("connected", true);
-        row->setMinimumHeight(40);
-        const QString title = c.host.isEmpty() ? c.ip : QStringLiteral("%1 (%2)").arg(c.host, c.ip);
-        row->setText(QStringLiteral("📱 %1   [%2]").arg(title, c.mac));
-        connect(row, &QPushButton::clicked, this, [this, c] {
-            if (QClipboard *cb = QGuiApplication::clipboard()) cb->setText(c.ip);
-            showStatusBanner(QStringLiteral("✓ 已复制设备 IP: %1").arg(c.ip));
-        });
-        m_hsClientsLayout->addWidget(row);
-    }
-    m_hsClientsLayout->addStretch(1);
+    pollLiveNetStats();
 }
 
 void SystemPopover::applyHotspotConfig(bool restartIfActive)
@@ -2540,19 +2890,19 @@ void SystemPopover::applyHotspotConfig(bool restartIfActive)
         return;
     }
     if (nextPass.size() < 8) {
-        showStatusBanner(QStringLiteral("WPA2/WPA3 密码至少需要 8 位"), true);
+        showStatusBanner(QStringLiteral("密码至少需要 8 位"), true);
         return;
     }
     m_hsSsid = nextSsid;
     m_hsPassword = nextPass;
     saveHotspotPrefs();
+    setHotspotEditMode(false);
     syncHomeFromSnapshot();
     if (restartIfActive) {
         startHotspotAsync();
     } else {
         showStatusBanner(QStringLiteral("✓ 热点配置已保存（%1 · %2）")
                              .arg(m_hsSsid, m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2")));
-        rebuildHotspotView();
     }
 }
 
@@ -2562,16 +2912,18 @@ void SystemPopover::toggleHotspot()
     if (m_hsActive) {
         stopHotspotAsync();
     } else {
-        // Persist any unsaved SSID/password edits before starting
-        const QString editSsid = m_hsSsidEdit ? m_hsSsidEdit->text().trimmed() : m_hsSsid;
-        const QString editPass = m_hsPassEdit ? m_hsPassEdit->text() : m_hsPassword;
-        if (!editSsid.isEmpty()) m_hsSsid = editSsid;
-        if (editPass.size() < 8) {
-            showStatusBanner(QStringLiteral("请先设置至少 8 位热点密码"), true);
+        if (m_hsEditing) {
+            const QString editSsid = m_hsSsidEdit ? m_hsSsidEdit->text().trimmed() : m_hsSsid;
+            const QString editPass = m_hsPassEdit ? m_hsPassEdit->text() : m_hsPassword;
+            if (!editSsid.isEmpty()) m_hsSsid = editSsid;
+            if (editPass.size() >= 8) m_hsPassword = editPass;
+            saveHotspotPrefs();
+            setHotspotEditMode(false);
+        }
+        if (m_hsPassword.size() < 8) {
+            showStatusBanner(QStringLiteral("请先点击「编辑」设置至少 8 位密码"), true);
             return;
         }
-        m_hsPassword = editPass;
-        saveHotspotPrefs();
         startHotspotAsync();
     }
 }

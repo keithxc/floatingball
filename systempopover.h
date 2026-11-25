@@ -18,15 +18,15 @@ class QToolButton;
 class QVBoxLayout;
 class SystemStatusMonitor;
 class CapsuleSlider;
+class IosToggleSwitch;
 
-// Unified macOS / iOS-style floating Control Center (LayerShellQt overlay,
-// never tiled by Krohnkite, auto-dismisses when clicking outside).
-// Home page presents a tactile Bento grid (Wi-Fi / Hotspot / Bluetooth / Mihomo
-// connectivity stack, DND / Night Light / Power / Display / Settings tiles,
-// thick Apple-style brightness & volume capsule sliders, auto-showing MPRIS
-// Now Playing bar, and quick Deck / Lock / Power footer). Tapping any
-// connectivity row drills inline into its dedicated subpage without spawning
-// a second window or accidentally toggling radios.
+// Unified iPadOS / macOS-style floating Control Center (LayerShellQt overlay
+// with native Wayland Gaussian blur + borderless feathered frosted glass).
+// Home page keeps a compact Bento layout (top-left 5-row connectivity card,
+// top-right DND + dual slender vertical brightness/volume sliders, clickable
+// battery+power-profile pill & utility icon buttons in the header, and an
+// auto-hiding MPRIS Now Playing card). Each connectivity row drills inline
+// into a clean, single-purpose iOS-style subpage.
 class SystemPopover : public QWidget
 {
     Q_OBJECT
@@ -36,7 +36,8 @@ public:
         PageWifi = 1,
         PageHotspot = 2,
         PageBluetooth = 3,
-        PageMihomo = 4
+        PageMihomo = 4,
+        PageCellular = 5
     };
     // Compatibility aliases for direct tab callers
     enum Tab {
@@ -44,7 +45,8 @@ public:
         TabWifi = PageWifi,
         TabHotspot = PageHotspot,
         TabBluetooth = PageBluetooth,
-        TabMihomo = PageMihomo
+        TabMihomo = PageMihomo,
+        TabCellular = PageCellular
     };
 
     explicit SystemPopover(SystemStatusMonitor *monitor, QWidget *parent = nullptr);
@@ -66,6 +68,8 @@ signals:
     void quickDeckRequested();
 
 protected:
+    void paintEvent(QPaintEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void changeEvent(QEvent *event) override;
 
@@ -74,6 +78,8 @@ private:
         QString ssid;
         int signal = 0;
         QString security;
+        QString rate;
+        QString freq;
         bool active = false;
     };
     struct HotspotClient {
@@ -101,6 +107,7 @@ private:
 
     QWidget *buildHomePage(QWidget *parent);
     QWidget *buildWifiPage(QWidget *parent);
+    QWidget *buildCellularPage(QWidget *parent);
     QWidget *buildHotspotPage(QWidget *parent);
     QWidget *buildBluetoothPage(QWidget *parent);
     QWidget *buildMihomoPage(QWidget *parent);
@@ -109,6 +116,10 @@ private:
     void showStatusBanner(const QString &msg, bool isError = false);
     void syncHeaderForPage();
     void syncHomeFromSnapshot();
+
+    // Live 1s net speed & traffic sampler (reads /sys/class/net/<if>/statistics directly)
+    void syncNetStatsTimer();
+    void pollLiveNetStats();
 
     // Audio & Brightness sliders
     void syncVolume();
@@ -120,19 +131,23 @@ private:
     void applyMprisVisuals();
     void triggerMprisAction(const QString &method);
 
-    // Wi-Fi + 4G WWAN async actions
+    // Wi-Fi async actions (Wi-Fi only)
     void refreshWifi(bool rescan = false);
-    void rebuildWifiList(bool wifiEnabled, bool wwanAvailable, bool wwanEnabled,
-                         const QStringList &vpnLinks, const QList<WifiEntry> &entries);
+    void rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &entries);
     void toggleWifiRadio();
-    void toggleWwanRadio();
     void connectWifi(const WifiEntry &entry);
 
-    // Hotspot (Wi-Fi AP sharing 4G / Ethernet, default WPA3-SAE + local hostname)
+    // 4G Cellular async actions (4G only)
+    void refreshCellular();
+    void rebuildCellularView();
+    void toggleWwanRadio();
+
+    // Hotspot (Wi-Fi AP, pure Hotspot view + Edit/Save mode + clients & traffic)
     void loadHotspotPrefs();
     void saveHotspotPrefs();
     void refreshHotspot();
     void rebuildHotspotView();
+    void setHotspotEditMode(bool editing);
     void toggleHotspot();
     void applyHotspotConfig(bool restartIfActive);
     void startHotspotAsync();
@@ -163,7 +178,10 @@ private:
     // Shared top header
     QToolButton *m_backBtn = nullptr;
     QLabel *m_titleLbl = nullptr;
-    QLabel *m_metaLbl = nullptr;
+    QToolButton *m_powerPill = nullptr;
+    QToolButton *m_hdrSettingsBtn = nullptr;
+    QToolButton *m_hdrLockBtn = nullptr;
+    QToolButton *m_hdrPowerBtn = nullptr;
     QToolButton *m_refreshBtn = nullptr;
     QLabel *m_statusBanner = nullptr;
     QStackedWidget *m_stack = nullptr;
@@ -181,17 +199,12 @@ private:
     QLabel *m_homeMhBadge = nullptr;
     QLabel *m_homeMhSub = nullptr;
 
-    // Home Bento right toggles
+    // Home Bento right column (DND + two slender iOS vertical sliders)
     QPushButton *m_dndTile = nullptr;
     QLabel *m_dndBadge = nullptr;
     QLabel *m_dndSub = nullptr;
-    QToolButton *m_nightTile = nullptr;
-    QToolButton *m_powerTile = nullptr;
-
-    // Home iOS-style vertical capsule sliders (below DND on upper-right)
     CapsuleSlider *m_brightnessSlider = nullptr;
     QTimer *m_brightnessDebounce = nullptr;
-
     CapsuleSlider *m_volumeSlider = nullptr;
     QTimer *m_volumeDebounce = nullptr;
     bool m_muted = false;
@@ -208,38 +221,73 @@ private:
     bool m_mprisPlaying = false;
     bool m_mprisVisible = false;
 
-    // Wi-Fi subpage widgets & shared WWAN state
-    QToolButton *m_wifiPowerBtn = nullptr;
-    QLabel *m_wifiSummaryLbl = nullptr;
+    // Live 1s speed/traffic stats
+    QTimer *m_netStatsTimer = nullptr;
+    QString m_lastStatsIface;
+    quint64 m_lastRxBytes = 0;
+    quint64 m_lastTxBytes = 0;
+    bool m_hasLastStats = false;
+
+    // Wi-Fi subpage widgets & state (pure Wi-Fi)
+    IosToggleSwitch *m_wifiToggle = nullptr;
+    QWidget *m_wifiDetailCard = nullptr;
+    QLabel *m_wifiDetailTitle = nullptr;
+    QLabel *m_wifiDetailMeta = nullptr;
+    QLabel *m_wifiSpeedLbl = nullptr;
     QVBoxLayout *m_wifiListLayout = nullptr;
     bool m_wifiRadioEnabled = true;
-    bool m_wwanAvailable = false;
-    bool m_wwanEnabled = false;
-    bool m_wwanConnected = false;
+    QString m_wifiIface;
+    QString m_wifiIp;
+    QString m_wifiRate;
+    QString m_wifiFreq;
+    QString m_wifiSecurity;
     QString m_cachedWifiSsid;
     int m_cachedWifiSignal = 0;
 
-    // Hotspot subpage widgets & state
-    QToolButton *m_hsPowerBtn = nullptr;
-    QLabel *m_hsSummaryLbl = nullptr;
+    // 4G Cellular subpage widgets & state (pure 4G)
+    IosToggleSwitch *m_cellToggle = nullptr;
+    QLabel *m_cellOpLbl = nullptr;
+    QLabel *m_cellSignalLbl = nullptr;
+    QLabel *m_cellIpLbl = nullptr;
+    QLabel *m_cellSpeedLbl = nullptr;
+    QLabel *m_cellTrafficLbl = nullptr;
+    bool m_wwanAvailable = false;
+    bool m_wwanEnabled = false;
+    bool m_wwanConnected = false;
+    QString m_cellOperator;
+    QString m_cellTech;
+    QString m_cellStateText;
+    QString m_cellModemModel;
+    QString m_cellNetIface;
+    QString m_cellIp;
+    int m_cellSignal = -1;
+
+    // Hotspot subpage widgets & state (pure Hotspot: view mode + edit mode + clients & traffic)
+    IosToggleSwitch *m_hsToggle = nullptr;
+    QWidget *m_hsViewCard = nullptr;
+    QWidget *m_hsEditCard = nullptr;
+    QLabel *m_hsInfoTitle = nullptr;
+    QLabel *m_hsPassValueLbl = nullptr;
+    QToolButton *m_hsViewEyeBtn = nullptr;
+    QLabel *m_hsTrafficLbl = nullptr;
     QLineEdit *m_hsSsidEdit = nullptr;
     QLineEdit *m_hsPassEdit = nullptr;
-    QToolButton *m_hsEyeBtn = nullptr;
     QToolButton *m_hsSecBtns[2]{}; // 0 = WPA3 (sae), 1 = WPA2 (wpa-psk)
+    QLabel *m_hsClientsHeader = nullptr;
     QVBoxLayout *m_hsClientsLayout = nullptr;
     QString m_hsWifiDev;
-    QString m_hsUpstreamSummary;
-    bool m_hsHasUpstream = false;
     bool m_hsActive = false;
     bool m_hsBusy = false;
+    bool m_hsEditing = false;
+    bool m_hsPassRevealed = false;
     QString m_hsSsid;
     QString m_hsPassword;
     bool m_hsUseWpa3 = true; // default WPA3-Personal (SAE)
-    QString m_hsActiveBand;  // "5GHz" or "2.4GHz" (auto 5GHz-first with 2.4GHz fallback)
+    QString m_hsActiveBand;  // "5GHz" or "2.4GHz"
     QList<HotspotClient> m_hsClients;
 
     // Bluetooth subpage widgets
-    QToolButton *m_btPowerBtn = nullptr;
+    IosToggleSwitch *m_btToggle = nullptr;
     QLabel *m_btSummaryLbl = nullptr;
     QVBoxLayout *m_btListLayout = nullptr;
     bool m_btPowered = true;
@@ -247,7 +295,7 @@ private:
 
     // Mihomo subpage widgets & state
     QToolButton *m_mhModeBtns[3]{}; // rule, global, direct
-    QToolButton *m_mhTunBtn = nullptr;
+    IosToggleSwitch *m_mhTunToggle = nullptr;
     QToolButton *m_mhDelayBtn = nullptr;
     QLabel *m_mhSummaryLbl = nullptr;
     QVBoxLayout *m_mhGroupBarLayout = nullptr;

@@ -31,6 +31,7 @@ public:
     int visibleAppCount() const { return m_filteredApps.size(); }
 
 protected:
+    void paintEvent(QPaintEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
