@@ -62,16 +62,20 @@
 #endif
 
 // ============================================================================
-// Apple macOS / iOS-style Thick Touch Capsule Slider
+// Apple iOS-style Vertical Touch Capsule Slider (Brightness & Volume)
 // ============================================================================
 class CapsuleSlider final : public QWidget
 {
 public:
-    explicit CapsuleSlider(const QColor &fillColor, QWidget *parent = nullptr)
-        : QWidget(parent), m_fillColor(fillColor)
+    CapsuleSlider(FloatingIcons::Icon icon, const QColor &fillColor,
+                  const QColor &emptyIconColor, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_icon(icon)
+        , m_fillColor(fillColor)
+        , m_emptyIconColor(emptyIconColor)
     {
-        setFixedHeight(32);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setMinimumSize(64, 136);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
     }
@@ -93,6 +97,20 @@ public:
 
     int value() const { return m_value; }
 
+    void setIcon(FloatingIcons::Icon icon)
+    {
+        if (m_icon == icon) return;
+        m_icon = icon;
+        update();
+    }
+
+    void setBadgeText(const QString &text)
+    {
+        if (m_badgeText == text) return;
+        m_badgeText = text;
+        update();
+    }
+
     void setMutedAppearance(bool muted)
     {
         if (m_muted == muted) return;
@@ -101,6 +119,7 @@ public:
     }
 
     std::function<void(int)> onValueChanged;
+    std::function<void()> onIconTapped;
 
 protected:
     void paintEvent(QPaintEvent *) override
@@ -109,58 +128,111 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
 
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        const qreal radius = r.height() * 0.5;
+        const qreal radius = 20.0;
 
         QPainterPath track;
         track.addRoundedRect(r, radius, radius);
-        p.fillPath(track, QColor(255, 255, 255, 22));
-        p.setPen(QPen(QColor(255, 255, 255, 34), 1.0));
-        p.drawPath(track);
+        p.fillPath(track, QColor(255, 255, 255, 14));
 
-        const qreal frac = qBound(0.0, qreal(m_value - m_min) / qreal(m_max - m_min), 1.0);
-        const qreal minPill = r.height();
-        const qreal fillW = (frac <= 0.001) ? 0.0 : qMax(minPill, r.width() * frac);
+        const qreal frac = isEnabled()
+            ? qBound(0.0, qreal(m_value - m_min) / qreal(m_max - m_min), 1.0)
+            : 0.0;
+        const qreal fillH = r.height() * frac;
+        const qreal fillTop = r.bottom() - fillH;
 
-        if (fillW > 0.5) {
+        if (fillH > 0.5) {
             p.save();
             p.setClipPath(track);
-            QRectF fillRect(r.left(), r.top(), fillW, r.height());
-            QColor fill = m_muted ? QColor(148, 163, 184, 150) : m_fillColor;
+            QRectF fillRect(r.left(), fillTop, r.width(), fillH + 1.0);
+            const QColor fill = m_muted ? QColor(148, 163, 184, 96) : m_fillColor;
             p.setPen(Qt::NoPen);
             p.setBrush(fill);
-            p.drawRoundedRect(fillRect, radius, radius);
-
-            // Subtle Apple-style tactile thumb dot inside the leading edge of the fill
-            const qreal knobR = r.height() * 0.34;
-            const QPointF knobCenter(fillRect.right() - r.height() * 0.5, r.center().y());
-            p.setBrush(QColor(255, 255, 255, m_muted ? 170 : 245));
-            p.drawEllipse(knobCenter, knobR, knobR);
+            p.drawRect(fillRect);
             p.restore();
         }
+
+        // Subtle glass rim (tinted rose when muted)
+        p.setPen(QPen(m_muted ? QColor(251, 113, 133, 125) : QColor(255, 255, 255, 26), 1.0));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(track);
+
+        // Top numeric / status readout with automatic contrast over fill
+        if (!m_badgeText.isEmpty()) {
+            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 26.0);
+            QFont f = font();
+            f.setPointSize(10);
+            f.setWeight(QFont::DemiBold);
+            p.setFont(f);
+            p.setPen(m_muted
+                         ? QColor("#fda4af")
+                         : (overLightFill ? QColor("#0f172a") : QColor(226, 232, 240, 210)));
+            p.drawText(QRectF(r.left() + 4.0, r.top() + 8.0, r.width() - 8.0, 18.0),
+                       Qt::AlignCenter, m_badgeText);
+        }
+
+        // Bottom centered iOS icon with automatic contrast over fill
+        const qreal iconSize = 22.0;
+        const QRectF iconRect(r.center().x() - iconSize * 0.5,
+                              r.bottom() - iconSize - 14.0,
+                              iconSize, iconSize);
+        const bool iconOverLightFill = !m_muted && isEnabled() && (fillH >= 34.0);
+        const QColor iconColor = m_muted
+            ? QColor("#fb7185")
+            : (iconOverLightFill ? QColor("#1e293b") : m_emptyIconColor);
+        FloatingIcons::draw(p, m_icon, iconRect, iconColor);
     }
 
     void mousePressEvent(QMouseEvent *e) override
     {
+        if (!isEnabled()) return;
+        if (e->button() == Qt::RightButton && onIconTapped) {
+            onIconTapped();
+            e->accept();
+            return;
+        }
         if (e->button() == Qt::LeftButton) {
             m_dragging = true;
-            updateFromX(e->position().x());
+            m_moved = false;
+            m_pressPos = e->position();
+            m_pressedIconZone = (onIconTapped && e->position().y() >= height() - 44.0);
+            if (!m_pressedIconZone) {
+                updateFromY(e->position().y());
+            }
+            e->accept();
         }
     }
 
     void mouseMoveEvent(QMouseEvent *e) override
     {
+        if (!isEnabled()) return;
         if (m_dragging && (e->buttons() & Qt::LeftButton)) {
-            updateFromX(e->position().x());
+            if (!m_moved && qAbs(e->position().y() - m_pressPos.y()) >= 5.0) {
+                m_moved = true;
+            }
+            if (!m_pressedIconZone || m_moved) {
+                updateFromY(e->position().y());
+            }
+            e->accept();
         }
     }
 
     void mouseReleaseEvent(QMouseEvent *e) override
     {
-        if (e->button() == Qt::LeftButton) m_dragging = false;
+        if (e->button() == Qt::LeftButton) {
+            const bool shouldToggleIcon = m_dragging && m_pressedIconZone && !m_moved && onIconTapped;
+            m_dragging = false;
+            m_moved = false;
+            m_pressedIconZone = false;
+            if (shouldToggleIcon) {
+                onIconTapped();
+            }
+            e->accept();
+        }
     }
 
     void wheelEvent(QWheelEvent *e) override
     {
+        if (!isEnabled()) return;
         const int step = (e->angleDelta().y() > 0) ? 4 : -4;
         const int next = qBound(m_min, m_value + step, m_max);
         if (next != m_value) {
@@ -172,11 +244,11 @@ protected:
     }
 
 private:
-    void updateFromX(qreal x)
+    void updateFromY(qreal y)
     {
-        const qreal pad = height() * 0.35;
-        const qreal span = qMax(1.0, width() - pad * 2.0);
-        const qreal frac = qBound(0.0, (x - pad) / span, 1.0);
+        const qreal pad = 10.0;
+        const qreal span = qMax(1.0, height() - pad * 2.0);
+        const qreal frac = qBound(0.0, (height() - pad - y) / span, 1.0);
         const int next = qRound(m_min + frac * (m_max - m_min));
         if (next != m_value) {
             m_value = next;
@@ -190,7 +262,13 @@ private:
     int m_value = 50;
     bool m_muted = false;
     bool m_dragging = false;
+    bool m_moved = false;
+    bool m_pressedIconZone = false;
+    QPointF m_pressPos;
+    FloatingIcons::Icon m_icon;
     QColor m_fillColor;
+    QColor m_emptyIconColor;
+    QString m_badgeText;
 };
 
 namespace {
@@ -308,7 +386,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
     // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
-    setFixedSize(388, 566);
+    setFixedSize(388, 492);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(6, 6, 6, 8);
@@ -548,15 +626,15 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                                    [this] { showPage(PageMihomo); }));
     upper->addWidget(connCard, 11);
 
-    // Right Bento Column: DND wide pill + 2x2 quick tiles
+    // Right Bento Column: DND wide pill on top + two iOS-style vertical sliders (Brightness & Volume) below
     auto *rightCol = new QVBoxLayout();
-    rightCol->setSpacing(8);
+    rightCol->setSpacing(10);
 
     // DND Wide Card
     m_dndTile = new QPushButton(page);
     m_dndTile->setObjectName(QStringLiteral("dndCard"));
     m_dndTile->setCursor(Qt::PointingHandCursor);
-    m_dndTile->setMinimumHeight(54);
+    m_dndTile->setFixedHeight(54);
     auto *dndRow = new QHBoxLayout(m_dndTile);
     dndRow->setContentsMargins(10, 6, 10, 6);
     dndRow->setSpacing(9);
@@ -583,18 +661,79 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     });
     rightCol->addWidget(m_dndTile);
 
-    // 2x2 Square Tiles
-    auto *grid = new QGridLayout();
-    grid->setSpacing(8);
+    // Side-by-side iOS Vertical Brightness & Volume Sliders
+    auto *slidersRow = new QHBoxLayout();
+    slidersRow->setContentsMargins(0, 0, 0, 0);
+    slidersRow->setSpacing(10);
+
+    m_brightnessSlider = new CapsuleSlider(
+        FloatingIcons::Sun, QColor(248, 250, 252, 236), QColor("#fcd34d"), page);
+    m_brightnessSlider->setToolTip(QStringLiteral("上下拖动或滚轮调节显示器亮度"));
+    m_brightnessSlider->setRange(1, 100);
+    m_brightnessSlider->setValue(70);
+    m_brightnessSlider->setBadgeText(QStringLiteral("70%"));
+    slidersRow->addWidget(m_brightnessSlider, 1);
+
+    m_brightnessDebounce = new QTimer(this);
+    m_brightnessDebounce->setSingleShot(true);
+    m_brightnessDebounce->setInterval(75);
+    m_brightnessSlider->onValueChanged = [this](int val) {
+        m_brightnessSlider->setBadgeText(QStringLiteral("%1%").arg(val));
+        if (m_monitor) m_monitor->updateBrightness(val, true);
+        emit brightnessStateChanged(val);
+        m_brightnessDebounce->start();
+    };
+    connect(m_brightnessDebounce, &QTimer::timeout, this, [this] {
+        DesktopActions::setBrightness(m_brightnessSlider->value());
+    });
+
+    m_volumeSlider = new CapsuleSlider(
+        FloatingIcons::Volume, QColor(242, 248, 255, 234), QColor("#cbd5e1"), page);
+    m_volumeSlider->setToolTip(QStringLiteral("上下拖动调节音量 · 轻点底部图标或右键切换静音"));
+    m_volumeSlider->setRange(0, 100);
+    m_volumeSlider->setValue(60);
+    m_volumeSlider->setBadgeText(QStringLiteral("60%"));
+    slidersRow->addWidget(m_volumeSlider, 1);
+
+    m_volumeDebounce = new QTimer(this);
+    m_volumeDebounce->setSingleShot(true);
+    m_volumeDebounce->setInterval(75);
+    m_volumeSlider->onValueChanged = [this](int val) {
+        m_lastVolume = val;
+        if (m_muted && val > 0) m_muted = false;
+        applyAudioVisuals(val, m_muted, true);
+        emit audioStateChanged(val, m_muted);
+        m_volumeDebounce->start();
+    };
+    m_volumeSlider->onIconTapped = [this] {
+        QPointer<SystemPopover> self(this);
+        DesktopActions::toggleMute([self](int vol, bool muted, bool ok) {
+            if (!self || !ok) return;
+            self->applyAudioVisuals(vol, muted, true);
+            emit self->audioStateChanged(vol, muted);
+        });
+    };
+    connect(m_volumeDebounce, &QTimer::timeout, this, [this] {
+        DesktopActions::setVolume(m_volumeSlider->value());
+    });
+
+    rightCol->addLayout(slidersRow, 1);
+
+    upper->addLayout(rightCol, 10);
+    v->addLayout(upper);
+
+    // ---- Lower Half: 4-Column Quick Action Tiles (Night Light / Power / Display / Settings) ----
+    auto *tilesRow = new QHBoxLayout();
+    tilesRow->setSpacing(8);
     auto makeMini = [&](const QString &label, FloatingIcons::Icon icon, const QColor &ink) {
         auto *b = new QToolButton(page);
         b->setObjectName(QStringLiteral("miniTile"));
         b->setText(label);
-        b->setIcon(FloatingIcons::make(icon, ink, 19));
-        b->setIconSize(QSize(19, 19));
+        b->setIcon(FloatingIcons::make(icon, ink, 20));
+        b->setIconSize(QSize(20, 20));
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        b->setMinimumHeight(54);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        b->setFixedHeight(62);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -625,114 +764,11 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
         if (m_monitor) m_monitor->openKdeModule(QString());
     });
 
-    grid->addWidget(m_nightTile, 0, 0);
-    grid->addWidget(m_powerTile, 0, 1);
-    grid->addWidget(dispTile, 1, 0);
-    grid->addWidget(cfgTile, 1, 1);
-    rightCol->addLayout(grid, 1);
-
-    upper->addLayout(rightCol, 10);
-    v->addLayout(upper);
-
-    // ---- Middle Bento Card: Thick Apple-style Brightness & Volume Capsule Sliders ----
-    auto *sliderCard = new QWidget(page);
-    sliderCard->setObjectName(QStringLiteral("bentoGroup"));
-    auto *sv = new QVBoxLayout(sliderCard);
-    sv->setContentsMargins(12, 10, 12, 12);
-    sv->setSpacing(10);
-
-    // Brightness block
-    m_brightnessBlock = new QWidget(sliderCard);
-    auto *bv = new QVBoxLayout(m_brightnessBlock);
-    bv->setContentsMargins(0, 0, 0, 0);
-    bv->setSpacing(5);
-    auto *bHead = new QHBoxLayout();
-    bHead->setContentsMargins(2, 0, 2, 0);
-    auto *bTag = new QLabel(QStringLiteral("显示器亮度"), m_brightnessBlock);
-    bTag->setObjectName(QStringLiteral("sliderTag"));
-    m_brightnessValLbl = new QLabel(QStringLiteral("70%"), m_brightnessBlock);
-    m_brightnessValLbl->setObjectName(QStringLiteral("sliderVal"));
-    bHead->addWidget(bTag);
-    bHead->addStretch(1);
-    bHead->addWidget(m_brightnessValLbl);
-    bv->addLayout(bHead);
-
-    auto *bRow = new QHBoxLayout();
-    bRow->setSpacing(8);
-    auto *bIcon = new QLabel(m_brightnessBlock);
-    styleCircleBadge(bIcon, FloatingIcons::Sun, QColor(255, 255, 255, 16), QColor("#fcd34d"), 32);
-    bRow->addWidget(bIcon);
-
-    m_brightnessSlider = new CapsuleSlider(QColor("#f8fafc"), m_brightnessBlock);
-    m_brightnessSlider->setRange(1, 100);
-    m_brightnessSlider->setValue(70);
-    bRow->addWidget(m_brightnessSlider, 1);
-    bv->addLayout(bRow);
-
-    m_brightnessDebounce = new QTimer(this);
-    m_brightnessDebounce->setSingleShot(true);
-    m_brightnessDebounce->setInterval(75);
-    m_brightnessSlider->onValueChanged = [this](int val) {
-        m_brightnessValLbl->setText(QStringLiteral("%1%").arg(val));
-        if (m_monitor) m_monitor->updateBrightness(val, true);
-        emit brightnessStateChanged(val);
-        m_brightnessDebounce->start();
-    };
-    connect(m_brightnessDebounce, &QTimer::timeout, this, [this] {
-        DesktopActions::setBrightness(m_brightnessSlider->value());
-    });
-    sv->addWidget(m_brightnessBlock);
-
-    // Volume block
-    auto *vHead = new QHBoxLayout();
-    vHead->setContentsMargins(2, 0, 2, 0);
-    auto *vTag = new QLabel(QStringLiteral("声音音量"), sliderCard);
-    vTag->setObjectName(QStringLiteral("sliderTag"));
-    m_volumeValLbl = new QLabel(QStringLiteral("60%"), sliderCard);
-    m_volumeValLbl->setObjectName(QStringLiteral("sliderVal"));
-    vHead->addWidget(vTag);
-    vHead->addStretch(1);
-    vHead->addWidget(m_volumeValLbl);
-    sv->addLayout(vHead);
-
-    auto *vRow = new QHBoxLayout();
-    vRow->setSpacing(8);
-    m_muteBtn = new QToolButton(sliderCard);
-    m_muteBtn->setObjectName(QStringLiteral("muteBtn"));
-    m_muteBtn->setFixedSize(32, 32);
-    m_muteBtn->setIcon(FloatingIcons::make(FloatingIcons::Volume, QColor("#e2e8f0"), 17));
-    m_muteBtn->setCursor(Qt::PointingHandCursor);
-    connect(m_muteBtn, &QToolButton::clicked, this, [this] {
-        QPointer<SystemPopover> self(this);
-        DesktopActions::toggleMute([self](int vol, bool muted, bool ok) {
-            if (!self || !ok) return;
-            self->applyAudioVisuals(vol, muted, true);
-            emit self->audioStateChanged(vol, muted);
-        });
-    });
-    vRow->addWidget(m_muteBtn);
-
-    m_volumeSlider = new CapsuleSlider(QColor("#7cc8ff"), sliderCard);
-    m_volumeSlider->setRange(0, 100);
-    m_volumeSlider->setValue(60);
-    vRow->addWidget(m_volumeSlider, 1);
-    sv->addLayout(vRow);
-
-    m_volumeDebounce = new QTimer(this);
-    m_volumeDebounce->setSingleShot(true);
-    m_volumeDebounce->setInterval(75);
-    m_volumeSlider->onValueChanged = [this](int val) {
-        m_lastVolume = val;
-        if (m_muted && val > 0) m_muted = false;
-        applyAudioVisuals(val, m_muted, true);
-        emit audioStateChanged(val, m_muted);
-        m_volumeDebounce->start();
-    };
-    connect(m_volumeDebounce, &QTimer::timeout, this, [this] {
-        DesktopActions::setVolume(m_volumeSlider->value());
-    });
-
-    v->addWidget(sliderCard);
+    tilesRow->addWidget(m_nightTile, 1);
+    tilesRow->addWidget(m_powerTile, 1);
+    tilesRow->addWidget(dispTile, 1);
+    tilesRow->addWidget(cfgTile, 1);
+    v->addLayout(tilesRow);
 
     // ---- MPRIS Now Playing Card (Auto-Hidden When Nothing Playing) ----
     m_mprisCard = new QWidget(page);
@@ -1358,21 +1394,17 @@ void SystemPopover::syncHomeFromSnapshot()
 void SystemPopover::applyAudioVisuals(int percent, bool muted, bool supported)
 {
     m_volumeSlider->setEnabled(supported);
-    m_muteBtn->setEnabled(supported);
     if (!supported) {
-        m_volumeValLbl->setText(QStringLiteral("--"));
+        m_volumeSlider->setBadgeText(QStringLiteral("--"));
+        m_volumeSlider->setIcon(FloatingIcons::VolumeMute);
         return;
     }
     m_muted = muted;
     m_lastVolume = qBound(0, percent, 100);
     m_volumeSlider->setValue(m_lastVolume);
     m_volumeSlider->setMutedAppearance(muted);
-    m_muteBtn->setProperty("muted", muted);
-    repolish(m_muteBtn);
-    m_muteBtn->setIcon(FloatingIcons::make(
-        muted ? FloatingIcons::VolumeMute : FloatingIcons::Volume,
-        muted ? QColor("#fda4af") : QColor("#e2e8f0"), 17));
-    m_volumeValLbl->setText(muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(m_lastVolume));
+    m_volumeSlider->setIcon(muted ? FloatingIcons::VolumeMute : FloatingIcons::Volume);
+    m_volumeSlider->setBadgeText(muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(m_lastVolume));
 }
 
 void SystemPopover::syncVolume()
@@ -1391,15 +1423,14 @@ void SystemPopover::syncBrightness()
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     QPointer<SystemPopover> self(this);
     DesktopActions::queryBrightness([self](int pct, bool ok) {
-        if (!self || !self->m_brightnessBlock) return;
-        self->m_brightnessBlock->setVisible(ok);
+        if (!self || !self->m_brightnessSlider) return;
+        self->m_brightnessSlider->setVisible(ok);
         if (ok) {
             const int clamped = qBound(1, pct, 100);
             self->m_brightnessSlider->setValue(clamped);
-            self->m_brightnessValLbl->setText(QStringLiteral("%1%").arg(clamped));
+            self->m_brightnessSlider->setBadgeText(QStringLiteral("%1%").arg(clamped));
             emit self->brightnessStateChanged(clamped);
         }
-        self->adjustSize();
     });
 }
 

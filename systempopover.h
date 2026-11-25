@@ -188,15 +188,11 @@ private:
     QToolButton *m_nightTile = nullptr;
     QToolButton *m_powerTile = nullptr;
 
-    // Home thick capsule sliders
-    QWidget *m_brightnessBlock = nullptr;
+    // Home iOS-style vertical capsule sliders (below DND on upper-right)
     CapsuleSlider *m_brightnessSlider = nullptr;
-    QLabel *m_brightnessValLbl = nullptr;
     QTimer *m_brightnessDebounce = nullptr;
 
-    QToolButton *m_muteBtn = nullptr;
     CapsuleSlider *m_volumeSlider = nullptr;
-    QLabel *m_volumeValLbl = nullptr;
     QTimer *m_volumeDebounce = nullptr;
     bool m_muted = false;
     int m_lastVolume = 50;
