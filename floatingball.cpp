@@ -515,13 +515,18 @@ void RadialFanOverlay::recomputeFanLayout()
     const double dir0 = reverseSweep ? -1.0 : 1.0;
 
     // ------------------------------------------------------------------------
-    // Linux Duo-Orb Root Layout: Clean 4 Virtual Desktops (Inner) + 5 Drill Hubs (Outer)
+    // Duo-Orb Root Layout (Linux & macOS): Clean 4 Inner Orbs + 5 Drill Hubs (Outer)
     // Total: ONLY 9 spacious orbs! Zero clutter; press-drag into any › hub to drill!
     // ------------------------------------------------------------------------
-#ifdef Q_OS_LINUX
-    if (m_owner->statusOrbMode() &&
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    const bool useDuoHubRoot = m_owner->statusOrbMode() &&
         !m_owner->orbitActions().isEmpty() &&
-        m_owner->orbitActions().first().startsWith(QLatin1String("vdesk"))) {
+#ifdef Q_OS_LINUX
+        m_owner->orbitActions().first().startsWith(QLatin1String("vdesk"));
+#else
+        (m_owner->orbitActions() == FloatingBall::defaultOrbitActions());
+#endif
+    if (useDuoHubRoot) {
         const qreal prog = qBound(0.0, m_progress, 1.0);
         const qreal dInner = qBound(40.0, 46.0 * scale, 50.0);
         const qreal dOuter = qBound(42.0, 48.0 * scale, 52.0);
@@ -536,7 +541,13 @@ void RadialFanOverlay::recomputeFanLayout()
         const double outerStart = reverseSweep ? (centerDeg + outerSpan * 0.5) : (centerDeg - outerSpan * 0.5);
         const double dir = reverseSweep ? -1.0 : 1.0;
 
-        static const char *kDeskIds[4]{"vdesk1", "vdesk2", "vdesk3", "vdesk4"};
+#ifdef Q_OS_LINUX
+        static const char *kInnerIds[4]{"vdesk1", "vdesk2", "vdesk3", "vdesk4"};
+        static const char *kInnerShort[4]{"", "", "", ""};
+#else
+        static const char *kInnerIds[4]{"overview", "minimize_all", "crosshair", "ime"};
+        static const char *kInnerShort[4]{"调度", "全收", "截图", "中/英"};
+#endif
         const qreal d0Anim = (m_mode == FlickFanMode) ? dInner : (dInner * (0.35 + 0.65 * prog));
         for (int i = 0; i < 4; ++i) {
             const double deg = innerStart + dir * innerStep * i;
@@ -545,8 +556,9 @@ void RadialFanOverlay::recomputeFanLayout()
             RadialSlotItem item;
             item.kind = RadialSlotItem::ActionSlot;
             item.ringIndex = 0;
-            item.id = QString::fromLatin1(kDeskIds[i]);
+            item.id = QString::fromLatin1(kInnerIds[i]);
             item.label = m_owner->actionLabel(item.id);
+            item.shortLabel = QString::fromUtf8(kInnerShort[i]);
             item.centerGlobal = (m_mode == FlickFanMode)
                 ? finalCenter
                 : (m_ballCenterGlobal + (finalCenter - m_ballCenterGlobal) * prog);
@@ -563,6 +575,7 @@ void RadialFanOverlay::recomputeFanLayout()
             const char *drillTitle;
             const char *color;
         };
+#ifdef Q_OS_LINUX
         static const RootHubDef kRootHubs[5]{
             {"launcher",  "开始",   "",        "",     "#7cc8ff"},
             {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
@@ -570,6 +583,15 @@ void RadialFanOverlay::recomputeFanLayout()
             {"sys_hub",   "控制",   "",        "",     "#9aa8ff"},
             {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
         };
+#else
+        static const RootHubDef kRootHubs[5]{
+            {"launcher",  "开始",   "",        "",     "#7cc8ff"},
+            {"win_hub",   "窗口 ›", "windows", "窗口", "#38bdf8"},
+            {"clipboard", "剪贴板", "",        "",     "#66d9ff"},
+            {"sys_hub",   "控制",   "",        "",     "#9aa8ff"},
+            {"tools_hub", "工具 ›", "tools",   "工具", "#86e0b8"}
+        };
+#endif
         const qreal outerProg = (m_mode == FlickFanMode) ? 1.0 : qBound(0.0, (prog - 0.08) / 0.92, 1.0);
         const qreal d1Anim = (m_mode == FlickFanMode) ? dOuter : (dOuter * (0.35 + 0.65 * outerProg));
         const QRectF safeOuter = QRectF(bounds).adjusted(dOuter * 0.5 + 4, dOuter * 0.5 + 4,
@@ -2005,6 +2027,7 @@ const QStringList &FloatingBall::availableActions()
         QStringLiteral("copy"),
         QStringLiteral("record"),
         QStringLiteral("desktop"),
+        QStringLiteral("minimize_all"),
         QStringLiteral("ime"),
         QStringLiteral("terminal"),
         QStringLiteral("browser"),
@@ -2028,6 +2051,14 @@ QStringList FloatingBall::defaultOrbitActions()
         QStringLiteral("vdesk2"),
         QStringLiteral("vdesk3"),
         QStringLiteral("vdesk4"),
+        QStringLiteral("deck")
+    };
+#elif defined(Q_OS_MACOS)
+    return {
+        QStringLiteral("overview"),
+        QStringLiteral("minimize_all"),
+        QStringLiteral("crosshair"),
+        QStringLiteral("ime"),
         QStringLiteral("deck")
     };
 #else
@@ -2377,12 +2408,25 @@ void FloatingBall::loadPreferences()
     }
     m_ringCount = qBound(kMinRingCount, savedRings, kMaxRingCount);
     m_dockModeEnabled = s.value("ball/dockModeEnabled", true).toBool();
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     const bool defaultStatusOrb = true;
 #else
     const bool defaultStatusOrb = false;
 #endif
+#ifdef Q_OS_MACOS
+    if (layoutVersion < 3) {
+        // Upgrade macOS legacy flat 3-ring settings to the 2026 Duo Status Orb + 2-Ring Hub layout
+        m_orbitActions = defaultOrbitActions();
+        m_statusOrbMode = true;
+        s.setValue("ball/quickFanActions", m_orbitActions);
+        s.setValue("ball/statusOrbMode", true);
+        s.setValue("ball/ringLayoutVersion", 3);
+    } else {
+        m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
+    }
+#else
     m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
+#endif
     m_multiScreenEnabled = s.value("ball/multiScreenEnabled", true).toBool();
     m_preferredDiameter = qBound(qreal(kMinDiameter), s.value("ball/diameter", m_statusOrbMode ? 60.0 : 56.0).toReal(), qreal(kMaxDiameter));
     m_idleOpacity = qBound(0.15, s.value("ball/idleOpacity", 0.38).toReal(), 1.0);
@@ -2407,7 +2451,11 @@ void FloatingBall::savePreferences()
     QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
     s.setValue("ball/quickFanActions", m_orbitActions);
     s.setValue("ball/ringCount", m_ringCount);
+#ifdef Q_OS_MACOS
+    s.setValue("ball/ringLayoutVersion", 3);
+#else
     s.setValue("ball/ringLayoutVersion", 2);
+#endif
     s.setValue("ball/dockModeEnabled", m_dockModeEnabled);
     s.setValue("ball/statusOrbMode", m_statusOrbMode);
     s.setValue("ball/multiScreenEnabled", m_multiScreenEnabled);

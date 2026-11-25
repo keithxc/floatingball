@@ -566,6 +566,13 @@ void SystemStatusMonitor::pollSlowMetrics()
     SystemStatusSnapshot next = m_snapshot;
     SystemStatusMac::populateSnapshot(&next);
     emitIfChanged(next);
+    QPointer<SystemStatusMonitor> self(this);
+    DesktopActions::queryVolume([self](int pct, bool muted, bool ok) {
+        if (self) self->updateAudio(pct, muted, ok);
+    });
+    DesktopActions::queryBrightness([self](int pct, bool ok) {
+        if (self) self->updateBrightness(pct, ok);
+    });
 #endif
 }
 
