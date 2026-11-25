@@ -957,34 +957,6 @@ QWidget *SystemPopover::buildHotspotPage(QWidget *parent)
     }
     cv->addLayout(secRow);
 
-    // Band pills: 2.4GHz (default rock-solid) vs 5GHz
-    auto *bandRow = new QHBoxLayout();
-    bandRow->setSpacing(6);
-    auto *bandLbl = new QLabel(QStringLiteral("无线频段"), cfgCard);
-    bandLbl->setObjectName(QStringLiteral("sliderTag"));
-    bandLbl->setFixedWidth(56);
-    bandRow->addWidget(bandLbl);
-    static const char *kBandLabels[2]{"2.4 GHz (稳)", "5 GHz"};
-    for (int i = 0; i < 2; ++i) {
-        auto *b = new QToolButton(cfgCard);
-        b->setObjectName(QStringLiteral("modeBtn"));
-        b->setText(QString::fromUtf8(kBandLabels[i]));
-        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        b->setMinimumHeight(30);
-        b->setCursor(Qt::PointingHandCursor);
-        const bool want5g = (i == 1);
-        connect(b, &QToolButton::clicked, this, [this, want5g] {
-            if (m_hsBand5G == want5g) return;
-            m_hsBand5G = want5g;
-            saveHotspotPrefs();
-            rebuildHotspotView();
-            if (m_hsActive) applyHotspotConfig(true);
-        });
-        bandRow->addWidget(b);
-        m_hsBandBtns[i] = b;
-    }
-    cv->addLayout(bandRow);
-
     // Apply button (saves SSID/Password and restarts AP if active)
     auto *applyBtn = new QToolButton(cfgCard);
     applyBtn->setObjectName(QStringLiteral("footBtn"));
@@ -2250,7 +2222,6 @@ void SystemPopover::loadHotspotPrefs()
         s.setValue(QStringLiteral("hotspot/password"), m_hsPassword);
     }
     m_hsUseWpa3 = s.value(QStringLiteral("hotspot/wpa3"), true).toBool();
-    m_hsBand5G = s.value(QStringLiteral("hotspot/band5g"), false).toBool();
 }
 
 void SystemPopover::saveHotspotPrefs()
@@ -2259,7 +2230,6 @@ void SystemPopover::saveHotspotPrefs()
     s.setValue(QStringLiteral("hotspot/ssid"), m_hsSsid);
     s.setValue(QStringLiteral("hotspot/password"), m_hsPassword);
     s.setValue(QStringLiteral("hotspot/wpa3"), m_hsUseWpa3);
-    s.setValue(QStringLiteral("hotspot/band5g"), m_hsBand5G);
 }
 
 void SystemPopover::refreshHotspot()
@@ -2285,6 +2255,7 @@ void SystemPopover::refreshHotspot()
         QStringList upstreams;
         bool apActive = false;
         QString apSsid;
+        QString apBand;
         QHash<QString, QString> macToHost;
         QList<HotspotClient> clients;
 
@@ -2317,6 +2288,10 @@ void SystemPopover::refreshHotspot()
                     apActive = (line.mid(5).trimmed() == QLatin1String("ap"));
                 } else if (line.startsWith(QLatin1String("SSID="))) {
                     apSsid = line.mid(5).trimmed();
+                } else if (line.startsWith(QLatin1String("BAND="))) {
+                    const QString b = line.mid(5).trimmed();
+                    if (b == QLatin1String("a")) apBand = QStringLiteral("5GHz");
+                    else if (b == QLatin1String("bg")) apBand = QStringLiteral("2.4GHz");
                 }
             } else if (section == 2) {
                 // dnsmasq lease: <ts> <mac> <ip> <hostname> <clientid>
@@ -2347,6 +2322,7 @@ void SystemPopover::refreshHotspot()
         self->m_hsUpstreamSummary = upstreams.join(QStringLiteral(" + "));
         self->m_hsActive = apActive;
         if (apActive && !apSsid.isEmpty()) self->m_hsSsid = apSsid;
+        self->m_hsActiveBand = apActive ? apBand : QString();
         self->m_hsClients = apActive ? clients : QList<HotspotClient>{};
         self->rebuildHotspotView();
         self->syncHomeFromSnapshot();
@@ -2362,6 +2338,7 @@ void SystemPopover::refreshHotspot()
                      "if [ -n \"$ACTIVE_CON\" ]; then "
                      "  echo \"MODE=$(nmcli -g 802-11-wireless.mode connection show \"$ACTIVE_CON\" 2>/dev/null)\"; "
                      "  echo \"SSID=$(nmcli -g 802-11-wireless.ssid connection show \"$ACTIVE_CON\" 2>/dev/null)\"; "
+                     "  echo \"BAND=$(nmcli -g 802-11-wireless.band connection show \"$ACTIVE_CON\" 2>/dev/null)\"; "
                      "fi; "
                      "echo '---LEASES---'; "
                      "[ -n \"$WIFI_DEV\" ] && [ -r \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" ] && cat \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" || true; "
@@ -2384,10 +2361,10 @@ void SystemPopover::rebuildHotspotView()
     repolish(m_hsPowerBtn);
 
     const QString secTxt = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
-    const QString bandTxt = m_hsBand5G ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz");
     QString summary;
     if (m_hsActive) {
-        summary = QStringLiteral("运行中 · %1 (%2 / %3)").arg(m_hsSsid, secTxt, bandTxt);
+        const QString bandPart = m_hsActiveBand.isEmpty() ? QString() : (QStringLiteral(" / ") + m_hsActiveBand);
+        summary = QStringLiteral("运行中 · %1 (%2%3)").arg(m_hsSsid, secTxt, bandPart);
         if (m_hsHasUpstream) summary += QStringLiteral("\n共享上游: %1").arg(m_hsUpstreamSummary);
     } else if (m_hsHasUpstream) {
         summary = QStringLiteral("就绪 · 共享上游: %1").arg(m_hsUpstreamSummary);
@@ -2404,12 +2381,6 @@ void SystemPopover::rebuildHotspotView()
         m_hsSecBtns[1]->setProperty("active", !m_hsUseWpa3);
         repolish(m_hsSecBtns[0]);
         repolish(m_hsSecBtns[1]);
-    }
-    if (m_hsBandBtns[0] && m_hsBandBtns[1]) {
-        m_hsBandBtns[0]->setProperty("active", !m_hsBand5G);
-        m_hsBandBtns[1]->setProperty("active", m_hsBand5G);
-        repolish(m_hsBandBtns[0]);
-        repolish(m_hsBandBtns[1]);
     }
 
     clearLayout(m_hsClientsLayout);
@@ -2507,7 +2478,6 @@ void SystemPopover::startHotspotAsync()
     env.insert(QStringLiteral("FB_HS_CON"), QStringLiteral("FloatingBall-Hotspot"));
     env.insert(QStringLiteral("FB_HS_SSID"), m_hsSsid);
     env.insert(QStringLiteral("FB_HS_PSK"), m_hsPassword);
-    env.insert(QStringLiteral("FB_HS_BAND"), m_hsBand5G ? QStringLiteral("a") : QStringLiteral("bg"));
     env.insert(QStringLiteral("FB_HS_SEC"), m_hsUseWpa3 ? QStringLiteral("sae") : QStringLiteral("wpa-psk"));
     proc->setProcessEnvironment(env);
 
@@ -2519,25 +2489,20 @@ void SystemPopover::startHotspotAsync()
         proc->deleteLater();
         if (!self) return;
         self->m_hsBusy = false;
-        const bool fellBack24 = out.contains(QLatin1String("FB_FALLBACK_24G"));
-        if (fellBack24) {
-            self->m_hsBand5G = false;
-            self->saveHotspotPrefs();
-        }
+        const bool active5g = out.contains(QLatin1String("FB_BAND_5G"));
         const QString sec = self->m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
         if (st == QProcess::NormalExit && code == 0) {
             self->m_hsActive = true;
-            const QString msg = fellBack24
-                ? QStringLiteral("✓ 网卡固件禁用 5GHz AP，已自动切 2.4GHz 开启热点 · %1 (%2)").arg(self->m_hsSsid, sec)
-                : QStringLiteral("✓ 热点已开启 · %1 (%2 / %3)")
-                      .arg(self->m_hsSsid, sec, self->m_hsBand5G ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz"));
+            self->m_hsActiveBand = active5g ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz");
+            const QString msg = QStringLiteral("✓ 热点已开启 · %1 (%2 / %3)")
+                .arg(self->m_hsSsid, sec, self->m_hsActiveBand);
             self->showStatusBanner(msg);
             if (!self->isVisible()) DesktopActions::showToast(msg, self->geometry().center());
         } else {
             QString msg = err.isEmpty() ? out : err;
             if (msg.size() > 80) msg = msg.left(80) + QStringLiteral("…");
             const QString fullErr = QStringLiteral("开启热点失败: %1")
-                .arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡/频段") : msg);
+                .arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡状态") : msg);
             self->showStatusBanner(fullErr, true);
             if (!self->isVisible()) DesktopActions::showToast(fullErr, self->geometry().center());
         }
@@ -2546,9 +2511,8 @@ void SystemPopover::startHotspotAsync()
     });
 
     // Safe env-driven NM WPA3-SAE / WPA2-PSK shared AP startup:
-    // Enables Wi-Fi radio if off, creates clean profile with mandatory RSN/CCMP/PMF=3
-    // for WPA3-SAE, and automatically falls back from 5GHz -> 2.4GHz when Wi-Fi firmware
-    // (such as Intel AX210 LAR) disallows 5GHz AP radiation.
+    // Automatically prefers 5GHz first and seamlessly falls back to 2.4GHz
+    // when Wi-Fi firmware (such as Intel LAR) disallows 5GHz AP radiation.
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
@@ -2575,15 +2539,13 @@ void SystemPopover::startHotspotAsync()
                      "      wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
                      "  fi; "
                      "}; "
-                     "create_ap \"$FB_HS_BAND\"; "
-                     "if ! nmcli -w 12 connection up \"$FB_HS_CON\"; then "
-                     "  if [ \"$FB_HS_BAND\" = \"a\" ]; then "
-                     "    echo 'FB_FALLBACK_24G'; "
-                     "    create_ap bg; "
-                     "    nmcli -w 15 connection up \"$FB_HS_CON\"; "
-                     "  else "
-                     "    exit 1; "
-                     "  fi; "
+                     "create_ap a; "
+                     "if nmcli -w 6 connection up \"$FB_HS_CON\" >/dev/null 2>&1; then "
+                     "  echo 'FB_BAND_5G'; "
+                     "else "
+                     "  create_ap bg; "
+                     "  nmcli -w 15 connection up \"$FB_HS_CON\"; "
+                     "  echo 'FB_BAND_24G'; "
                      "fi")});
 #endif
 }

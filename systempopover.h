@@ -221,8 +221,7 @@ private:
     QLineEdit *m_hsSsidEdit = nullptr;
     QLineEdit *m_hsPassEdit = nullptr;
     QToolButton *m_hsEyeBtn = nullptr;
-    QToolButton *m_hsSecBtns[2]{};  // 0 = WPA3 (sae), 1 = WPA2 (wpa-psk)
-    QToolButton *m_hsBandBtns[2]{}; // 0 = 2.4GHz (bg), 1 = 5GHz (a)
+    QToolButton *m_hsSecBtns[2]{}; // 0 = WPA3 (sae), 1 = WPA2 (wpa-psk)
     QVBoxLayout *m_hsClientsLayout = nullptr;
     QString m_hsWifiDev;
     QString m_hsUpstreamSummary;
@@ -232,7 +231,7 @@ private:
     QString m_hsSsid;
     QString m_hsPassword;
     bool m_hsUseWpa3 = true; // default WPA3-Personal (SAE)
-    bool m_hsBand5G = false; // default 2.4GHz (reliable on Intel AX210 LAR)
+    QString m_hsActiveBand;  // "5GHz" or "2.4GHz" (auto 5GHz-first with 2.4GHz fallback)
     QList<HotspotClient> m_hsClients;
 
     // Bluetooth subpage widgets
