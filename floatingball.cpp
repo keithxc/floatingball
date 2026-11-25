@@ -699,7 +699,7 @@ void RadialFanOverlay::recomputeFanLayout()
     while (outerDiameter > 22.5) {
         const qreal halfD = outerDiameter * 0.5;
         const qreal stepR = outerDiameter * 0.95 + qMax(4.2, 6.0 * scale);
-        const qreal firstGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(6.0, 9.0 * scale);
+        const qreal firstGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(14.0, 18.0 * scale);
         const QRectF safe = QRectF(bounds).adjusted(halfD + 5.0, halfD + 5.0, -halfD - 5.0, -halfD - 5.0);
         int estCap = 0;
         for (int r = 1; r <= 36 && estCap < totalWins; ++r) {
@@ -721,7 +721,7 @@ void RadialFanOverlay::recomputeFanLayout()
 
     const qreal halfItem = outerDiameter * 0.5;
     const qreal ringStep = outerDiameter * 0.95 + qMax(4.2, 6.0 * scale);
-    const qreal firstRingGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(6.0, 9.0 * scale);
+    const qreal firstRingGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(14.0, 18.0 * scale);
     const QRectF safeBounds = QRectF(bounds).adjusted(halfItem + 5.0, halfItem + 5.0,
                                                       -halfItem - 5.0, -halfItem - 5.0);
 
@@ -870,101 +870,63 @@ QList<qreal> RadialFanOverlay::computeAttentionAnglesRad()
 
 QString RadialFanOverlay::activeLabelText() const
 {
-    if (m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
-        const RadialSlotItem &item = m_slots[m_highlightedSlot];
-        QString text = item.label;
-        if (item.kind == RadialSlotItem::AppSlot) {
-            if (item.app.demandsAttention) text += QStringLiteral(" · 🔴 有新消息");
-            else if (item.app.active) text += QStringLiteral(" · 当前前台");
-            else if (item.app.minimized) text += QStringLiteral(" · 已最小化");
-            if (m_mode == TapFanMode) text += QStringLiteral("  [左键切换 · 中键关闭]");
-        } else if (item.kind == RadialSlotItem::TraySlot) {
-            if (item.id != QLatin1String("tray:empty")) {
-                text += (item.trayItem.menuPath.isEmpty() || item.trayItem.menuPath == QLatin1String("/NO_DBUSMENU"))
-                    ? QStringLiteral(" · 左键/松手单击激活")
-                    : QStringLiteral(" · 左键/松手激活 / 右键或长停菜单");
-            }
-        } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
-            text = item.trayItem.title + QStringLiteral(" › ") + item.label;
-        } else if (item.kind == RadialSlotItem::SystemSlot) {
-            if (item.id == QLatin1String("sys_wifi") || item.id == QLatin1String("sys_bluetooth"))
-                text += QStringLiteral(" · 松手开小窗 / 右键进 KDE 设置");
-            else if (item.id == QLatin1String("sys_mihomo"))
-                text += QStringLiteral(" · 松手开小窗 / 右键开 Web UI");
-            else if (item.id == QLatin1String("sys_dnd") || item.id == QLatin1String("sys_power") ||
-                     item.id == QLatin1String("sys_audio"))
-                text += QStringLiteral(" · 右键更多设置");
-        } else if (item.id == QLatin1String("sys_hub")) {
-            text += QStringLiteral(" · 松手/点按打开控制中心 / 右键 KDE 设置");
-        } else if (item.isBranchHub) {
-            text += QStringLiteral(" · 划入或点按进入");
-        } else if (item.id == QLatin1String("launcher")) {
-            text += QStringLiteral(" · 松手/点按应用启动器 / 右键 KRunner");
-        }
-        return text;
+    // Strictly show text ONLY when pointing/hovering/sliding onto a specific orb!
+    if (m_highlightedSlot < 0 || m_highlightedSlot >= m_slots.size()) {
+        return {};
     }
-    if (!m_drillStack.isEmpty()) {
-        QStringList crumbs{QStringLiteral("主球")};
-        for (const DrillFrame &f : m_drillStack) crumbs.append(f.title);
-        return crumbs.join(QStringLiteral(" › ")) + QStringLiteral(" · 划回 ← 退回上层");
+    const RadialSlotItem &item = m_slots[m_highlightedSlot];
+    QString text = item.label;
+    if (item.kind == RadialSlotItem::AppSlot) {
+        if (item.app.demandsAttention) text += QStringLiteral(" · 🔴 新消息");
+        else if (item.app.active) text += QStringLiteral(" · 当前");
+        else if (item.app.minimized) text += QStringLiteral(" · 最小化");
+    } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
+        text = item.trayItem.title + QStringLiteral(" › ") + item.label;
+    } else if (item.isBranchHub && !text.endsWith(QStringLiteral("›"))) {
+        text += QStringLiteral(" ›");
     }
-    if (m_mode == FlickFanMode) {
-        return QStringLiteral("松手取消 · 划进带 › 入口可钻取，随时划回 ← 返回");
-    }
-    if (m_mode == TapFanMode && m_owner && m_owner->statusOrbMode()) {
-        const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
-        QStringList parts;
-        parts.append(QTime::currentTime().toString(QStringLiteral("HH:mm")));
-        if (st.batteryPresent)
-            parts.append(QStringLiteral("%1%%2").arg(st.batteryPercent).arg(st.batteryPluggedIn ? QStringLiteral("⚡") : QString()));
-        if (!st.networkText.isEmpty())
-            parts.append(st.networkText);
-        if (st.inputPresent && !st.inputDescription.isEmpty())
-            parts.append(st.inputDescription);
-        if (st.unreadNotifications > 0)
-            parts.append(QStringLiteral("新通知 %1").arg(st.unreadNotifications));
-        else if (st.trayNeedsAttention)
-            parts.append(st.lastNotificationSummary.isEmpty() ? QStringLiteral("有新消息") : st.lastNotificationSummary);
-        return parts.join(QStringLiteral(" · "));
-    }
-    return {};
+    return text;
 }
 
 QRectF RadialFanOverlay::labelPillRectLocal() const
 {
-    const QString text = activeLabelText();
-    if (text.isEmpty() || m_slots.isEmpty()) return {};
+    const QString rawText = activeLabelText();
+    if (rawText.isEmpty() || m_slots.isEmpty() ||
+        m_highlightedSlot < 0 || m_highlightedSlot >= m_slots.size()) {
+        return {};
+    }
 
     QFont f = font();
     f.setPointSize(12);
     f.setWeight(QFont::DemiBold);
     const QFontMetrics fm(f);
+    const int maxTextW = qMax(120, qMin(width() - 56, 420));
+    const QString text = fm.elidedText(rawText, Qt::ElideMiddle, maxTextW);
     const int pw = qMin(width() - 20, fm.horizontalAdvance(text) + 28);
     const QPointF origin = geometry().topLeft();
 
-    // In FlickFanMode on touchscreen, float the title pill 54px ABOVE the finger so
-    // the user's hand never blocks the window caption!
-    if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
+    if (m_mode == FlickFanMode) {
         const QPointF fingerLocal = m_fingerGlobal - origin;
         const qreal aboveY = fingerLocal.y() > 64.0 ? (fingerLocal.y() - 56.0) : (fingerLocal.y() + 34.0);
         return QRectF(qBound(8.0, fingerLocal.x() - pw * 0.5, width() - pw - 8.0),
                       qBound(8.0, aboveY, height() - 38.0),
                       pw, 32.0);
     }
-
-    QRectF fanGroup(m_ballCenterGlobal - origin, QSizeF(1, 1));
-    for (const RadialSlotItem &s : m_slots) fanGroup = fanGroup.united(s.rectGlobal.translated(-origin));
-
-    const qreal py = fanGroup.top() > 48.0 ? (fanGroup.top() - 40.0) : (fanGroup.bottom() + 10.0);
-    return QRectF(qBound(8.0, fanGroup.center().x() - pw * 0.5, width() - pw - 8.0),
-                  qBound(8.0, py, height() - 38.0),
+    const QRectF slotLocal = m_slots[m_highlightedSlot].rectGlobal.translated(-origin);
+    const qreal aboveY = slotLocal.top() > 44.0 ? (slotLocal.top() - 36.0) : (slotLocal.bottom() + 8.0);
+    return QRectF(qBound(8.0, slotLocal.center().x() - pw * 0.5, width() - pw - 8.0),
+                  qBound(8.0, aboveY, height() - 38.0),
                   pw, 32.0);
 }
 
 void RadialFanOverlay::updateHitMask()
 {
+    winId();
     if (m_mode == TapFanMode) {
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
+        if (windowHandle()) {
+            windowHandle()->setFlag(Qt::WindowTransparentForInput, false);
+        }
 #ifdef Q_OS_MACOS
         // On macOS, a global non-consuming NSEvent monitor dismisses the fan on
         // outside clicks without swallowing the user's click on desktop windows.
@@ -981,14 +943,20 @@ void RadialFanOverlay::updateHitMask()
         }
         setMask(region);
 #else
-        // On Wayland/Linux/Windows where non-root clients cannot monitor clicks
-        // on external surfaces, clicking anywhere outside a slot on this full-
-        // screen overlay cleanly dismisses the expanded fan.
         clearMask();
 #endif
     } else {
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        // Critical on Wayland (LayerShellQt): WA_TransparentForMouseEvents alone only applies
+        // within a widget hierarchy; WindowTransparentForInput sets an empty wl_surface input
+        // region so mapping RadialFanOverlay in FlickFanMode NEVER steals FloatingBall's grab!
+        if (windowHandle()) {
+            windowHandle()->setFlag(Qt::WindowTransparentForInput, false);
+            windowHandle()->setFlag(Qt::WindowTransparentForInput, true);
+        }
+#ifdef Q_OS_MACOS
         clearMask();
+#endif
     }
 }
 
@@ -1041,12 +1009,19 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     }
 
     const QLineF ray(m_ballCenterGlobal, globalPt);
-    if (ray.length() < 26.0) return -1;
+    const qreal dist = ray.length();
+    if (dist < 26.0) return -1;
+
+    // Once the finger/cursor slides past the Ring 0 / Ring 1 midpoint in magnetic slide mode,
+    // cleanly release Ring 0 so outward swipes NEVER stick to first-level buttons!
+    const bool pastRing0 = magneticSector && m_ringRadii.size() >= 2 &&
+        dist >= ((m_ringRadii[0] + m_ringRadii[1]) * 0.5 - 5.0);
 
     int directBest = -1;
     qreal directBestDist = 1e9;
     for (int i = 0; i < m_slots.size(); ++i) {
-        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 7.0;
+        if (pastRing0 && m_slots[i].ringIndex == 0) continue;
+        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 6.0;
         const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
         if (d <= hitR && d < directBestDist) {
             directBestDist = d;
@@ -1056,26 +1031,33 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     if (directBest >= 0) return directBest;
     if (!magneticSector) return -1;
 
-    // Multi-ring magnetic sector hit at Root in FlickFanMode
-    const qreal dist = ray.length();
+    // Multi-ring magnetic hit at Root:
+    // - Inside Ring 0: angular sector match on the 5 fixed buttons.
+    // - Past Ring 0: 2D Euclidean Voronoi snap across all outer-ring open windows (ringIndex >= 1),
+    //   so partially filled outer rings never create dead zones and Ring 0 never pulls back!
     if (dist > m_outermostRadius + 40.0) return -1;
 
-    int targetRing = 0;
-    qreal bestRingDelta = 1e9;
-    for (int r = 0; r < m_ringRadii.size(); ++r) {
-        const qreal delta = qAbs(dist - m_ringRadii[r]);
-        if (delta < bestRingDelta) {
-            bestRingDelta = delta;
-            targetRing = r;
+    if (pastRing0) {
+        int nearestWin = -1;
+        qreal nearestDist = 1e9;
+        for (int i = 0; i < m_slots.size(); ++i) {
+            if (m_slots[i].ringIndex < 1) continue;
+            const qreal maxSnap = qMax(48.0, m_slots[i].rectGlobal.width() * 1.18);
+            const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
+            if (d <= maxSnap && d < nearestDist) {
+                nearestDist = d;
+                nearestWin = i;
+            }
         }
+        return nearestWin;
     }
 
     const double fingerDeg = qRadiansToDegrees(qAtan2(globalPt.y() - m_ballCenterGlobal.y(),
                                                       globalPt.x() - m_ballCenterGlobal.x()));
     int bestSlot = -1;
-    double bestDiff = (targetRing == 0) ? 34.0 : 26.0;
+    double bestDiff = 34.0;
     for (int i = 0; i < m_slots.size(); ++i) {
-        if (m_slots[i].ringIndex != targetRing) continue;
+        if (m_slots[i].ringIndex != 0) continue;
         const QPointF c = m_slots[i].centerGlobal;
         const double slotDeg = qRadiansToDegrees(qAtan2(c.y() - m_ballCenterGlobal.y(),
                                                         c.x() - m_ballCenterGlobal.x()));
@@ -1176,17 +1158,13 @@ void RadialFanOverlay::handleContinuousDragAt(const QPointF &globalPt)
         }
     }
 
+    // 2. NEVER auto-expand Ring 0 › sub-balls (托盘 › / 工具 ›) during a slide!
+    //    Ring 0 sits directly along the swipe path to all outer-ring open windows; sub-balls
+    //    only open when explicitly clicked (TapFanMode) or released upon (FlickFanMode).
     const int hit = hitSlotAtGlobal(globalPt, true);
     if (hit >= 0 && hit < m_slots.size()) {
         const RadialSlotItem &s = m_slots[hit];
-        // 2. Instant drill-in when finger slides onto a › hub orb!
-        if (!s.drillKey.isEmpty() && cooled) {
-            QString title = s.shortLabel;
-            title.remove(QStringLiteral(" ›")).remove(QStringLiteral("›"));
-            drillInto(s.drillKey, title.trimmed(), s.accentColor, s.centerGlobal);
-            return;
-        }
-        // 3. Optional Level-3 Tray DBusMenu dwell (hold 380ms on a tray orb with menuPath)
+        // Optional Level-3 Tray DBusMenu dwell (hold 850ms on a tray orb with menuPath)
         if (s.kind == RadialSlotItem::TraySlot && !s.trayItem.menuPath.isEmpty() &&
             s.trayItem.menuPath != QLatin1String("/NO_DBUSMENU") &&
             (!m_drillStack.isEmpty() && m_drillStack.last().key == QLatin1String("tray"))) {
@@ -1213,6 +1191,7 @@ void RadialFanOverlay::openTapFan()
     recomputeFanLayout();
     updateHitMask();
     show();
+    updateHitMask();
     raise();
     update();
 }
@@ -1228,6 +1207,7 @@ void RadialFanOverlay::openFlickFan(const QPointF &fingerGlobal)
     m_highlightedSlot = hitSlotAtGlobal(fingerGlobal, true);
     updateHitMask();
     show();
+    updateHitMask();
     raise();
     update();
 }
@@ -1240,6 +1220,7 @@ void RadialFanOverlay::enterCrosshairAim(const QPointF &fingerGlobal, qreal dwel
     m_highlightedSlot = -1;
     updateHitMask();
     show();
+    updateHitMask();
     raise();
     update();
 }
@@ -1252,6 +1233,7 @@ void RadialFanOverlay::updateCrosshairRect(const QPointF &anchorGlobal, const QP
     m_highlightedSlot = -1;
     updateHitMask();
     show();
+    updateHitMask();
     raise();
     update();
 }
@@ -1306,6 +1288,20 @@ QPointF RadialFanOverlay::pointerGlobalPos(const QPointF &localPos, const QPoint
 
 bool RadialFanOverlay::event(QEvent *ev)
 {
+    // Safety net on Wayland: if compositor routes touch updates/ends to RadialFanOverlay
+    // while m_owner is in FlickFan/Crosshair, forward straight to m_owner so drags never stall!
+    if (m_mode != TapFanMode && m_mode != HiddenMode && m_owner &&
+        (ev->type() == QEvent::TouchUpdate || ev->type() == QEvent::TouchEnd)) {
+        auto *te = static_cast<QTouchEvent *>(ev);
+        if (!te->points().isEmpty()) {
+            const auto &pt = te->points().first();
+            const QPointF globalPt = pointerGlobalPos(pt.position(), pt.globalPosition());
+            if (ev->type() == QEvent::TouchUpdate) m_owner->updatePointerInteraction(globalPt);
+            else m_owner->endPointerInteraction(globalPt);
+            return true;
+        }
+    }
+
     if (m_mode == TapFanMode &&
         (ev->type() == QEvent::TouchBegin || ev->type() == QEvent::TouchUpdate ||
          ev->type() == QEvent::TouchEnd)) {
@@ -1314,16 +1310,19 @@ bool RadialFanOverlay::event(QEvent *ev)
             const auto &pt = te->points().first();
             const QPointF globalPt = pointerGlobalPos(pt.position(), pt.globalPosition());
             const int slot = hitSlotAtGlobal(globalPt, false);
-            if (ev->type() == QEvent::TouchBegin && slot < 0) {
-                emit dismissedByUser();
-                return true;
-            }
+            const qreal distFromBall = QLineF(m_ballCenterGlobal, globalPt).length();
             if (ev->type() == QEvent::TouchBegin) {
+                if (slot < 0 && distFromBall > m_outermostRadius + 28.0) {
+                    emit dismissedByUser();
+                    return true;
+                }
+                m_tapPressGlobal = globalPt;
+                m_tapDragged = false;
                 m_highlightedSlot = slot;
                 updateHitMask();
                 update();
             } else if (ev->type() == QEvent::TouchUpdate) {
-                // Continuous touch-drag even from Tap mode supports drill-in & backtrack!
+                if (QLineF(globalPt, m_tapPressGlobal).length() >= 8.0) m_tapDragged = true;
                 handleContinuousDragAt(globalPt);
                 const int refreshedSlot = hitSlotAtGlobal(globalPt, true);
                 if (refreshedSlot != m_highlightedSlot) {
@@ -1333,9 +1332,12 @@ bool RadialFanOverlay::event(QEvent *ev)
                 }
             } else if (ev->type() == QEvent::TouchEnd) {
                 if (m_trayDwellTimer) m_trayDwellTimer->stop();
-                const int target = slot >= 0 ? slot : m_highlightedSlot;
+                const int target = m_tapDragged ? hitSlotAtGlobal(globalPt, true)
+                                                : (slot >= 0 ? slot : m_highlightedSlot);
                 m_highlightedSlot = -1;
+                m_tapDragged = false;
                 if (target >= 0) emit slotTapped(target);
+                else emit dismissedByUser();
             }
             return true;
         }
@@ -1345,10 +1347,16 @@ bool RadialFanOverlay::event(QEvent *ev)
 
 void RadialFanOverlay::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_mode != TapFanMode && m_mode != HiddenMode && m_owner &&
+        (event->buttons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        m_owner->updatePointerInteraction(pointerGlobalPos(event->position(), event->globalPosition()));
+        event->accept();
+        return;
+    }
     if (m_mode == TapFanMode) {
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
-        // If user is holding left button and dragging inside TapFanMode, support continuous drill & backtrack!
         if (event->buttons() & Qt::LeftButton) {
+            if (QLineF(globalPt, m_tapPressGlobal).length() >= 8.0) m_tapDragged = true;
             handleContinuousDragAt(globalPt);
             const int next = hitSlotAtGlobal(globalPt, true);
             if (next != m_highlightedSlot) {
@@ -1375,8 +1383,8 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
     if (m_mode == TapFanMode) {
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
         const int slot = hitSlotAtGlobal(globalPt, false);
-        if (slot < 0) {
-            // Clicking outside all slots (or on center ball when overlay covers Wayland) collapses fan!
+        const qreal distFromBall = QLineF(m_ballCenterGlobal, globalPt).length();
+        if (slot < 0 && (event->button() != Qt::LeftButton || distFromBall > m_outermostRadius + 28.0)) {
             emit dismissedByUser();
             event->accept();
             return;
@@ -1393,6 +1401,8 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
             return;
         }
         if (event->button() == Qt::LeftButton) {
+            m_tapPressGlobal = globalPt;
+            m_tapDragged = false;
             m_pressedTapSlot = slot;
             m_highlightedSlot = m_pressedTapSlot;
             updateHitMask();
@@ -1406,6 +1416,12 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
 
 void RadialFanOverlay::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_mode != TapFanMode && m_mode != HiddenMode && m_owner &&
+        (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
+        m_owner->endPointerInteraction(pointerGlobalPos(event->position(), event->globalPosition()));
+        event->accept();
+        return;
+    }
     if (m_mode == TapFanMode && event->button() == Qt::MiddleButton) {
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
         const int slot = hitSlotAtGlobal(globalPt, false);
@@ -1419,12 +1435,14 @@ void RadialFanOverlay::mouseReleaseEvent(QMouseEvent *event)
     if (m_mode == TapFanMode && event->button() == Qt::LeftButton) {
         if (m_trayDwellTimer) m_trayDwellTimer->stop();
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
-        const int slot = hitSlotAtGlobal(globalPt, false);
+        const int slot = m_tapDragged ? hitSlotAtGlobal(globalPt, true) : hitSlotAtGlobal(globalPt, false);
         m_highlightedSlot = -1;
         m_pressedTapSlot = -1;
+        m_tapDragged = false;
         updateHitMask();
         update();
         if (slot >= 0) emit slotTapped(slot);
+        else emit dismissedByUser();
         event->accept();
         return;
     }
@@ -1633,7 +1651,6 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
     }
 
     // Draw all active ring slots (draw highlighted slot last so dense fisheye magnification never clips!)
-    const bool showAllAppMicroTags = (m_slots.size() <= 38);
     QList<int> drawOrder;
     drawOrder.reserve(m_slots.size());
     for (int i = 0; i < m_slots.size(); ++i) {
@@ -1949,41 +1966,25 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             }
         }
 
-        // Compact crisp micro-label beneath fixed hubs, drilled items, and window orbs (when spacious or selected)
-        const bool showMicro = !item.shortLabel.isEmpty() && item.kind != RadialSlotItem::CenterSlot &&
-            reveal > 0.72 && (item.kind != RadialSlotItem::AppSlot || showAllAppMicroTags || selected);
-        if (showMicro) {
-            QFont mf = font();
-            mf.setPixelSize(10);
-            mf.setWeight(selected ? QFont::Bold : QFont::Medium);
-            p.setFont(mf);
-            const QFontMetrics fm(mf);
-            const int tw = fm.horizontalAdvance(item.shortLabel) + 10;
-            const int th = 15;
-            const QRectF tagRect(slotRect.center().x() - tw * 0.5, slotRect.bottom() + 2.0, tw, th);
-            p.setPen(Qt::NoPen);
-            p.setBrush(selected ? QColor(30, 88, 168, 236) : QColor(12, 16, 26, 204));
-            p.drawRoundedRect(tagRect, 7.5, 7.5);
-            p.setPen(selected ? QColor("#ffffff") : QColor("#e2e8f0"));
-            p.drawText(tagRect, Qt::AlignCenter, item.shortLabel);
-        }
         p.restore();
     }
 
-    // Floating label pill (in FlickFanMode or when hovering any slot in TapFanMode)
-    const QString labelText = activeLabelText();
-    if (!labelText.isEmpty()) {
+    // Floating callout pill ONLY when pointing/hovering/sliding onto a slot!
+    const QString rawLabelText = activeLabelText();
+    if (!rawLabelText.isEmpty()) {
         const QRectF pill = labelPillRectLocal();
         if (!pill.isEmpty()) {
             QFont f = font();
             f.setPointSize(12);
             f.setWeight(QFont::DemiBold);
             p.setFont(f);
+            const QFontMetrics fm(f);
+            const QString elided = fm.elidedText(rawLabelText, Qt::ElideMiddle, qMax(80, int(pill.width()) - 24));
             p.setPen(QPen(QColor(255, 255, 255, 55), 1.0));
             p.setBrush(QColor(18, 22, 30, 232));
             p.drawRoundedRect(pill, 16, 16);
             p.setPen(QColor("#f5f8fd"));
-            p.drawText(pill, Qt::AlignCenter, labelText);
+            p.drawText(pill, Qt::AlignCenter, elided);
         }
     }
 }

@@ -693,6 +693,8 @@ int main(int argc, char **argv)
         app.processEvents();
         check(ball.orbitSlotGlobalRects().size() == 5 && ball.allOrbitSlotGlobalRects().size() == 5,
               "root displays clean 5 fixed inner hubs when 0 windows are open");
+        check(ball.fanOverlay()->highlightedSlot() == -1 && ball.fanOverlay()->activeLabelText().isEmpty(),
+              "expanded fan shows zero text labels at rest until pointing/sliding onto an orb");
         ball.fanOverlay()->drillInto(QStringLiteral("tools"), QStringLiteral("工具"),
                                      QColor("#86e0b8"), QPointF(bounds.center()));
         app.processEvents();
@@ -709,6 +711,86 @@ int main(int argc, char **argv)
         check(!ball.fanOverlay()->isDrilled(),
               "sliding continuously onto ← backtrack orb returns cleanly to root level without releasing");
         ball.closeFan(true);
+
+        // Verify sliding across Ring 0 › hub (托盘 › / 工具 ›) toward Ring 1 open windows
+        // NEVER auto-opens the 1st-level sub-ball during the slide, while releasing on it DOES!
+        {
+            check(ball.setOrbitActions({QStringLiteral("launcher"), QStringLiteral("sys_hub"),
+                                        QStringLiteral("tray_hub"), QStringLiteral("overview"),
+                                        QStringLiteral("tools_hub")}),
+                  "configured pk4 5-slot inner ring with tray_hub and tools_hub");
+            QList<DockAppEntry> outerWins;
+            for (int i = 0; i < 6; ++i) {
+                DockAppEntry w;
+                w.id = QStringLiteral("chrome");
+                w.appKey = w.id;
+                w.name = QStringLiteral("Chrome");
+                w.caption = QStringLiteral("Tab %1 — Chrome").arg(i + 1);
+                w.windowId = QStringLiteral("slide-win-%1").arg(i + 1);
+                w.running = true;
+                outerWins.append(w);
+            }
+            ball.dockModel()->setOpenWindowsForTest(outerWins);
+            app.processEvents();
+
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent pDown(QEvent::MouseButtonPress, startLocal, startGlobal,
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &pDown);
+            const qreal pullX = (ball.dockSide() == FloatingBall::DockLeft) ? 28.0 : -28.0;
+            const QPointF pullPt = startGlobal + QPointF(pullX, 0.0);
+            QMouseEvent pPull(QEvent::MouseMove, pullPt - QPointF(ball.pos()), pullPt,
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &pPull);
+
+            QPointF trayHubCenter;
+            QPointF outerWinCenter;
+            for (const RadialSlotItem &s : ball.fanOverlay()->slotsData()) {
+                if (s.id == QLatin1String("tray_hub")) trayHubCenter = s.centerGlobal;
+                if (s.kind == RadialSlotItem::AppSlot && outerWinCenter.isNull()) outerWinCenter = s.centerGlobal;
+            }
+            check(!trayHubCenter.isNull() && !outerWinCenter.isNull(),
+                  "located Ring 0 tray_hub and Ring 1 outer window slot for slide-through test");
+
+            // Slide directly onto tray_hub AND pause 460ms -> must NOT auto-open 1st-level sub-ball!
+            QMouseEvent onHub(QEvent::MouseMove, trayHubCenter - QPointF(ball.pos()), trayHubCenter,
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &onHub);
+            waitMs(460);
+            check(!ball.fanOverlay()->isDrilled() && !ball.fanOverlay()->activeLabelText().isEmpty(),
+                  "sliding onto or pausing over Ring 0 › hub shows hover label without auto-opening sub-ball");
+
+            // Continue sliding outward onto Ring 1 open window -> cleanly highlights outer window!
+            QMouseEvent onOuterWin(QEvent::MouseMove, outerWinCenter - QPointF(ball.pos()), outerWinCenter,
+                                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &onOuterWin);
+            const int hl = ball.fanOverlay()->highlightedSlot();
+            check(!ball.fanOverlay()->isDrilled() && hl >= 0 &&
+                      ball.fanOverlay()->slotsData()[hl].kind == RadialSlotItem::AppSlot,
+                  "sliding past Ring 0 smoothly highlights Ring 1 open window without Ring 0 snag");
+
+            // Cancel on center, then verify releasing directly on tray_hub DOES open its sub-ball!
+            QMouseEvent backCenterEv(QEvent::MouseMove, startLocal, startGlobal,
+                                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent relCenterEv(QEvent::MouseButtonRelease, startLocal, startGlobal,
+                                    Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &backCenterEv);
+            app.sendEvent(&ball, &relCenterEv);
+
+            app.sendEvent(&ball, &pDown);
+            app.sendEvent(&ball, &pPull);
+            app.sendEvent(&ball, &onHub);
+            QMouseEvent relOnHub(QEvent::MouseButtonRelease, trayHubCenter - QPointF(ball.pos()), trayHubCenter,
+                                 Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &relOnHub);
+            app.processEvents();
+            check(ball.fanOverlay()->isDrilled() &&
+                      ball.fanOverlay()->overlayMode() == RadialFanOverlay::TapFanMode,
+                  "releasing directly on Ring 0 › hub intentionally opens its expandable sub-ball");
+            ball.closeFan(true);
+            ball.dockModel()->setOpenWindowsForTest({});
+        }
 
         // Verify sys_hub directly reveals macOS/iOS-style Control Center (PageHome)
         // with inline Wi-Fi / Bluetooth / Mihomo subpages and auto-hiding MPRIS bar

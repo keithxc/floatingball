@@ -123,6 +123,7 @@ public:
     int activeRingCount() const { return m_activeRingCount; }
     int hitSlotAtGlobal(const QPointF &globalPt, bool magneticSector) const;
     qreal fanOuterRadius() const { return m_outermostRadius; }
+    QString activeLabelText() const;
     QList<qreal> computeAttentionAnglesRad();
 
 signals:
@@ -147,13 +148,14 @@ private:
     void recomputeFanLayout();
     void updateHitMask();
     QRectF labelPillRectLocal() const;
-    QString activeLabelText() const;
 
     FloatingBall *m_owner = nullptr;
     Mode m_mode = HiddenMode;
     QList<DrillFrame> m_drillStack;
     QElapsedTimer m_drillCooldown;
     QTimer *m_trayDwellTimer = nullptr;
+    QPointF m_tapPressGlobal;
+    bool m_tapDragged = false;
     TrayItemInfo m_pendingTrayDwell;
     QPointF m_pendingTrayPos;
     qreal m_progress = 0.0;
@@ -297,6 +299,7 @@ private:
     Ui::FloatingBall *ui = nullptr;
 
     // Unified pointer/touch state machine (Xiaomi Mi 5 + fooView fusion)
+    friend class RadialFanOverlay;
     QPointF pointerGlobalPos(const QPointF &localPos, const QPointF &eventGlobalPos) const;
     void beginPointerInteraction(const QPointF &globalPos, Qt::KeyboardModifiers modifiers);
     void updatePointerInteraction(const QPointF &globalPos);
