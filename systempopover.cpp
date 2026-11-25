@@ -74,7 +74,7 @@ public:
         , m_fillColor(fillColor)
         , m_emptyIconColor(emptyIconColor)
     {
-        setMinimumSize(64, 136);
+        setMinimumSize(52, 136);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
@@ -128,7 +128,7 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
 
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        const qreal radius = 20.0;
+        const qreal radius = 18.0;
 
         QPainterPath track;
         track.addRoundedRect(r, radius, radius);
@@ -158,24 +158,24 @@ protected:
 
         // Top numeric / status readout with automatic contrast over fill
         if (!m_badgeText.isEmpty()) {
-            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 26.0);
+            const bool overLightFill = !m_muted && isEnabled() && (fillTop < r.top() + 24.0);
             QFont f = font();
-            f.setPointSize(10);
+            f.setPointSize(9);
             f.setWeight(QFont::DemiBold);
             p.setFont(f);
             p.setPen(m_muted
                          ? QColor("#fda4af")
                          : (overLightFill ? QColor("#0f172a") : QColor(226, 232, 240, 210)));
-            p.drawText(QRectF(r.left() + 4.0, r.top() + 8.0, r.width() - 8.0, 18.0),
+            p.drawText(QRectF(r.left() + 3.0, r.top() + 8.0, r.width() - 6.0, 16.0),
                        Qt::AlignCenter, m_badgeText);
         }
 
         // Bottom centered iOS icon with automatic contrast over fill
-        const qreal iconSize = 22.0;
+        const qreal iconSize = 19.0;
         const QRectF iconRect(r.center().x() - iconSize * 0.5,
-                              r.bottom() - iconSize - 14.0,
+                              r.bottom() - iconSize - 13.0,
                               iconSize, iconSize);
-        const bool iconOverLightFill = !m_muted && isEnabled() && (fillH >= 34.0);
+        const bool iconOverLightFill = !m_muted && isEnabled() && (fillH >= 32.0);
         const QColor iconColor = m_muted
             ? QColor("#fb7185")
             : (iconOverLightFill ? QColor("#1e293b") : m_emptyIconColor);
@@ -386,7 +386,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
     // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
-    setFixedSize(388, 492);
+    setFixedSize(376, 488);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(6, 6, 6, 8);
@@ -624,9 +624,9 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                                    FloatingIcons::Proxy, QColor("#10b981"),
                                    &m_homeMhBadge, &m_homeMhSub, true,
                                    [this] { showPage(PageMihomo); }));
-    upper->addWidget(connCard, 11);
+    upper->addWidget(connCard, 196);
 
-    // Right Bento Column: DND wide pill on top + two iOS-style vertical sliders (Brightness & Volume) below
+    // Right Bento Column: DND wide pill on top + two slender iOS-style vertical sliders below
     auto *rightCol = new QVBoxLayout();
     rightCol->setSpacing(10);
 
@@ -634,13 +634,13 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     m_dndTile = new QPushButton(page);
     m_dndTile->setObjectName(QStringLiteral("dndCard"));
     m_dndTile->setCursor(Qt::PointingHandCursor);
-    m_dndTile->setFixedHeight(54);
+    m_dndTile->setFixedHeight(52);
     auto *dndRow = new QHBoxLayout(m_dndTile);
-    dndRow->setContentsMargins(10, 6, 10, 6);
-    dndRow->setSpacing(9);
+    dndRow->setContentsMargins(9, 6, 9, 6);
+    dndRow->setSpacing(8);
     m_dndBadge = new QLabel(m_dndTile);
     m_dndBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    styleCircleBadge(m_dndBadge, FloatingIcons::Bell, QColor(255, 255, 255, 26), QColor("#cbd5e1"), 32);
+    styleCircleBadge(m_dndBadge, FloatingIcons::Bell, QColor(255, 255, 255, 26), QColor("#cbd5e1"), 30);
     dndRow->addWidget(m_dndBadge);
     auto *dndText = new QVBoxLayout();
     dndText->setContentsMargins(0, 0, 0, 0);
@@ -661,9 +661,9 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
     });
     rightCol->addWidget(m_dndTile);
 
-    // Side-by-side iOS Vertical Brightness & Volume Sliders
+    // Side-by-side slender iOS Vertical Brightness & Volume Sliders
     auto *slidersRow = new QHBoxLayout();
-    slidersRow->setContentsMargins(0, 0, 0, 0);
+    slidersRow->setContentsMargins(2, 0, 2, 0);
     slidersRow->setSpacing(10);
 
     m_brightnessSlider = new CapsuleSlider(
@@ -719,7 +719,7 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
 
     rightCol->addLayout(slidersRow, 1);
 
-    upper->addLayout(rightCol, 10);
+    upper->addLayout(rightCol, 130);
     v->addLayout(upper);
 
     // ---- Lower Half: 4-Column Quick Action Tiles (Night Light / Power / Display / Settings) ----
@@ -729,11 +729,11 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
         auto *b = new QToolButton(page);
         b->setObjectName(QStringLiteral("miniTile"));
         b->setText(label);
-        b->setIcon(FloatingIcons::make(icon, ink, 20));
-        b->setIconSize(QSize(20, 20));
+        b->setIcon(FloatingIcons::make(icon, ink, 19));
+        b->setIconSize(QSize(19, 19));
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        b->setFixedHeight(62);
+        b->setFixedHeight(58);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -1360,7 +1360,7 @@ void SystemPopover::syncHomeFromSnapshot()
     repolish(m_dndTile);
     styleCircleBadge(m_dndBadge, FloatingIcons::Bell,
                      st.dndEnabled ? QColor("#8b5cf6") : QColor(255, 255, 255, 24),
-                     st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 32);
+                     st.dndEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), 30);
     m_dndSub->setText(st.dndEnabled ? QStringLiteral("已开启") : QStringLiteral("已关闭"));
 
     // Night Light mini tile
@@ -1452,8 +1452,9 @@ void SystemPopover::applyMprisVisuals()
     if (!m_mprisCard) return;
     m_mprisCard->setVisible(m_mprisVisible);
     if (m_mprisVisible) {
-        m_mprisTitleLbl->setText(elideText(m_mprisTitle, 22));
-        m_mprisArtistLbl->setText(elideText(m_mprisArtist.isEmpty() ? QStringLiteral("正在播放") : m_mprisArtist, 26));
+        const QString artist = m_mprisArtist.isEmpty() ? QStringLiteral("正在播放") : m_mprisArtist;
+        m_mprisTitleLbl->setText(m_mprisTitleLbl->fontMetrics().elidedText(m_mprisTitle, Qt::ElideRight, 150));
+        m_mprisArtistLbl->setText(m_mprisArtistLbl->fontMetrics().elidedText(artist, Qt::ElideRight, 150));
         m_mprisPlayBtn->setIcon(FloatingIcons::make(
             m_mprisPlaying ? FloatingIcons::MediaPause : FloatingIcons::MediaPlay,
             QColor("#ffffff"), 15));
