@@ -16,5 +16,11 @@
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>FloatingBall 控制中心需要蓝牙权限以显示蓝牙开关状态并一键连接已配对设备。</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>FloatingBall 控制中心需要蓝牙权限以管理已配对的蓝牙设备。</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>FloatingBall 需要自动化权限以在 macOS 上执行窗口与系统控制操作。</string>
 </dict>
 </plist>
