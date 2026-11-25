@@ -30,6 +30,7 @@ signals:
     void clipboardSaved(const QString &text);
 
 protected:
+    void paintEvent(QPaintEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 

@@ -1,8 +1,11 @@
 #include "desktopactions.h"
 
 #include <QCoreApplication>
+#include <QList>
 #include <QProcess>
+#include <QRect>
 #include <QRegularExpression>
+#include <unistd.h>
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -347,6 +350,38 @@ void macSetBrightness(int percent)
         const float target = static_cast<float>(qBound(1, percent, 100)) / 100.0f;
         setFn(CGMainDisplayID(), target);
     }
+}
+
+QList<QRect> macVisibleWindowRects()
+{
+    QList<QRect> out;
+    @autoreleasepool {
+        CFArrayRef list = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID);
+        if (!list) return out;
+        const pid_t selfPid = getpid();
+        const CFIndex count = CFArrayGetCount(list);
+        for (CFIndex i = 0; i < count; ++i) {
+            NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(list, i);
+            if (![info isKindOfClass:[NSDictionary class]]) continue;
+            NSNumber *layer = info[(id)kCGWindowLayer];
+            if (!layer || layer.intValue != 0) continue; // normal desktop windows only
+            NSNumber *pidNum = info[(id)kCGWindowOwnerPID];
+            if (pidNum && pidNum.intValue == selfPid) continue;
+            NSNumber *alpha = info[(id)kCGWindowAlpha];
+            if (alpha && alpha.doubleValue < 0.05) continue;
+            NSDictionary *boundsDict = info[(id)kCGWindowBounds];
+            CGRect r = CGRectZero;
+            if (!boundsDict || !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)boundsDict, &r))
+                continue;
+            if (r.size.width < 40 || r.size.height < 40) continue;
+            out.append(QRect(qRound(r.origin.x), qRound(r.origin.y),
+                             qRound(r.size.width), qRound(r.size.height)));
+        }
+        CFRelease(list);
+    }
+    return out;
 }
 
 } // namespace DesktopActions

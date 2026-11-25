@@ -74,53 +74,48 @@ ActionResultHud::ActionResultHud(QWidget *parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("actionResultHud"));
     setProperty("floatingballSurface", true);
-    setWindowTitle(QStringLiteral("FloatingBall · 灵动结果卡"));
+    setWindowTitle(QStringLiteral("FloatingBall · 截图预览"));
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
+    setProperty("panelBlurInset", 10);
+    setProperty("panelBlurRadius", 22);
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(6, 6, 6, 8);
+    outer->setContentsMargins(10, 10, 10, 10);
     auto *card = new QWidget(this);
     card->setObjectName(QStringLiteral("hudCard"));
     outer->addWidget(card);
 
     FloatingWindow::setPanelStyleSheet(
         card,
-        "QWidget#hudCard { background:@panelTint@; border:1px solid rgba(255,255,255,42); border-radius:20px; }"
-        "QLabel { color:#c2ccda; font-size:12px; background:transparent; }"
-        "QLabel#hudTitle { color:#f5f8fd; font-size:14px; font-weight:600; }"
-        "QLabel#ocrBadge { color:#8ac8ff; font-size:12px; font-weight:500; }"
-        "QToolButton { background:rgba(255,255,255,15); color:#f2f6fc; border:1px solid rgba(255,255,255,20);"
-        "              border-radius:12px; padding:6px 11px; font-size:13px; font-weight:500; }"
-        "QToolButton:hover { background:rgba(255,255,255,26); }"
-        "QToolButton:pressed { background:rgba(255,255,255,38); }"
-        "QToolButton#hudPrimary { background:#2a7de1; border:1px solid #59a2ff; color:#ffffff; font-weight:600; }"
-        "QToolButton#hudPrimary:hover { background:#388cf0; }"
-        "QToolButton#hudClose { background:transparent; border:0; border-radius:15px; }"
-        "QToolButton#hudClose:hover { background:rgba(255,255,255,20); }"
-        "QPlainTextEdit { background:rgba(10,13,19,175); color:#eef3fb; border:1px solid rgba(255,255,255,28);"
-        "                 border-radius:12px; padding:8px; font-size:13px; selection-background-color:#2c5d99; }");
+        "QWidget#hudCard { background:transparent; border:none; }"
+        "QLabel { color:rgba(226,232,240,195); font-size:12px; background:transparent; }"
+        "QLabel#hudTitle { color:#ffffff; font-size:13.5px; font-weight:700; }"
+        "QLabel#ocrBadge { color:#7dd3fc; font-size:11.5px; font-weight:600; }"
+        "QToolButton { background:rgba(255,255,255,20); color:#f8fafc; border:1px solid rgba(255,255,255,28);"
+        "              border-radius:12px; padding:6px 10px; font-size:12.5px; font-weight:600; }"
+        "QToolButton:hover { background:rgba(255,255,255,34); color:#ffffff; }"
+        "QToolButton:pressed { background:rgba(255,255,255,46); }"
+        "QToolButton#hudPrimary { background:rgba(59,130,246,205); border:1px solid rgba(147,197,253,210); color:#ffffff; font-weight:700; }"
+        "QToolButton#hudPrimary:hover { background:rgba(59,130,246,238); }"
+        "QToolButton#hudClose { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,24); border-radius:15px; }"
+        "QToolButton#hudClose:hover { background:rgba(255,255,255,32); }"
+        "QPlainTextEdit { background:rgba(10,14,24,145); color:#f1f5f9; border:1px solid rgba(255,255,255,28);"
+        "                 border-radius:12px; padding:8px; font-size:12.5px; selection-background-color:#2563eb; }");
 
     auto *layout = new QVBoxLayout(card);
     layout->setContentsMargins(14, 12, 14, 12);
     layout->setSpacing(10);
 
-    // Header: preview + meta + close
+    // Compact CleanShot-style top bar: meta + OCR status + close
     auto *header = new HudDragHeader(card);
     header->setCursor(Qt::OpenHandCursor);
     auto *hRow = new QHBoxLayout(header);
     hRow->setContentsMargins(0, 0, 0, 0);
-    hRow->setSpacing(10);
+    hRow->setSpacing(8);
 
-    m_preview = new QLabel(header);
-    m_preview->setFixedSize(88, 56);
-    m_preview->setAttribute(Qt::WA_TransparentForMouseEvents);
-    hRow->addWidget(m_preview);
-
-    auto *metaCol = new QVBoxLayout();
-    metaCol->setSpacing(3);
-    auto *title = new QLabel(QStringLiteral("准星捕获结果"), header);
+    auto *title = new QLabel(QStringLiteral("截图"), header);
     title->setObjectName(QStringLiteral("hudTitle"));
     title->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_metaLabel = new QLabel(header);
@@ -128,20 +123,26 @@ ActionResultHud::ActionResultHud(QWidget *parent) : QWidget(parent)
     m_ocrBadge = new QLabel(header);
     m_ocrBadge->setObjectName(QStringLiteral("ocrBadge"));
     m_ocrBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    metaCol->addWidget(title);
-    metaCol->addWidget(m_metaLabel);
-    metaCol->addWidget(m_ocrBadge);
-    hRow->addLayout(metaCol, 1);
+    hRow->addWidget(title);
+    hRow->addWidget(m_metaLabel);
+    hRow->addWidget(m_ocrBadge, 1);
 
     auto *closeBtn = new QToolButton(header);
     closeBtn->setObjectName(QStringLiteral("hudClose"));
     closeBtn->setAccessibleName(QStringLiteral("关闭结果卡"));
-    closeBtn->setIcon(FloatingIcons::make(FloatingIcons::Close, QColor("#dce3ed"), 18));
-    closeBtn->setFixedSize(32, 32);
+    closeBtn->setIcon(FloatingIcons::make(FloatingIcons::Close, QColor("#e2e8f0"), 15));
+    closeBtn->setFixedSize(30, 30);
     closeBtn->setCursor(Qt::PointingHandCursor);
     connect(closeBtn, &QToolButton::clicked, this, &QWidget::hide);
-    hRow->addWidget(closeBtn, 0, Qt::AlignTop);
+    hRow->addWidget(closeBtn);
     layout->addWidget(header);
+
+    // Large crisp CleanShot-style preview image (no tiny postage stamp or dead void!)
+    m_preview = new QLabel(card);
+    m_preview->setFixedSize(368, 152);
+    m_preview->setAlignment(Qt::AlignCenter);
+    m_preview->setAttribute(Qt::WA_TransparentForMouseEvents);
+    layout->addWidget(m_preview, 0, Qt::AlignHCenter);
 
     // Inline OCR result box (shown automatically when text is recognized)
     m_textContainer = new QWidget(card);
@@ -247,9 +248,9 @@ void ActionResultHud::presentCapture(const QImage &image, const QString &directo
     m_anchor = anchor;
     m_copyTextWhenReady = false;
 
-    m_preview->setPixmap(roundedThumbnail(image, QSize(88, 56)));
-    m_metaLabel->setText(QStringLiteral("%1 × %2 px").arg(image.width()).arg(image.height()));
-    m_ocrBadge->setText(QStringLiteral("正在本机识别文字…"));
+    m_preview->setPixmap(roundedThumbnail(image, QSize(368, 152)));
+    m_metaLabel->setText(QStringLiteral("%1 × %2").arg(image.width()).arg(image.height()));
+    m_ocrBadge->setText(QStringLiteral("· 识别中…"));
     m_textEdit->clear();
     m_textContainer->hide();
 
@@ -404,6 +405,12 @@ void ActionResultHud::translateOcrText()
     q.addQueryItem(QStringLiteral("op"), QStringLiteral("translate"));
     url.setQuery(q);
     QDesktopServices::openUrl(url);
+}
+
+void ActionResultHud::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    FloatingWindow::paintLiquidGlass(p, rect(), 10.0, 22.0);
 }
 
 void ActionResultHud::keyPressEvent(QKeyEvent *event)

@@ -8,12 +8,14 @@
 #include "panelbackdrop.h"
 #include "quickdeck.h"
 #include "screenshotpanel.h"
+#include "screenshotstore.h"
 #include "systempopover.h"
 #include "uiicons.h"
 
 #include <QAbstractAnimation>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
@@ -2226,6 +2228,38 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
             DesktopActions::showToast(error, geometry().center());
         }
     });
+    connect(m_directCapture, &ScreenshotCapture::studioFinished, this,
+            [this](CaptureStudioAction action, const QImage &image, const QRect &globalSel) {
+        restoreHiddenSurfaces();
+        if (image.isNull()) return;
+        const QString dir = m_screenshotDirectory.isEmpty()
+            ? resultPanel()->screenshotDirectory()
+            : m_screenshotDirectory;
+        const QPoint toastPt = globalSel.isEmpty() ? geometry().center() : globalSel.center();
+        if (action == CaptureStudioAction::Copy) {
+            QString err;
+            if (ScreenshotStore::copyImage(image, &err)) {
+                DesktopActions::showToast(QStringLiteral("✓ 已复制截图 (%1 × %2)")
+                                              .arg(image.width()).arg(image.height()), toastPt);
+            } else {
+                DesktopActions::showToast(err, toastPt);
+            }
+        } else if (action == CaptureStudioAction::Save) {
+            QString err;
+            const QString saved = ScreenshotStore::saveCapture(image, dir, &err);
+            if (!saved.isEmpty()) {
+                QApplication::clipboard()->setText(saved);
+                DesktopActions::showToast(QStringLiteral("✓ 已保存截图并复制路径"), toastPt);
+            } else {
+                DesktopActions::showToast(err, toastPt);
+            }
+        } else if (action == CaptureStudioAction::Pin) {
+            resultPanel()->pinImageDirect(image, QStringLiteral("贴图"), globalSel.topLeft());
+            DesktopActions::showToast(QStringLiteral("✓ 已贴图到桌面 · 滚轮缩放"), toastPt);
+        } else {
+            actionHud()->presentCapture(image, dir, globalSel.isEmpty() ? m_directCaptureAnchor : globalSel.bottomRight());
+        }
+    });
 
     if (m_primaryPeer) {
         syncSharedPreferencesFrom(m_primaryPeer);
@@ -3116,7 +3150,7 @@ void FloatingBall::captureRegion()
     }
     CaptureOptions opts;
     opts.mode = CaptureOptions::Region;
-    m_directCapture->start(m_directCaptureAnchor, opts);
+    m_directCapture->start(m_directCaptureAnchor, opts, true);
 }
 
 void FloatingBall::takeScreenshot(const CaptureOptions &options)
