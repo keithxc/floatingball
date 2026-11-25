@@ -28,9 +28,17 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusVariant>
+#include <QWindow>
+#include <cstring>
 #include <memory>
 #include <csignal>
 #include <sys/prctl.h>
+#ifdef FLOATINGBALL_WAYLAND_CLIENT
+#include <wayland-client.h>
+#ifdef FLOATINGBALL_QT_GUI_PRIVATE
+#include <qpa/qplatformnativeinterface.h>
+#endif
+#endif
 #endif
 
 #ifdef Q_OS_MACOS
@@ -1230,21 +1238,186 @@ void SystemStatusMonitor::stopNotificationMonitor()
 
 #endif // Q_OS_LINUX
 
+#ifdef Q_OS_LINUX
+namespace {
+
+QString requestWaylandActivationToken(QWidget *sourceWidget)
+{
+#if defined(FLOATINGBALL_WAYLAND_CLIENT) && QT_CONFIG(wayland)
+    if (!QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+        return {};
+    auto *wlApp = qGuiApp ? qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>() : nullptr;
+    if (!wlApp) return {};
+    wl_display *display = wlApp->display();
+    if (!display) return {};
+    wl_seat *seat = wlApp->lastInputSeat();
+    if (!seat) seat = wlApp->seat();
+    const uint32_t serial = wlApp->lastInputSerial();
+
+    wl_surface *surface = nullptr;
+#ifdef FLOATINGBALL_QT_GUI_PRIVATE
+    if (sourceWidget && sourceWidget->windowHandle() && QGuiApplication::platformNativeInterface()) {
+        surface = static_cast<wl_surface *>(
+            QGuiApplication::platformNativeInterface()->nativeResourceForWindow(
+                QByteArrayLiteral("surface"), sourceWidget->windowHandle()));
+    }
+#else
+    Q_UNUSED(sourceWidget);
+#endif
+
+    static const wl_interface *kEmptyTypes[] = {nullptr};
+    static const wl_interface *kSetSerialTypes[] = {nullptr, &wl_seat_interface};
+    static const wl_interface *kSetSurfaceTypes[] = {&wl_surface_interface};
+    static const wl_message kTokenRequests[] = {
+        {"set_serial", "uo", kSetSerialTypes},
+        {"set_app_id", "s", kEmptyTypes},
+        {"set_surface", "o", kSetSurfaceTypes},
+        {"commit", "", kEmptyTypes},
+        {"destroy", "", kEmptyTypes},
+    };
+    static const wl_message kTokenEvents[] = {
+        {"done", "s", kEmptyTypes},
+    };
+    static const wl_interface kXdgActivationTokenV1Interface = {
+        "xdg_activation_token_v1", 1, 5, kTokenRequests, 1, kTokenEvents
+    };
+    static const wl_interface *kGetTokenTypes[] = {&kXdgActivationTokenV1Interface};
+    static const wl_interface *kActivateTypes[] = {nullptr, &wl_surface_interface};
+    static const wl_message kActivationRequests[] = {
+        {"destroy", "", kEmptyTypes},
+        {"get_activation_token", "n", kGetTokenTypes},
+        {"activate", "so", kActivateTypes},
+    };
+    static const wl_interface kXdgActivationV1Interface = {
+        "xdg_activation_v1", 1, 3, kActivationRequests, 0, nullptr
+    };
+
+    struct BindState {
+        wl_proxy *activation = nullptr;
+        QString token;
+    } state;
+
+    static const wl_registry_listener kRegListener = {
+        [](void *data, wl_registry *reg, uint32_t name, const char *iface, uint32_t ver) {
+            auto *st = static_cast<BindState *>(data);
+            if (!st->activation && std::strcmp(iface, "xdg_activation_v1") == 0) {
+                st->activation = static_cast<wl_proxy *>(
+                    wl_registry_bind(reg, name, &kXdgActivationV1Interface, ver >= 1 ? 1 : ver));
+            }
+        },
+        [](void *, wl_registry *, uint32_t) {}
+    };
+
+    struct TokenListener {
+        void (*done)(void *data, wl_proxy *token, const char *tokenStr);
+    };
+    static const TokenListener kTokenListener = {
+        [](void *data, wl_proxy *, const char *tokenStr) {
+            if (tokenStr && *tokenStr)
+                static_cast<BindState *>(data)->token = QString::fromUtf8(tokenStr);
+        }
+    };
+
+    wl_event_queue *queue = wl_display_create_queue(display);
+    if (!queue) return {};
+    auto *wrapper = static_cast<wl_display *>(wl_proxy_create_wrapper(display));
+    if (!wrapper) {
+        wl_event_queue_destroy(queue);
+        return {};
+    }
+    wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(wrapper), queue);
+    wl_registry *registry = wl_display_get_registry(wrapper);
+    wl_registry_add_listener(registry, &kRegListener, &state);
+    wl_display_roundtrip_queue(display, queue);
+
+    if (state.activation) {
+        wl_proxy *tok = wl_proxy_marshal_flags(
+            state.activation, 1 /*get_activation_token*/,
+            &kXdgActivationTokenV1Interface, 1, 0, nullptr);
+        if (tok) {
+            wl_proxy_add_listener(tok, reinterpret_cast<void (**)(void)>(const_cast<TokenListener *>(&kTokenListener)), &state);
+            if (seat && serial != 0) {
+                wl_proxy_marshal_flags(tok, 0 /*set_serial*/, nullptr, 1, 0, serial, seat);
+            }
+            if (surface) {
+                wl_proxy_marshal_flags(tok, 2 /*set_surface*/, nullptr, 1, 0, surface);
+            }
+            wl_proxy_marshal_flags(tok, 3 /*commit*/, nullptr, 1, 0);
+            wl_display_roundtrip_queue(display, queue);
+            wl_proxy_marshal_flags(tok, 4 /*destroy*/, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
+        }
+        wl_proxy_marshal_flags(state.activation, 0 /*destroy*/, nullptr, 1, WL_MARSHAL_FLAG_DESTROY);
+    }
+
+    wl_registry_destroy(registry);
+    wl_proxy_wrapper_destroy(wrapper);
+    wl_event_queue_destroy(queue);
+    return state.token;
+#else
+    Q_UNUSED(sourceWidget);
+    return {};
+#endif
+}
+
+} // namespace
+#endif // Q_OS_LINUX
+
 void SystemStatusMonitor::activateTrayItem(const TrayItemInfo &item, const QPoint &globalPos, QWidget *menuParent)
 {
 #ifdef Q_OS_LINUX
     if (item.service.isEmpty() || item.objectPath.isEmpty()) return;
-    if (item.itemIsMenu && !item.menuPath.isEmpty()) {
+    if (item.itemIsMenu && !item.menuPath.isEmpty() && item.menuPath != QLatin1String("/NO_DBUSMENU")) {
         openTrayItemMenu(item, globalPos, menuParent);
         return;
     }
     auto bus = QDBusConnection::sessionBus();
-    auto msg = QDBusMessage::createMethodCall(
-        item.service, item.objectPath,
-        QStringLiteral("org.kde.StatusNotifierItem"),
-        QStringLiteral("Activate"));
-    msg.setArguments({globalPos.x(), globalPos.y()});
-    bus.asyncCall(msg, 500);
+    const QString primaryIface = QStringLiteral("org.kde.StatusNotifierItem");
+    const QString fallbackIface = QStringLiteral("org.freedesktop.StatusNotifierItem");
+    const QString activationToken = requestWaylandActivationToken(menuParent);
+
+    auto sendToken = [&](const QString &iface) {
+        if (activationToken.isEmpty()) return;
+        auto tokMsg = QDBusMessage::createMethodCall(
+            item.service, item.objectPath, iface, QStringLiteral("ProvideXdgActivationToken"));
+        tokMsg.setArguments({activationToken});
+        bus.asyncCall(tokMsg, 400);
+    };
+
+    sendToken(primaryIface);
+    auto msg = QDBusMessage::createMethodCall(item.service, item.objectPath, primaryIface, QStringLiteral("Activate"));
+    msg.setArguments({static_cast<qint32>(globalPos.x()), static_cast<qint32>(globalPos.y())});
+    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(msg, 600), this);
+    QPointer<SystemStatusMonitor> self(this);
+    QPointer<QWidget> parentPtr(menuParent);
+    connect(w, &QDBusPendingCallWatcher::finished, this,
+            [self, w, item, globalPos, fallbackIface, activationToken, parentPtr] {
+        const QDBusMessage rep = w->reply();
+        w->deleteLater();
+        if (!self) return;
+        if (rep.type() == QDBusMessage::ErrorMessage) {
+            auto sessionBus = QDBusConnection::sessionBus();
+            if (!activationToken.isEmpty()) {
+                auto tokFb = QDBusMessage::createMethodCall(
+                    item.service, item.objectPath, fallbackIface, QStringLiteral("ProvideXdgActivationToken"));
+                tokFb.setArguments({activationToken});
+                sessionBus.asyncCall(tokFb, 400);
+            }
+            auto fb = QDBusMessage::createMethodCall(
+                item.service, item.objectPath, fallbackIface, QStringLiteral("Activate"));
+            fb.setArguments({static_cast<qint32>(globalPos.x()), static_cast<qint32>(globalPos.y())});
+            auto *fw = new QDBusPendingCallWatcher(sessionBus.asyncCall(fb, 600), self);
+            connect(fw, &QDBusPendingCallWatcher::finished, self,
+                    [self, fw, item, globalPos, parentPtr] {
+                const QDBusMessage fbRep = fw->reply();
+                fw->deleteLater();
+                if (!self) return;
+                if (fbRep.type() == QDBusMessage::ErrorMessage &&
+                    !item.menuPath.isEmpty() && item.menuPath != QLatin1String("/NO_DBUSMENU")) {
+                    self->openTrayItemMenu(item, globalPos, parentPtr);
+                }
+            });
+        }
+    });
 #else
     Q_UNUSED(item); Q_UNUSED(globalPos); Q_UNUSED(menuParent);
 #endif

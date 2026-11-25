@@ -145,10 +145,11 @@ RadialFanOverlay::RadialFanOverlay(FloatingBall *owner)
     setMouseTracking(true);
     FloatingWindow::prepare(this, false);
 
-    // 380ms dwell on a tray orb with DBusMenu drills into its native menu items in one stroke!
+    // Deliberate 850ms hold opens Level-3 DBusMenu on touchscreen without
+    // hijacking normal swipe-release / left-click Activate!
     m_trayDwellTimer = new QTimer(this);
     m_trayDwellTimer->setSingleShot(true);
-    m_trayDwellTimer->setInterval(380);
+    m_trayDwellTimer->setInterval(850);
     connect(m_trayDwellTimer, &QTimer::timeout, this, [this] {
         if (!m_owner || (m_mode != FlickFanMode && m_mode != TapFanMode)) return;
         if (m_pendingTrayDwell.service.isEmpty() || m_pendingTrayDwell.menuPath.isEmpty()) return;
@@ -938,9 +939,9 @@ QString RadialFanOverlay::activeLabelText() const
             else if (item.app.running) text += QStringLiteral(" · 运行中");
         } else if (item.kind == RadialSlotItem::TraySlot) {
             if (item.id != QLatin1String("tray:empty")) {
-                text += item.trayItem.menuPath.isEmpty()
-                    ? QStringLiteral(" · 松手/点按激活")
-                    : QStringLiteral(" · 松手激活 / 停顿展开菜单");
+                text += (item.trayItem.menuPath.isEmpty() || item.trayItem.menuPath == QLatin1String("/NO_DBUSMENU"))
+                    ? QStringLiteral(" · 左键/松手单击激活")
+                    : QStringLiteral(" · 左键/松手激活 / 右键或长停菜单");
             }
         } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
             text = item.trayItem.title + QStringLiteral(" › ") + item.label;
@@ -1448,6 +1449,7 @@ void RadialFanOverlay::mousePressEvent(QMouseEvent *event)
 void RadialFanOverlay::mouseReleaseEvent(QMouseEvent *event)
 {
     if (m_mode == TapFanMode && event->button() == Qt::LeftButton) {
+        if (m_trayDwellTimer) m_trayDwellTimer->stop();
         const QPointF globalPt = pointerGlobalPos(event->position(), event->globalPosition());
         const int slot = hitSlotAtGlobal(globalPt, false);
         m_highlightedSlot = -1;
@@ -2854,7 +2856,11 @@ void FloatingBall::executeSlotItem(const RadialSlotItem &item)
     }
     if (item.kind == RadialSlotItem::TraySlot) {
         if (item.id == QLatin1String("tray:empty")) return;
-        statusMonitor()->activateTrayItem(item.trayItem, item.centerGlobal.toPoint(), this);
+        QWidget *surfaceAnchor = (m_fanOverlay && m_fanOverlay->isVisible() &&
+                                  m_fanOverlay->overlayMode() == RadialFanOverlay::TapFanMode)
+            ? static_cast<QWidget *>(m_fanOverlay)
+            : static_cast<QWidget *>(this);
+        statusMonitor()->activateTrayItem(item.trayItem, item.centerGlobal.toPoint(), surfaceAnchor);
         DesktopActions::showToast(tr("✓ %1").arg(item.trayItem.title), anchor);
         return;
     }

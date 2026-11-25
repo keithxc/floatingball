@@ -168,9 +168,12 @@ private:
     QLabel *m_statusBanner = nullptr;
     QStackedWidget *m_stack = nullptr;
 
-    // Home Bento connectivity rows (Wi-Fi / Hotspot / Bluetooth / Mihomo)
+    // Home Bento connectivity rows (Wi-Fi / 4G / Hotspot / Bluetooth / Mihomo)
     QLabel *m_homeWifiBadge = nullptr;
     QLabel *m_homeWifiSub = nullptr;
+    QPushButton *m_homeWwanRow = nullptr;
+    QLabel *m_homeWwanBadge = nullptr;
+    QLabel *m_homeWwanSub = nullptr;
     QLabel *m_homeHotspotBadge = nullptr;
     QLabel *m_homeHotspotSub = nullptr;
     QLabel *m_homeBtBadge = nullptr;
@@ -209,20 +212,19 @@ private:
     bool m_mprisPlaying = false;
     bool m_mprisVisible = false;
 
-    // Wi-Fi + 4G WWAN subpage widgets
+    // Wi-Fi subpage widgets & shared WWAN state
     QToolButton *m_wifiPowerBtn = nullptr;
-    QToolButton *m_wwanPowerBtn = nullptr;
     QLabel *m_wifiSummaryLbl = nullptr;
     QVBoxLayout *m_wifiListLayout = nullptr;
     bool m_wifiRadioEnabled = true;
     bool m_wwanAvailable = false;
     bool m_wwanEnabled = false;
+    bool m_wwanConnected = false;
     QString m_cachedWifiSsid;
     int m_cachedWifiSignal = 0;
 
     // Hotspot subpage widgets & state
     QToolButton *m_hsPowerBtn = nullptr;
-    QToolButton *m_hsWwanBtn = nullptr;
     QLabel *m_hsSummaryLbl = nullptr;
     QLineEdit *m_hsSsidEdit = nullptr;
     QLineEdit *m_hsPassEdit = nullptr;

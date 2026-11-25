@@ -64,7 +64,8 @@ enum Icon {
     MediaNext,
     ChevronRight,
     ChevronLeft,
-    Hotspot
+    Hotspot,
+    Cellular
 };
 
 inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color)
@@ -510,6 +511,17 @@ inline void draw(QPainter &p, Icon icon, const QRectF &rect, const QColor &color
         p.drawEllipse(QPointF(9.0, 12.0), 5.0, 5.0);
         p.drawEllipse(QPointF(15.0, 12.0), 5.0, 5.0);
         break;
+    }
+    case Cellular: {
+        // 4 ascending cellular signal bars (iOS/macOS style)
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawRoundedRect(QRectF(4.0, 15.2, 2.8, 4.8), 1.0, 1.0);
+        p.drawRoundedRect(QRectF(8.4, 12.0, 2.8, 8.0), 1.0, 1.0);
+        p.drawRoundedRect(QRectF(12.8, 8.6, 2.8, 11.4), 1.0, 1.0);
+        p.drawRoundedRect(QRectF(17.2, 5.0, 2.8, 15.0), 1.0, 1.0);
+        p.restore();
+        return;
     }
     }
 
