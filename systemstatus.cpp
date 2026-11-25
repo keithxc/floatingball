@@ -42,9 +42,7 @@
 #endif
 
 #ifdef Q_OS_MACOS
-namespace SystemStatusMac {
-void populateSnapshot(SystemStatusSnapshot *out);
-}
+// SystemStatusMac declarations live in systemstatus.h
 #endif
 
 namespace {
@@ -1528,6 +1526,10 @@ QString SystemStatusMonitor::toggleBluetooth()
     emitIfChanged(next);
     QTimer::singleShot(800, this, [this] { refreshLinuxBluetooth(); });
     return turnOn ? QStringLiteral("✓ 蓝牙已开启") : QStringLiteral("✓ 蓝牙已关闭");
+#elif defined(Q_OS_MACOS)
+    const QString msg = SystemStatusMac::toggleBluetooth();
+    QTimer::singleShot(600, this, [this] { pollSlowMetrics(); });
+    return msg;
 #else
     return {};
 #endif
@@ -1551,6 +1553,8 @@ QString SystemStatusMonitor::toggleDoNotDisturb()
     emitIfChanged(next);
     QTimer::singleShot(450, this, [this] { refreshLinuxDnd(); });
     return next.dndEnabled ? QStringLiteral("✓ 已开启勿扰模式") : QStringLiteral("✓ 已关闭勿扰模式");
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::toggleDoNotDisturb();
 #else
     return {};
 #endif
@@ -1600,6 +1604,8 @@ QString SystemStatusMonitor::cyclePowerProfile()
     emitIfChanged(next);
     QTimer::singleShot(450, this, [this] { refreshLinuxPowerProfile(); });
     return QStringLiteral("✓ 电源模式：%1").arg(label);
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::cyclePowerProfile();
 #else
     return {};
 #endif
@@ -1615,6 +1621,10 @@ QString SystemStatusMonitor::toggleWifi()
                                  turnOn ? QStringLiteral("on") : QStringLiteral("off")});
     QTimer::singleShot(1200, this, [this] { refreshLinuxNetwork(); });
     return turnOn ? QStringLiteral("✓ 正在开启 Wi-Fi") : QStringLiteral("✓ 已关闭 Wi-Fi");
+#elif defined(Q_OS_MACOS)
+    const QString msg = SystemStatusMac::toggleWifi();
+    QTimer::singleShot(1000, this, [this] { pollSlowMetrics(); });
+    return msg;
 #else
     return {};
 #endif
@@ -1628,6 +1638,8 @@ bool SystemStatusMonitor::openKdeModule(const QString &moduleName)
         return QProcess::startDetached(kcm, {moduleName});
     const QString sys = QStandardPaths::findExecutable(QStringLiteral("systemsettings"));
     if (!sys.isEmpty()) return QProcess::startDetached(sys, {});
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::openSystemSettings(moduleName);
 #else
     Q_UNUSED(moduleName);
 #endif
@@ -1646,6 +1658,8 @@ bool SystemStatusMonitor::openAppLauncher()
     msg.setArguments({QStringLiteral("activate application launcher")});
     bus.asyncCall(msg, 500);
     return true;
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::openSpotlight();
 #else
     return false;
 #endif
@@ -1662,6 +1676,8 @@ bool SystemStatusMonitor::openKRunner()
         QStringLiteral("display"));
     bus.asyncCall(msg, 500);
     return true;
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::openSpotlight();
 #else
     return false;
 #endif
@@ -1680,6 +1696,8 @@ bool SystemStatusMonitor::lockScreen()
         QStringLiteral("Lock"));
     bus.asyncCall(msg, 400);
     return true;
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::lockScreen();
 #else
     return false;
 #endif
@@ -1696,6 +1714,8 @@ bool SystemStatusMonitor::openPowerMenu()
         QStringLiteral("promptAll"));
     bus.asyncCall(msg, 500);
     return true;
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::openPowerMenu();
 #else
     return false;
 #endif

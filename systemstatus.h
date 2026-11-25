@@ -178,3 +178,59 @@ private:
     QProcess *m_notifMonitor = nullptr;
     int m_brightnessMax = 100;
 };
+
+#ifdef Q_OS_MACOS
+namespace SystemStatusMac {
+
+struct MacWifiNetwork {
+    QString ssid;
+    int signal = 0;
+    QString security;
+    QString rate;
+    QString freq;
+    bool active = false;
+};
+
+struct MacWifiState {
+    bool powered = false;
+    QString iface;
+    QString ip;
+    QList<MacWifiNetwork> networks;
+};
+
+struct MacBluetoothDevice {
+    QString address;
+    QString name;
+    QString iconType;
+    bool connected = false;
+    int batteryPercent = -1;
+};
+
+void populateSnapshot(SystemStatusSnapshot *out);
+QString toggleWifi();
+QString toggleBluetooth();
+QString toggleDoNotDisturb();
+QString cyclePowerProfile();
+bool openSystemSettings(const QString &moduleName);
+bool lockScreen();
+bool openPowerMenu();
+bool openSpotlight();
+
+void queryWifiAsync(QObject *context, bool rescan, std::function<void(const MacWifiState &)> cb);
+void connectWifiAsync(QObject *context, const QString &ssid, const QString &password,
+                      std::function<void(bool ok, const QString &msg)> cb);
+bool readNetInterfaceBytes(const QString &iface, quint64 *rxBytes, quint64 *txBytes);
+bool isInternetSharingActive();
+
+void queryBluetoothAsync(QObject *context,
+                         std::function<void(bool powered, const QList<MacBluetoothDevice> &)> cb);
+void toggleBluetoothDeviceAsync(QObject *context, const QString &address, bool currentlyConnected,
+                                std::function<void(bool ok, const QString &msg)> cb);
+
+void queryNowPlayingAsync(QObject *context,
+                          std::function<void(const QString &title, const QString &artist,
+                                             bool playing, bool visible)> cb);
+void sendMediaCommand(const QString &method);
+
+} // namespace SystemStatusMac
+#endif

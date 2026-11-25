@@ -32,6 +32,8 @@ QStringList systemDockPinnedPaths();
 QList<DockAppEntry> installedApps(int maxCount);
 DockAppEntry entryForPath(const QString &appPath, bool pinned);
 DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry);
+DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry);
+DesktopActions::Outcome minimizeAllWindows();
 DesktopActions::Outcome quitApp(const DockAppEntry &entry);
 void *installWorkspaceObservers(AppDockModel *model);
 void removeWorkspaceObservers(void *token);
@@ -897,7 +899,9 @@ DesktopActions::Outcome AppDockModel::launchFresh(const DockAppEntry &entry) con
 
 DesktopActions::Outcome AppDockModel::toggleOrActivate(const DockAppEntry &entry) const
 {
-#ifdef Q_OS_LINUX
+#ifdef Q_OS_MACOS
+    return AppDockMac::toggleOrActivate(entry);
+#elif defined(Q_OS_LINUX)
     if (entry.running && entry.active && !entry.windowId.isEmpty()) {
         const QString safeId = sanitizeKWinId(entry.windowId);
         if (!safeId.isEmpty()) {
@@ -916,13 +920,17 @@ DesktopActions::Outcome AppDockModel::toggleOrActivate(const DockAppEntry &entry
             return {true, QStringLiteral("✓ 已最小化 ") + entry.name};
         }
     }
-#endif
     return activateOrLaunch(entry);
+#else
+    return activateOrLaunch(entry);
+#endif
 }
 
 DesktopActions::Outcome AppDockModel::minimizeAllWindows() const
 {
-#ifdef Q_OS_LINUX
+#ifdef Q_OS_MACOS
+    return AppDockMac::minimizeAllWindows();
+#elif defined(Q_OS_LINUX)
     const QString js = QStringLiteral(
         "(function(){"
         "var cur=workspace.currentDesktop;"

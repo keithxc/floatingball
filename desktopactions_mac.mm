@@ -5,7 +5,10 @@
 #include <QRegularExpression>
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import <Carbon/Carbon.h>
+#import <CoreAudio/CoreAudio.h>
+#include <dlfcn.h>
 
 namespace DesktopActions {
 
@@ -140,8 +143,137 @@ Outcome macToggleVirtualKeyboard()
     return {false, QStringLiteral("无法打开系统辅助键盘")};
 }
 
+namespace {
+
+AudioDeviceID defaultOutputAudioDevice()
+{
+    AudioDeviceID dev = kAudioObjectUnknown;
+    UInt32 size = sizeof(dev);
+    AudioObjectPropertyAddress addr = {
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size, &dev) != noErr)
+        return kAudioObjectUnknown;
+    return dev;
+}
+
+bool readCoreAudioVolume(int *outPercent, bool *outMuted)
+{
+    const AudioDeviceID dev = defaultOutputAudioDevice();
+    if (dev == kAudioObjectUnknown) return false;
+
+    Float32 vol = 0.0f;
+    UInt32 volSize = sizeof(vol);
+    AudioObjectPropertyAddress volAddr = {
+        kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    if (!AudioObjectHasProperty(dev, &volAddr)) return false;
+    if (AudioObjectGetPropertyData(dev, &volAddr, 0, nullptr, &volSize, &vol) != noErr) return false;
+
+    UInt32 muted = 0;
+    UInt32 muteSize = sizeof(muted);
+    AudioObjectPropertyAddress muteAddr = {
+        kAudioDevicePropertyMute,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    if (AudioObjectHasProperty(dev, &muteAddr)) {
+        AudioObjectGetPropertyData(dev, &muteAddr, 0, nullptr, &muteSize, &muted);
+    }
+
+    if (outPercent) *outPercent = qBound(0, qRound(vol * 100.0f), 100);
+    if (outMuted) *outMuted = (muted != 0);
+    return true;
+}
+
+bool writeCoreAudioVolume(int percent)
+{
+    const AudioDeviceID dev = defaultOutputAudioDevice();
+    if (dev == kAudioObjectUnknown) return false;
+
+    AudioObjectPropertyAddress volAddr = {
+        kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    Boolean settable = false;
+    if (!AudioObjectHasProperty(dev, &volAddr) ||
+        AudioObjectIsPropertySettable(dev, &volAddr, &settable) != noErr || !settable) {
+        return false;
+    }
+
+    const Float32 target = static_cast<Float32>(qBound(0, percent, 100)) / 100.0f;
+    if (AudioObjectSetPropertyData(dev, &volAddr, 0, nullptr, sizeof(target), &target) != noErr)
+        return false;
+
+    AudioObjectPropertyAddress muteAddr = {
+        kAudioDevicePropertyMute,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    Boolean muteSettable = false;
+    if (AudioObjectHasProperty(dev, &muteAddr) &&
+        AudioObjectIsPropertySettable(dev, &muteAddr, &muteSettable) == noErr && muteSettable) {
+        UInt32 muteVal = (percent == 0) ? 1 : 0;
+        AudioObjectSetPropertyData(dev, &muteAddr, 0, nullptr, sizeof(muteVal), &muteVal);
+    }
+    return true;
+}
+
+bool toggleCoreAudioMute(int *outPercent, bool *outMuted)
+{
+    const AudioDeviceID dev = defaultOutputAudioDevice();
+    if (dev == kAudioObjectUnknown) return false;
+    AudioObjectPropertyAddress muteAddr = {
+        kAudioDevicePropertyMute,
+        kAudioDevicePropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    Boolean muteSettable = false;
+    if (!AudioObjectHasProperty(dev, &muteAddr) ||
+        AudioObjectIsPropertySettable(dev, &muteAddr, &muteSettable) != noErr || !muteSettable) {
+        return false;
+    }
+    UInt32 muted = 0;
+    UInt32 size = sizeof(muted);
+    if (AudioObjectGetPropertyData(dev, &muteAddr, 0, nullptr, &size, &muted) != noErr)
+        return false;
+    muted = muted ? 0 : 1;
+    if (AudioObjectSetPropertyData(dev, &muteAddr, 0, nullptr, sizeof(muted), &muted) != noErr)
+        return false;
+    return readCoreAudioVolume(outPercent, outMuted);
+}
+
+using DisplayServicesGetBrightnessFn = int (*)(CGDirectDisplayID, float *);
+using DisplayServicesSetBrightnessFn = int (*)(CGDirectDisplayID, float);
+
+void resolveDisplayServices(DisplayServicesGetBrightnessFn *getFn, DisplayServicesSetBrightnessFn *setFn)
+{
+    static void *handle = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY);
+    static DisplayServicesGetBrightnessFn sGet = handle
+        ? reinterpret_cast<DisplayServicesGetBrightnessFn>(dlsym(handle, "DisplayServicesGetBrightness"))
+        : nullptr;
+    static DisplayServicesSetBrightnessFn sSet = handle
+        ? reinterpret_cast<DisplayServicesSetBrightnessFn>(dlsym(handle, "DisplayServicesSetBrightness"))
+        : nullptr;
+    if (getFn) *getFn = sGet;
+    if (setFn) *setFn = sSet;
+}
+
+} // namespace
+
 void macQueryVolume(std::function<void(int, bool, bool)> callback)
 {
+    int vol = 50;
+    bool muted = false;
+    if (readCoreAudioVolume(&vol, &muted)) {
+        if (callback) callback(vol, muted, true);
+        return;
+    }
     auto proc = new SafeProcess(qApp);
     QObject::connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), qApp,
                      [proc, callback](int code, QProcess::ExitStatus status) {
@@ -155,9 +287,9 @@ void macQueryVolume(std::function<void(int, bool, bool)> callback)
         const QRegularExpression muteRe(QStringLiteral("output muted:(true|false)"));
         const auto vm = volRe.match(out);
         const auto mm = muteRe.match(out);
-        const int vol = vm.hasMatch() ? qBound(0, vm.captured(1).toInt(), 100) : 50;
-        const bool muted = mm.hasMatch() && mm.captured(1) == QLatin1String("true");
-        callback(vol, muted, vm.hasMatch());
+        const int v = vm.hasMatch() ? qBound(0, vm.captured(1).toInt(), 100) : 50;
+        const bool m = mm.hasMatch() && mm.captured(1) == QLatin1String("true");
+        callback(v, m, vm.hasMatch());
     });
     proc->start(QStringLiteral("/usr/bin/osascript"),
                 {QStringLiteral("-e"), QStringLiteral("get volume settings")});
@@ -166,6 +298,7 @@ void macQueryVolume(std::function<void(int, bool, bool)> callback)
 void macSetVolume(int percent)
 {
     const int clamped = qBound(0, percent, 100);
+    if (writeCoreAudioVolume(clamped)) return;
     const QString script = (clamped == 0)
         ? QStringLiteral("set volume output volume 0 with output muted")
         : QStringLiteral("set volume output volume %1 without output muted").arg(clamped);
@@ -174,6 +307,12 @@ void macSetVolume(int percent)
 
 void macToggleMute(std::function<void(int, bool, bool)> callback)
 {
+    int vol = 50;
+    bool muted = false;
+    if (toggleCoreAudioMute(&vol, &muted)) {
+        if (callback) callback(vol, muted, true);
+        return;
+    }
     auto proc = new SafeProcess(qApp);
     QObject::connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), qApp,
                      [proc, callback](int, QProcess::ExitStatus) {
@@ -183,6 +322,31 @@ void macToggleMute(std::function<void(int, bool, bool)> callback)
     proc->start(QStringLiteral("/usr/bin/osascript"),
                 {QStringLiteral("-e"),
                  QStringLiteral("set volume output muted not (output muted of (get volume settings))")});
+}
+
+void macQueryBrightness(std::function<void(int, bool)> callback)
+{
+    if (!callback) return;
+    DisplayServicesGetBrightnessFn getFn = nullptr;
+    resolveDisplayServices(&getFn, nullptr);
+    if (getFn) {
+        float val = 0.0f;
+        if (getFn(CGMainDisplayID(), &val) == 0 && val >= 0.0f && val <= 1.01f) {
+            callback(qBound(1, qRound(val * 100.0f), 100), true);
+            return;
+        }
+    }
+    callback(50, false);
+}
+
+void macSetBrightness(int percent)
+{
+    DisplayServicesSetBrightnessFn setFn = nullptr;
+    resolveDisplayServices(nullptr, &setFn);
+    if (setFn) {
+        const float target = static_cast<float>(qBound(1, percent, 100)) / 100.0f;
+        setFn(CGMainDisplayID(), target);
+    }
 }
 
 } // namespace DesktopActions

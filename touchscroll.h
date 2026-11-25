@@ -11,6 +11,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QVariantAnimation>
+#include <QWheelEvent>
 #include <QWidget>
 #include <cmath>
 #include <functional>
@@ -178,6 +179,39 @@ protected:
             }
             return false;
         }
+        case QEvent::Wheel: {
+            if (!onHorizontalSwipe) return false;
+            auto *we = static_cast<QWheelEvent *>(ev);
+            const Qt::ScrollPhase phase = we->phase();
+            // macOS Magic Trackpad / laptop two-finger horizontal swipe gesture
+            if (phase == Qt::ScrollBegin) {
+                m_wheelSwipeX = 0.0;
+                m_wheelSwipeFired = false;
+                return false;
+            }
+            if (phase == Qt::ScrollEnd || phase == Qt::ScrollMomentum) {
+                m_wheelSwipeX = 0.0;
+                m_wheelSwipeFired = false;
+                return false;
+            }
+            const QPoint pd = we->pixelDelta();
+            if (!pd.isNull() && std::abs(pd.x()) > std::abs(pd.y()) * 1.35 && std::abs(pd.x()) >= 2) {
+                if (m_wheelSwipeFired) {
+                    we->accept();
+                    return true;
+                }
+                m_wheelSwipeX += pd.x();
+                if (std::abs(m_wheelSwipeX) >= 48.0) {
+                    const int delta = (m_wheelSwipeX < 0.0) ? 1 : -1;
+                    m_wheelSwipeFired = true;
+                    m_wheelSwipeX = 0.0;
+                    onHorizontalSwipe(delta);
+                }
+                we->accept();
+                return true;
+            }
+            return false;
+        }
         default:
             return false;
         }
@@ -233,6 +267,8 @@ private:
     int m_startScroll = 0;
     qreal m_velocityY = 0.0;
     qreal m_velocityX = 0.0;
+    qreal m_wheelSwipeX = 0.0;
+    bool m_wheelSwipeFired = false;
     bool m_tracking = false;
     Axis m_axis = AxisNone;
 };

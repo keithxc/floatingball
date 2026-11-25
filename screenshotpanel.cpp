@@ -656,7 +656,13 @@ void ScreenshotPanel::restoreFloatingWindows() {
 void ScreenshotPanel::startRecording(bool window) {
     if(capture->isActive() || recorder->isActive())return;
     captureAnchor=geometry().center();hiddenForCapture.clear();
-    for(QWidget *widget:QApplication::topLevelWidgets())if(widget->isVisible()&&widget->property("floatingballSurface").toBool())hiddenForCapture.append(widget);
+    // Hide panels/popovers so they don't obstruct the recording, but keep the
+    // FloatingBall itself visible so the user can operate & record the ball!
+    for(QWidget *widget:QApplication::topLevelWidgets()) {
+        if(!widget->isVisible() || !widget->property("floatingballSurface").toBool()) continue;
+        if(QByteArray(widget->metaObject()->className()) == "FloatingBall") continue;
+        hiddenForCapture.append(widget);
+    }
     for(const auto &widget:hiddenForCapture)if(widget)widget->hide();
     if(auto popup=QApplication::activePopupWidget())popup->hide();
     recorder->start(directory,captureAnchor,window);

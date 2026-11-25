@@ -76,10 +76,20 @@ public:
 protected:
     bool eventFilter(QObject *, QEvent *event) override
     {
-        if (event->type() == QEvent::WindowBlocked)
+        const bool isBall = (QByteArray(widget->metaObject()->className()) == "FloatingBall");
+        if (!isBall && event->type() == QEvent::WindowBlocked) {
             surface->setLayer(LayerShellQt::Window::LayerBottom);
-        else if (event->type() == QEvent::WindowUnblocked)
+            if (widget->isVisible() && widget->windowHandle()) {
+                widget->update();
+                widget->windowHandle()->requestUpdate();
+            }
+        } else if (!isBall && event->type() == QEvent::WindowUnblocked) {
             surface->setLayer(LayerShellQt::Window::LayerOverlay);
+            if (widget->isVisible() && widget->windowHandle()) {
+                widget->update();
+                widget->windowHandle()->requestUpdate();
+            }
+        }
         if (event->type() == QEvent::Move || event->type() == QEvent::Resize)
             sync(false);
         else if (event->type() == QEvent::Show)
@@ -225,6 +235,40 @@ void FloatingWindow::paintLiquidGlass(QPainter &p, const QRect &widgetRect, doub
     p.setPen(Qt::NoPen);
 
     const QRectF base = QRectF(widgetRect).adjusted(inset, inset, -inset, -inset);
+    bool nativeMacGlass = false;
+    if (const auto *w = dynamic_cast<const QWidget *>(p.device())) {
+        nativeMacGlass = (w->property("panelBackdropBlurStatus").toString() == QLatin1String("macos-liquid-glass"));
+    }
+
+    if (nativeMacGlass) {
+        // On macOS 26/27+, native NSGlassEffectView renders real optical refraction,
+        // adaptive lensing, specular edge highlights, and concentric shadow. Keep a
+        // whisper-light dark contrast veil + hairline catch-light so foreground controls
+        // stay legible over bright windows without muddying Apple's native Liquid Glass.
+        QLinearGradient veil(base.topLeft(), base.bottomRight());
+        veil.setColorAt(0.0, QColor(34, 46, 72, 42));
+        veil.setColorAt(0.45, QColor(18, 24, 40, 48));
+        veil.setColorAt(1.0, QColor(12, 16, 28, 60));
+        p.setBrush(veil);
+        p.drawRoundedRect(base, radius, radius);
+
+        QRadialGradient topSheen(base.topLeft() + QPointF(base.width() * 0.24, 0.0), base.width() * 0.85);
+        topSheen.setColorAt(0.0, QColor(255, 255, 255, 22));
+        topSheen.setColorAt(0.5, QColor(200, 226, 255, 6));
+        topSheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setBrush(topSheen);
+        p.drawRoundedRect(base, radius, radius);
+
+        QLinearGradient rimGrad(base.topLeft(), base.bottomRight());
+        rimGrad.setColorAt(0.0, QColor(255, 255, 255, 36));
+        rimGrad.setColorAt(0.45, QColor(255, 255, 255, 6));
+        rimGrad.setColorAt(1.0, QColor(165, 216, 255, 18));
+        p.setPen(QPen(QBrush(rimGrad), 1.0));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(base.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5);
+        p.restore();
+        return;
+    }
 
     // 1. Borderless feathered outer ambient gradient (no hard outer stroke)
     struct FeatherStep { qreal expand; int alpha; };

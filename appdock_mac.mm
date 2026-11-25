@@ -92,6 +92,70 @@ QString bundleIdForPath(const QString &appPath)
     }
 }
 
+QStringList categoriesForPath(const QString &appPath, const QString &bundleId, const QString &name)
+{
+    QStringList cats;
+    @autoreleasepool {
+        NSBundle *bundle = [NSBundle bundleWithPath:appPath.toNSString()];
+        NSString *uti = bundle ? [bundle objectForInfoDictionaryKey:@"LSApplicationCategoryType"] : nil;
+        const QString raw = [uti isKindOfClass:[NSString class]] ? QString::fromNSString(uti).toLower() : QString();
+        if (raw.contains(QLatin1String("developer-tools")))
+            cats << QStringLiteral("Development");
+        else if (raw.contains(QLatin1String("social-networking")))
+            cats << QStringLiteral("Network");
+        else if (raw.contains(QLatin1String("music")) || raw.contains(QLatin1String("video")) ||
+                 raw.contains(QLatin1String("photography")) || raw.contains(QLatin1String("graphics-design")) ||
+                 raw.contains(QLatin1String("entertainment")))
+            cats << QStringLiteral("AudioVideo");
+        else if (raw.contains(QLatin1String("productivity")) || raw.contains(QLatin1String("business")) ||
+                 raw.contains(QLatin1String("education")) || raw.contains(QLatin1String("finance")) ||
+                 raw.contains(QLatin1String("reference")))
+            cats << QStringLiteral("Office");
+        else if (raw.contains(QLatin1String("games")))
+            cats << QStringLiteral("Game");
+        else if (raw.contains(QLatin1String("utilities")))
+            cats << QStringLiteral("System");
+    }
+    if (cats.isEmpty()) {
+        const QString key = (bundleId + QLatin1Char(' ') + name).toLower();
+        if (key.contains(QLatin1String("xcode")) || key.contains(QLatin1String("vscode")) ||
+            key.contains(QLatin1String("cursor")) || key.contains(QLatin1String("terminal")) ||
+            key.contains(QLatin1String("iterm")) || key.contains(QLatin1String("ghostty")) ||
+            key.contains(QLatin1String("warp")) || key.contains(QLatin1String("antigravity")) ||
+            key.contains(QLatin1String("jetbrains")) || key.contains(QLatin1String("sublime"))) {
+            cats << QStringLiteral("Development");
+        } else if (key.contains(QLatin1String("safari")) || key.contains(QLatin1String("chrome")) ||
+                   key.contains(QLatin1String("firefox")) || key.contains(QLatin1String("arc")) ||
+                   key.contains(QLatin1String("wechat")) || key.contains(QLatin1String("telegram")) ||
+                   key.contains(QLatin1String("slack")) || key.contains(QLatin1String("discord")) ||
+                   key.contains(QLatin1String("mail")) || key.contains(QLatin1String("messages")) ||
+                   key.contains(QLatin1String("feishu")) || key.contains(QLatin1String("lark")) ||
+                   key.contains(QLatin1String("clash")) || key.contains(QLatin1String("mihomo"))) {
+            cats << QStringLiteral("Network");
+        } else if (key.contains(QLatin1String("music")) || key.contains(QLatin1String("spotify")) ||
+                   key.contains(QLatin1String("photos")) || key.contains(QLatin1String("iina")) ||
+                   key.contains(QLatin1String("vlc")) || key.contains(QLatin1String("quicktime")) ||
+                   key.contains(QLatin1String("tv")) || key.contains(QLatin1String("podcasts")) ||
+                   key.contains(QLatin1String("blender")) || key.contains(QLatin1String("figma"))) {
+            cats << QStringLiteral("AudioVideo");
+        } else if (key.contains(QLatin1String("notes")) || key.contains(QLatin1String("obsidian")) ||
+                   key.contains(QLatin1String("notion")) || key.contains(QLatin1String("pages")) ||
+                   key.contains(QLatin1String("numbers")) || key.contains(QLatin1String("keynote")) ||
+                   key.contains(QLatin1String("calendar")) || key.contains(QLatin1String("reminders")) ||
+                   key.contains(QLatin1String("word")) || key.contains(QLatin1String("excel")) ||
+                   key.contains(QLatin1String("wps"))) {
+            cats << QStringLiteral("Office");
+        } else if (appPath.startsWith(QLatin1String("/System/Applications/Utilities")) ||
+                   key.contains(QLatin1String("systempreferences")) ||
+                   key.contains(QLatin1String("system settings")) ||
+                   key.contains(QLatin1String("activitymonitor")) ||
+                   key.contains(QLatin1String("finder"))) {
+            cats << QStringLiteral("System");
+        }
+    }
+    return cats;
+}
+
 struct ObserverPack {
     NSMutableArray *tokens = nil;
 };
@@ -184,6 +248,7 @@ DockAppEntry entryForPath(const QString &appPath, bool pinned)
     entry.launchTarget = appPath;
     entry.id = bundleIdForPath(appPath);
     entry.name = localizedAppName(appPath);
+    entry.categories = categoriesForPath(appPath, entry.id, entry.name);
     entry.icon = cachedIconForPath(appPath);
     entry.pinned = pinned;
     return entry;
@@ -256,6 +321,52 @@ DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry)
             return {true, QStringLiteral("✓ 正在打开 ") + entry.name};
         }
         return {false, QStringLiteral("找不到应用：") + entry.name};
+    }
+}
+
+DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry)
+{
+    @autoreleasepool {
+        if (entry.running && entry.active) {
+            NSArray<NSRunningApplication *> *running = [NSWorkspace sharedWorkspace].runningApplications;
+            for (NSRunningApplication *app in running) {
+                if (app.isTerminated) continue;
+                const bool idMatch = !entry.id.isEmpty() && app.bundleIdentifier &&
+                                     [app.bundleIdentifier isEqualToString:entry.id.toNSString()];
+                const bool pathMatch = !entry.launchTarget.isEmpty() && app.bundleURL &&
+                                       [app.bundleURL.path isEqualToString:entry.launchTarget.toNSString()];
+                if ((idMatch || pathMatch) && app.isActive) {
+                    if ([app hide]) {
+                        return {true, QStringLiteral("✓ 已隐藏 ") + entry.name};
+                    }
+                }
+            }
+        }
+    }
+    return activateOrLaunch(entry);
+}
+
+DesktopActions::Outcome minimizeAllWindows()
+{
+    @autoreleasepool {
+        // Truly hide every regular running app (including Finder browser windows,
+        // while Finder's desktop wallpaper & icons stay visible). Clicking the
+        // desktop will NEVER snap windows back like Mission Control's Show Desktop peek.
+        int hiddenCount = 0;
+        NSArray<NSRunningApplication *> *running = [NSWorkspace sharedWorkspace].runningApplications;
+        for (NSRunningApplication *app in running) {
+            if (app.isTerminated) continue;
+            if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+            NSString *bundleId = app.bundleIdentifier;
+            NSString *name = app.localizedName;
+            NSString *path = app.bundleURL ? app.bundleURL.path : nil;
+            if (isSelfBundleOrName(bundleId, name, path)) continue;
+            if (!app.isHidden && [app hide]) {
+                ++hiddenCount;
+            }
+        }
+        return {true, hiddenCount > 0 ? QStringLiteral("✓ 已隐藏全部窗口，仅显示桌面")
+                                      : QStringLiteral("✓ 桌面已清空")};
     }
 }
 

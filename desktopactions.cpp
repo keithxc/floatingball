@@ -34,6 +34,8 @@ bool macAccessibilityTrusted(bool promptUser);
 void macQueryVolume(std::function<void(int, bool, bool)> callback);
 void macSetVolume(int percent);
 void macToggleMute(std::function<void(int, bool, bool)> callback);
+void macQueryBrightness(std::function<void(int, bool)> callback);
+void macSetBrightness(int percent);
 #endif
 
 namespace {
@@ -546,7 +548,9 @@ void toggleMute(std::function<void(int, bool, bool)> callback)
 void queryBrightness(std::function<void(int, bool)> callback)
 {
     if (!callback) return;
-#ifdef Q_OS_LINUX
+#ifdef Q_OS_MACOS
+    macQueryBrightness(std::move(callback));
+#elif defined(Q_OS_LINUX)
     auto session = QDBusConnection::sessionBus();
     auto maxMsg = QDBusMessage::createMethodCall(
         QStringLiteral("org.kde.Solid.PowerManagement"),
@@ -579,7 +583,9 @@ void queryBrightness(std::function<void(int, bool)> callback)
 void setBrightness(int percent)
 {
     percent = qBound(0, percent, 100);
-#ifdef Q_OS_LINUX
+#ifdef Q_OS_MACOS
+    macSetBrightness(percent);
+#elif defined(Q_OS_LINUX)
     auto session = QDBusConnection::sessionBus();
     auto maxMsg = QDBusMessage::createMethodCall(
         QStringLiteral("org.kde.Solid.PowerManagement"),

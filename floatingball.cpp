@@ -3080,7 +3080,6 @@ void FloatingBall::takeScreenshot(const CaptureOptions &options)
 void FloatingBall::recordScreen(bool window)
 {
     closeFan(true);
-    resultPanel()->reveal(anchorCenterGlobal().toPoint(), false);
     resultPanel()->startRecording(window);
 }
 

@@ -10,6 +10,8 @@
 #include <QWidget>
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 // A decorative sibling cannot take clicks, keyboard focus or accessibility
 // focus away from the Qt content view above it.
@@ -24,6 +26,63 @@
 
 namespace {
 
+// Runtime non-hit-testing subclass of macOS 26/27+ NSGlassEffectView so we get
+// true hardware-accelerated Apple Liquid Glass (with macOS 27 interactive glass)
+// while remaining binary- and source-compatible with macOS 14/15 SDKs.
+static id glassHitTestNil(id, SEL, NSPoint) { return nil; }
+static BOOL glassReturnNo(id, SEL) { return NO; }
+static id glassReturnEmptyArray(id, SEL) { return @[]; }
+
+Class floatingPanelGlassEffectClass()
+{
+    static Class cached = Nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class base = NSClassFromString(@"NSGlassEffectView");
+        if (!base) return;
+        Class existing = objc_lookUpClass("FloatingPanelGlassEffectView");
+        if (existing) {
+            cached = existing;
+            return;
+        }
+        Class cls = objc_allocateClassPair(base, "FloatingPanelGlassEffectView", 0);
+        if (!cls) return;
+        class_addMethod(cls, @selector(hitTest:), (IMP)glassHitTestNil, "@@:{CGPoint=dd}");
+        class_addMethod(cls, @selector(acceptsFirstResponder), (IMP)glassReturnNo, "B@:");
+        class_addMethod(cls, @selector(isAccessibilityElement), (IMP)glassReturnNo, "B@:");
+        class_addMethod(cls, @selector(accessibilityChildren), (IMP)glassReturnEmptyArray, "@@:");
+        objc_registerClassPair(cls);
+        cached = cls;
+    });
+    return cached;
+}
+
+void configureGlassEffectView(NSView *view, CGFloat cornerRadius, bool interactive)
+{
+    if (!view) return;
+    SEL selRadius = NSSelectorFromString(@"setCornerRadius:");
+    if ([view respondsToSelector:selRadius]) {
+        ((void (*)(id, SEL, CGFloat))objc_msgSend)(view, selRadius, cornerRadius);
+    }
+    // NSGlassEffectViewStyleRegular = 0 (balanced dark/light adaptive optical refraction)
+    SEL selStyle = NSSelectorFromString(@"setStyle:");
+    if ([view respondsToSelector:selStyle]) {
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(view, selStyle, 0);
+    }
+    SEL selTint = NSSelectorFromString(@"setTintColor:");
+    if ([view respondsToSelector:selTint]) {
+        NSColor *tint = [NSColor colorWithSRGBRed:0.09 green:0.12 blue:0.20 alpha:0.28];
+        ((void (*)(id, SEL, NSColor *))objc_msgSend)(view, selTint, tint);
+    }
+    // macOS 27.0+ native interactive Liquid Glass optical feedback
+    SEL selInteractive = NSSelectorFromString(@"setEffectIsInteractive:");
+    if ([view respondsToSelector:selInteractive]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(view, selInteractive, interactive ? YES : NO);
+    }
+    view.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+}
+
 void applyNativeFloatingPolicy(QWidget *widget, bool activateOnShow)
 {
     Q_UNUSED(activateOnShow);
@@ -37,6 +96,11 @@ void applyNativeFloatingPolicy(QWidget *widget, bool activateOnShow)
     // alpha surfaces create jagged dark rings around arcs and tethers.
     if (widget->testAttribute(Qt::WA_TranslucentBackground) &&
         !widget->property("panelOpacityManaged").toBool()) {
+        window.hasShadow = NO;
+    } else if (widget->property("panelOpacityManaged").toBool() &&
+               widget->property("panelBlurInset").toDouble() > 0.0 &&
+               floatingPanelGlassEffectClass() != Nil) {
+        // Native NSGlassEffectView renders its own concentric macOS 27 glass shadow/refraction.
         window.hasShadow = NO;
     }
     NSWindowCollectionBehavior behavior = window.collectionBehavior;
@@ -147,7 +211,8 @@ private:
     {
         if (!m_widget) return;
         QScopedValueRollback<bool> guard(m_syncing, true);
-        const bool changed = m_widget->property("panelBackdropBlurActive").toBool() != active;
+        const bool changed = m_widget->property("panelBackdropBlurActive").toBool() != active ||
+                             m_widget->property("panelBackdropBlurStatus").toString() != status;
         m_widget->setProperty("panelBackdropBlurActive", active);
         m_widget->setProperty("panelBackdropBlurStatus", status);
         if (!changed) return;
@@ -169,6 +234,7 @@ private:
             [m_effect release];
             m_effect = nil;
         }
+        m_usingLiquidGlass = false;
     }
     void scheduleSync()
     {
@@ -201,31 +267,58 @@ private:
             publish(false, QStringLiteral("awaiting-native-view"));
             return;
         }
+
+        const QVariant insetVar = m_widget->property("panelBlurInset");
+        const CGFloat inset = insetVar.isValid() ? static_cast<CGFloat>(qMax(0.0, insetVar.toDouble())) : 0.0;
+        const QVariant radiusVar = m_widget->property("panelBlurRadius");
+        const CGFloat radius = radiusVar.isValid() ? static_cast<CGFloat>(qMax(0.0, radiusVar.toDouble())) : 18.0;
+        const NSRect targetFrame = (inset > 0.5 && qtView.frame.size.width > inset * 2.0 && qtView.frame.size.height > inset * 2.0)
+            ? NSInsetRect(qtView.frame, inset, inset)
+            : qtView.frame;
+
         if (!m_effect) {
-            m_effect = [[FloatingPanelVisualEffectView alloc] initWithFrame:qtView.frame];
-            m_effect.material = NSVisualEffectMaterialUnderWindowBackground;
-            m_effect.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-            m_effect.state = NSVisualEffectStateActive;
-            m_effect.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-            m_effect.emphasized = NO;
-            m_effect.alphaValue = 1.0;
-            m_effect.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-            m_effect.wantsLayer = YES;
-            m_effect.layer.cornerRadius = 18.0;
-            m_effect.layer.masksToBounds = YES;
+            Class glassCls = floatingPanelGlassEffectClass();
+            if (glassCls) {
+                m_effect = [[glassCls alloc] initWithFrame:targetFrame];
+                configureGlassEffectView(m_effect, radius, true);
+                m_usingLiquidGlass = true;
+            } else {
+                FloatingPanelVisualEffectView *vfx = [[FloatingPanelVisualEffectView alloc] initWithFrame:targetFrame];
+                vfx.material = NSVisualEffectMaterialUnderWindowBackground;
+                vfx.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                vfx.state = NSVisualEffectStateActive;
+                vfx.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+                vfx.emphasized = NO;
+                vfx.alphaValue = 1.0;
+                vfx.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                vfx.wantsLayer = YES;
+                vfx.layer.cornerRadius = radius;
+                vfx.layer.masksToBounds = YES;
+                m_effect = vfx;
+                m_usingLiquidGlass = false;
+            }
+        } else if (m_usingLiquidGlass) {
+            configureGlassEffectView(m_effect, radius, true);
+        } else if (m_effect.layer) {
+            m_effect.layer.cornerRadius = radius;
         }
+
         if (m_effect.superview != parent) {
             [m_effect removeFromSuperview];
             [parent addSubview:m_effect positioned:NSWindowBelow relativeTo:qtView];
         }
-        m_effect.frame = qtView.frame;
+        m_effect.frame = targetFrame;
         m_effect.hidden = !m_widget->isVisible();
-        publish(!m_effect.hidden && m_effect.superview == parent,
-                m_effect.hidden ? QStringLiteral("hidden") : QStringLiteral("active"));
+        const bool active = !m_effect.hidden && m_effect.superview == parent;
+        publish(active,
+                !active ? QStringLiteral("hidden")
+                        : (m_usingLiquidGlass ? QStringLiteral("macos-liquid-glass")
+                                              : QStringLiteral("active")));
     }
     QPointer<QWidget> m_widget;
-    FloatingPanelVisualEffectView *m_effect = nil;
+    NSView *m_effect = nil;
     id m_accessibilityObserver = nil;
+    bool m_usingLiquidGlass = false;
     bool m_enabled = false, m_syncing = false, m_queued = false;
 };
 
@@ -242,7 +335,8 @@ MacPanelBackdrop *bridge(QWidget *widget)
 bool PanelBackdrop::supported()
 {
     return QGuiApplication::platformName() == QStringLiteral("cocoa") &&
-           NSClassFromString(@"NSVisualEffectView") != nil;
+           (NSClassFromString(@"NSGlassEffectView") != nil ||
+            NSClassFromString(@"NSVisualEffectView") != nil);
 }
 
 bool PanelBackdrop::setEnabled(QWidget *widget, bool enabled)

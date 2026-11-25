@@ -24,9 +24,14 @@ class BackdropPattern final : public QWidget {
     }
 };
 
-static NSVisualEffectView *effectFor(QWidget *widget,int &count){
-    NSView *view=reinterpret_cast<NSView *>(widget->winId());NSVisualEffectView *effect=nil;count=0;
-    for(NSView *child in view.superview.subviews)if([child isKindOfClass:NSClassFromString(@"FloatingPanelVisualEffectView")]){effect=(NSVisualEffectView *)child;++count;}
+static NSView *effectFor(QWidget *widget,int &count,bool &isGlass){
+    NSView *view=reinterpret_cast<NSView *>(widget->winId());NSView *effect=nil;count=0;isGlass=false;
+    Class glassCls=NSClassFromString(@"FloatingPanelGlassEffectView");
+    Class vfxCls=NSClassFromString(@"FloatingPanelVisualEffectView");
+    for(NSView *child in view.superview.subviews){
+        if(glassCls&&[child isKindOfClass:glassCls]){effect=child;isGlass=true;++count;}
+        else if(vfxCls&&[child isKindOfClass:vfxCls]){effect=child;isGlass=false;++count;}
+    }
     return effect;
 }
 
@@ -47,21 +52,24 @@ int main(int argc,char **argv){
     QTimer checks;checks.setInterval(300);
     QObject::connect(&checks,&QTimer::timeout,&glass,[&]{
         if(glass.property("panelBackdropReduceTransparency").toBool()){printf("SKIP system Reduce Transparency is enabled; unchanged\n");app.exit(77);return;}
-        int count=0;auto effect=effectFor(&glass,count);qtView=reinterpret_cast<NSView *>(glass.winId());
+        int count=0;bool isGlass=false;auto effect=effectFor(&glass,count,isGlass);qtView=reinterpret_cast<NSView *>(glass.winId());
         const bool expectActive=phase!=1;
         if(qtView.window.contentView!=originalContent||glass.property("panelBackdropBlurActive").toBool()!=expectActive||count!=(expectActive?1:0)){
             fprintf(stderr,"FAIL native lifecycle phase=%d count=%d active=%d status=%s\n",phase,count,int(glass.property("panelBackdropBlurActive").toBool()),glass.property("panelBackdropBlurStatus").toString().toUtf8().constData());app.exit(1);return;
         }
         if(glass.windowOpacity()!=1.0||glass.styleSheet().contains("@panelTint@")){fprintf(stderr,"FAIL tint template must preserve full foreground opacity\n");app.exit(1);return;}
-        if(expectActive&&(effect.blendingMode!=NSVisualEffectBlendingModeBehindWindow||effect.state!=NSVisualEffectStateActive||!NSEqualRects(effect.frame,qtView.frame)||[qtView.superview.subviews indexOfObject:effect]>=[qtView.superview.subviews indexOfObject:qtView]||[effect hitTest:NSMakePoint(12,12)]!=nil)){
+        if(expectActive&&(!NSEqualRects(effect.frame,qtView.frame)||[qtView.superview.subviews indexOfObject:effect]>=[qtView.superview.subviews indexOfObject:qtView]||[effect hitTest:NSMakePoint(12,12)]!=nil)){
             fprintf(stderr,"FAIL native effect is not a decorative lower sibling\n");app.exit(1);return;
         }
-        if(expectActive&&(effect.material!=NSVisualEffectMaterialUnderWindowBackground||![effect.appearance.name isEqualToString:NSAppearanceNameDarkAqua]||![[effect.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua]||effect.isEmphasized||effect.alphaValue!=1.0)){
-            fprintf(stderr,"FAIL native backdrop must use dark under-window material without extra emphasis or whole-view fading\n");app.exit(1);return;
+        if(expectActive&&!isGlass){
+            auto vfx=static_cast<NSVisualEffectView *>(effect);
+            if(vfx.blendingMode!=NSVisualEffectBlendingModeBehindWindow||vfx.state!=NSVisualEffectStateActive||vfx.material!=NSVisualEffectMaterialUnderWindowBackground||![vfx.appearance.name isEqualToString:NSAppearanceNameDarkAqua]||vfx.isEmphasized||vfx.alphaValue!=1.0){
+                fprintf(stderr,"FAIL native backdrop must use dark under-window material without extra emphasis or whole-view fading\n");app.exit(1);return;
+            }
         }
         if(phase==4&&(glass.styleSheet()==tintBefore||FloatingWindow::panelOpacity()!=0.55)){fprintf(stderr,"FAIL panel tint change did not update CSS independently of window opacity\n");app.exit(1);return;}
-        printf("NATIVE_BACKDROP phase=%d active=%d count=%d qt_content_unchanged=1\n",phase,int(expectActive),count);fflush(stdout);
-        if(expectActive){printf("NATIVE_DARK_GLASS material=%ld appearance=%s native_view_opaque=%d window_opacity=%.2f tint=%.2f\n",long(effect.material),effect.appearance.name.UTF8String,int([effect isOpaque]),glass.windowOpacity(),FloatingWindow::panelOpacity());fflush(stdout);}
+        printf("NATIVE_BACKDROP phase=%d active=%d count=%d liquid_glass=%d qt_content_unchanged=1\n",phase,int(expectActive),count,int(isGlass));fflush(stdout);
+        if(expectActive){printf("NATIVE_DARK_GLASS kind=%s appearance=%s native_view_opaque=%d window_opacity=%.2f tint=%.2f\n",isGlass?"NSGlassEffectView":"NSVisualEffectView",effect.appearance.name.UTF8String,int([effect isOpaque]),glass.windowOpacity(),FloatingWindow::panelOpacity());fflush(stdout);}
         if(phase==0)FloatingWindow::setPanelBlurEnabled(false);
         else if(phase==1)FloatingWindow::setPanelBlurEnabled(true);
         else if(phase==2)glass.resize(420,250);

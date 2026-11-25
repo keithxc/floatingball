@@ -553,7 +553,11 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     // Stable fixed geometry prevents Wayland LayerShellQt async configure clipping
     // when switching subpages, refreshing Wi-Fi lists, or showing status banners.
+#ifdef Q_OS_MACOS
+    setFixedSize(344, 286);
+#else
     setFixedSize(344, 404);
+#endif
     setProperty("panelBlurInset", 10);
     setProperty("panelBlurRadius", 26);
 
@@ -731,6 +735,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 
     // ---- Stacked Pages (0 = Home, 1 = Wi-Fi, 2 = Hotspot, 3 = Bluetooth, 4 = Mihomo, 5 = 4G) ----
     m_stack = new QStackedWidget(card);
+    m_stack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_stack->addWidget(buildHomePage(m_stack));
     m_stack->addWidget(buildWifiPage(m_stack));
     m_stack->addWidget(buildHotspotPage(m_stack));
@@ -843,12 +848,23 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
                                 [this] { showPage(PageCellular); });
     m_homeWwanRow->hide();
     connCol->addWidget(m_homeWwanRow);
-    connCol->addWidget(makeConnRow(QStringLiteral("个人热点"), m_hsSsid + QStringLiteral(" · WPA3"),
+    connCol->addWidget(makeConnRow(
+#ifdef Q_OS_MACOS
+                                   QStringLiteral("互联网共享"), QStringLiteral("未开启"),
+                                   FloatingIcons::Hotspot, QColor(255, 255, 255, 28),
+                                   &m_homeHotspotBadge, &m_homeHotspotSub,
+                                   QStringLiteral("点击打开 macOS 互联网共享设置"),
+                                   [this] { toggleHotspot(); },
+                                   [this] { toggleHotspot(); }
+#else
+                                   QStringLiteral("个人热点"), m_hsSsid + QStringLiteral(" · WPA3"),
                                    FloatingIcons::Hotspot, QColor(255, 255, 255, 28),
                                    &m_homeHotspotBadge, &m_homeHotspotSub,
                                    QStringLiteral("点击圆标一键开关个人热点"),
                                    [this] { toggleHotspot(); },
-                                   [this] { showPage(PageHotspot); }));
+                                   [this] { showPage(PageHotspot); }
+#endif
+                                   ));
     connCol->addWidget(makeConnRow(QStringLiteral("蓝牙"), QStringLiteral("检测中…"),
                                    FloatingIcons::Bluetooth, QColor("#3b82f6"),
                                    &m_homeBtBadge, &m_homeBtSub,
@@ -1462,6 +1478,13 @@ void SystemPopover::showPage(Page page)
     syncHeaderForPage();
     syncNetStatsTimer();
     refreshCurrentPage();
+#ifdef Q_OS_MACOS
+    if (page == PageHome) {
+        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
+    } else {
+        setFixedHeight(436);
+    }
+#endif
 }
 
 void SystemPopover::syncHeaderForPage()
@@ -1572,6 +1595,23 @@ void SystemPopover::pollLiveNetStats()
                                     .arg(formatByteRate(txRate), formatByteRate(rxRate),
                                          formatByteCount(tx), formatByteCount(rx)));
     }
+#elif defined(Q_OS_MACOS)
+    if (m_currentPage != PageWifi || m_wifiIface.isEmpty() || m_cachedWifiSsid.isEmpty()) return;
+    quint64 rx = 0, tx = 0;
+    if (!SystemStatusMac::readNetInterfaceBytes(m_wifiIface, &rx, &tx)) return;
+    quint64 rxRate = 0, txRate = 0;
+    if (m_hasLastStats && m_lastStatsIface == m_wifiIface) {
+        rxRate = (rx >= m_lastRxBytes) ? (rx - m_lastRxBytes) : 0;
+        txRate = (tx >= m_lastTxBytes) ? (tx - m_lastTxBytes) : 0;
+    }
+    m_lastStatsIface = m_wifiIface;
+    m_lastRxBytes = rx;
+    m_lastTxBytes = tx;
+    m_hasLastStats = true;
+    if (m_wifiSpeedLbl) {
+        m_wifiSpeedLbl->setText(QStringLiteral("实时网速  ↓ %1  ·  ↑ %2")
+                                    .arg(formatByteRate(rxRate), formatByteRate(txRate)));
+    }
 #endif
 }
 
@@ -1616,7 +1656,15 @@ void SystemPopover::syncHomeFromSnapshot()
 
     // Home 4G WWAN row
     if (m_homeWwanRow) {
+        const bool wasVis = m_homeWwanRow->isVisible();
         m_homeWwanRow->setVisible(m_wwanAvailable);
+#ifdef Q_OS_MACOS
+        if (m_currentPage == PageHome && wasVis != m_wwanAvailable) {
+            setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
+        }
+#else
+        Q_UNUSED(wasVis);
+#endif
         styleCircleOrbBtn(m_homeWwanBadge, FloatingIcons::Cellular,
                           m_wwanEnabled ? QColor("#10b981") : QColor(255, 255, 255, 28),
                           m_wwanEnabled ? QColor("#ffffff") : QColor("#cbd5e1"), m_wwanEnabled, 32);
@@ -1633,6 +1681,9 @@ void SystemPopover::syncHomeFromSnapshot()
     styleCircleOrbBtn(m_homeHotspotBadge, FloatingIcons::Hotspot,
                       m_hsActive ? QColor("#10b981") : QColor(255, 255, 255, 28),
                       m_hsActive ? QColor("#ffffff") : QColor("#cbd5e1"), m_hsActive, 32);
+#ifdef Q_OS_MACOS
+    m_homeHotspotSub->setText(m_hsActive ? QStringLiteral("共享中") : QStringLiteral("未开启"));
+#else
     if (m_hsActive) {
         const QString sec = m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
         const QString sub = m_hsClients.isEmpty()
@@ -1642,6 +1693,7 @@ void SystemPopover::syncHomeFromSnapshot()
     } else {
         m_homeHotspotSub->setText(QStringLiteral("已关闭"));
     }
+#endif
 
     // Home Bluetooth row
     const bool btOn = st.bluetoothPowered || m_btPowered;
@@ -1748,7 +1800,11 @@ void SystemPopover::applyMprisVisuals()
             m_mprisPlaying ? FloatingIcons::MediaPause : FloatingIcons::MediaPlay,
             QColor("#ffffff"), 14));
     }
-    adjustSize();
+#ifdef Q_OS_MACOS
+    if (m_currentPage == PageHome) {
+        setFixedHeight((m_wwanAvailable ? 336 : 286) + (m_mprisVisible ? 64 : 0));
+    }
+#endif
 }
 
 void SystemPopover::refreshMpris()
@@ -1848,6 +1904,18 @@ void SystemPopover::refreshMpris()
             });
         }
     });
+#elif defined(Q_OS_MACOS)
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
+    QPointer<SystemPopover> self(this);
+    SystemStatusMac::queryNowPlayingAsync(
+        this, [self](const QString &title, const QString &artist, bool playing, bool visible) {
+            if (!self) return;
+            self->m_mprisTitle = title;
+            self->m_mprisArtist = artist;
+            self->m_mprisPlaying = playing;
+            self->m_mprisVisible = visible;
+            self->applyMprisVisuals();
+        });
 #endif
 }
 
@@ -1865,6 +1933,16 @@ void SystemPopover::triggerMprisAction(const QString &method)
     }
     QPointer<SystemPopover> self(this);
     QTimer::singleShot(320, this, [self] {
+        if (self) self->refreshMpris();
+    });
+#elif defined(Q_OS_MACOS)
+    SystemStatusMac::sendMediaCommand(method);
+    if (method == QLatin1String("PlayPause")) {
+        m_mprisPlaying = !m_mprisPlaying;
+        applyMprisVisuals();
+    }
+    QPointer<SystemPopover> self(this);
+    QTimer::singleShot(350, this, [self] {
         if (self) self->refreshMpris();
     });
 #else
@@ -1965,6 +2043,28 @@ void SystemPopover::refreshWifi(bool rescan)
                      "[ -n \"$WDEV\" ] && echo \"IP=$(nmcli -g IP4.ADDRESS device show \"$WDEV\" 2>/dev/null | head -n1)\"; "
                      "echo '---WIFI---'; "
                      "nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan %1").arg(rescanFlag)});
+#elif defined(Q_OS_MACOS)
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
+    if (rescan) showStatusBanner(QStringLiteral("正在扫描附近 Wi-Fi…"));
+    QPointer<SystemPopover> self(this);
+    SystemStatusMac::queryWifiAsync(this, rescan, [self](const SystemStatusMac::MacWifiState &st) {
+        if (!self) return;
+        self->m_wifiIface = st.iface;
+        self->m_wifiIp = st.ip;
+        QList<WifiEntry> entries;
+        entries.reserve(st.networks.size());
+        for (const auto &n : st.networks) {
+            WifiEntry e;
+            e.ssid = n.ssid;
+            e.signal = n.signal;
+            e.security = n.security;
+            e.rate = n.rate;
+            e.freq = n.freq;
+            e.active = n.active;
+            entries.append(e);
+        }
+        self->rebuildWifiList(st.powered, entries);
+    });
 #else
     Q_UNUSED(rescan);
 #endif
@@ -2073,6 +2173,9 @@ void SystemPopover::toggleWifiRadio()
     QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wifi"),
                                  turnOn ? QStringLiteral("on") : QStringLiteral("off")});
     showStatusBanner(turnOn ? QStringLiteral("正在开启 Wi-Fi…") : QStringLiteral("已关闭 Wi-Fi"));
+    QTimer::singleShot(1100, this, [this] { refreshWifi(false); });
+#elif defined(Q_OS_MACOS)
+    showStatusBanner(SystemStatusMac::toggleWifi());
     QTimer::singleShot(1100, this, [this] { refreshWifi(false); });
 #endif
 }
@@ -2247,6 +2350,23 @@ void SystemPopover::connectWifi(const WifiEntry &entry)
         }
     });
     proc->start(nm, {QStringLiteral("device"), QStringLiteral("wifi"), QStringLiteral("connect"), entry.ssid});
+#elif defined(Q_OS_MACOS)
+    if (entry.active) {
+        showStatusBanner(QStringLiteral("当前已连接 %1").arg(entry.ssid));
+        return;
+    }
+    showStatusBanner(QStringLiteral("正在连接 %1…").arg(entry.ssid));
+    QPointer<SystemPopover> self(this);
+    SystemStatusMac::connectWifiAsync(this, entry.ssid, QString(), [self, entry](bool ok, const QString &msg) {
+        if (!self) return;
+        if (ok) {
+            self->showStatusBanner(msg);
+            self->refreshWifi(false);
+        } else {
+            self->showStatusBanner(QStringLiteral("需输入密码，正在打开 macOS Wi-Fi 设置…"), true);
+            SystemStatusMac::openSystemSettings(QStringLiteral("wifi"));
+        }
+    });
 #else
     Q_UNUSED(entry);
 #endif
@@ -2331,6 +2451,25 @@ void SystemPopover::refreshBluetooth()
         });
         self->rebuildBluetoothList(adapterPowered, devices);
     });
+#elif defined(Q_OS_MACOS)
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
+    QPointer<SystemPopover> self(this);
+    SystemStatusMac::queryBluetoothAsync(
+        this, [self](bool powered, const QList<SystemStatusMac::MacBluetoothDevice> &macDevs) {
+            if (!self) return;
+            QList<BluetoothDevice> list;
+            list.reserve(macDevs.size());
+            for (const auto &d : macDevs) {
+                BluetoothDevice bd;
+                bd.address = d.address;
+                bd.name = d.name;
+                bd.iconType = d.iconType;
+                bd.connected = d.connected;
+                bd.batteryPercent = d.batteryPercent;
+                list.append(bd);
+            }
+            self->rebuildBluetoothList(powered, list);
+        });
 #endif
 }
 
@@ -2429,6 +2568,16 @@ void SystemPopover::toggleBluetoothDevice(const BluetoothDevice &dev)
         QTimer::singleShot(450, self, [self] { if (self) self->refreshBluetooth(); });
     });
     proc->start(bt, {verb, dev.address});
+#elif defined(Q_OS_MACOS)
+    showStatusBanner(dev.connected ? QStringLiteral("正在断开 %1…").arg(dev.name)
+                                   : QStringLiteral("正在连接 %1…").arg(dev.name));
+    QPointer<SystemPopover> self(this);
+    SystemStatusMac::toggleBluetoothDeviceAsync(this, dev.address, dev.connected,
+                                                [self](bool ok, const QString &msg) {
+        if (!self) return;
+        self->showStatusBanner(msg, !ok);
+        QTimer::singleShot(450, self, [self] { if (self) self->refreshBluetooth(); });
+    });
 #else
     Q_UNUSED(dev);
 #endif
@@ -2859,6 +3008,10 @@ void SystemPopover::refreshHotspot()
                      "[ -n \"$WIFI_DEV\" ] && [ -r \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" ] && cat \"/var/lib/NetworkManager/dnsmasq-$WIFI_DEV.leases\" || true; "
                      "echo '---NEIGH---'; "
                      "[ -n \"$WIFI_DEV\" ] && ip -4 neigh show dev \"$WIFI_DEV\" 2>/dev/null || true")});
+#elif defined(Q_OS_MACOS)
+    m_hsActive = SystemStatusMac::isInternetSharingActive();
+    rebuildHotspotView();
+    syncHomeFromSnapshot();
 #endif
 }
 
@@ -2971,6 +3124,11 @@ void SystemPopover::applyHotspotConfig(bool restartIfActive)
 
 void SystemPopover::toggleHotspot()
 {
+#ifdef Q_OS_MACOS
+    SystemStatusMac::openSystemSettings(QStringLiteral("sharing"));
+    showStatusBanner(QStringLiteral("✓ 已打开 macOS 互联网共享设置"));
+    return;
+#endif
     if (m_hsBusy) return;
     if (m_hsActive) {
         stopHotspotAsync();
