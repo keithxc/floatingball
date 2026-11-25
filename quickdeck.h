@@ -20,7 +20,6 @@ public:
 
 signals:
     void captureRequested();
-    void screenshotsRequested();
     void recordRequested();
     void settingsRequested();
     void audioStateChanged(int percent, bool muted);

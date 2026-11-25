@@ -1,11 +1,8 @@
-#include "actionhud.h"
 #include "clipboardbubble.h"
 #include "applauncher.h"
 #include "floatingball.h"
 #include "systempopover.h"
 #include "quickdeck.h"
-#include "screenshotpanel.h"
-#include "screentext.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -68,7 +65,7 @@ int main(int argc, char **argv)
         if (orig->hasImage()) savedClip->setImageData(orig->imageData());
     }
 
-    FloatingBall ball(nullptr, temp.path() + "/shots");
+    FloatingBall ball;
     ball.show();
     app.processEvents();
     waitMs(40);
@@ -331,88 +328,7 @@ int main(int argc, char **argv)
     }
 
     // ------------------------------------------------------------------------
-    // 4. ActionResultHud: Auto Local OCR + Copy + Pin Reference + Annotate Handoff
-    // ------------------------------------------------------------------------
-    {
-        QImage textImg(1400, 280, QImage::Format_RGB32);
-        textImg.fill(Qt::white);
-        {
-            QPainter p(&textImg);
-            p.setPen(Qt::black);
-            QFont f(QStringLiteral("Arial"));
-            f.setPixelSize(74);
-            f.setBold(true);
-            p.setFont(f);
-            p.drawText(textImg.rect(), Qt::AlignCenter, QStringLiteral("TOUCH WORKSPACE 8462"));
-        }
-
-        ActionResultHud *hud = ball.actionHud();
-        hud->presentCapture(textImg, temp.path() + "/shots", QPoint(bounds.center()));
-        check(hud->isVisible() && hud->currentImage() == textImg, "ActionResultHud opens immediately on capture");
-
-        // Wait for background local OCR worker to finish and deliver result
-        QElapsedTimer timer;
-        timer.start();
-        while (hud->isOcrRunning() && timer.elapsed() < 15000) {
-            waitMs(30);
-        }
-        waitMs(50);
-        printf("HUD_OCR_RESULT: %s\n", hud->recognizedText().toUtf8().constData());
-#ifdef Q_OS_MACOS
-        check(hud->recognizedText().contains(QStringLiteral("WORKSPACE"), Qt::CaseInsensitive),
-              "ActionResultHud automatically recognizes text via Apple Vision");
-#else
-        const auto probe = ScreenText::recognize(textImg);
-        if (probe.error.isEmpty()) {
-            check(hud->recognizedText().contains(QStringLiteral("WORKSPACE"), Qt::CaseInsensitive),
-                  "ActionResultHud automatically recognizes text via local Tesseract");
-        }
-#endif
-
-        // Test Copy Image & Save PNG buttons on HUD
-        QToolButton *copyImgBtn = nullptr;
-        QToolButton *saveBtn = nullptr;
-        QToolButton *pinBtn = nullptr;
-        QToolButton *annotateBtn = nullptr;
-        for (QToolButton *b : hud->findChildren<QToolButton *>()) {
-            const QString act = b->property("actionName").toString();
-            if (act == QLatin1String("copyHudImage")) copyImgBtn = b;
-            else if (act == QLatin1String("saveHudImage")) saveBtn = b;
-            else if (act == QLatin1String("pinHudImage")) pinBtn = b;
-            else if (act == QLatin1String("annotateHudImage")) annotateBtn = b;
-        }
-        check(copyImgBtn && saveBtn && pinBtn && annotateBtn && copyImgBtn->minimumHeight() >= 44,
-              "ActionResultHud exposes 44pt+ touch-friendly primary action pills");
-
-        copyImgBtn->click();
-        app.processEvents();
-        check(app.clipboard()->image() == textImg, "ActionResultHud Copy Image copies lossless pixels");
-
-        saveBtn->click();
-        app.processEvents();
-        const QString savedPath = app.clipboard()->text();
-        check(QFileInfo::exists(savedPath) && QImage(savedPath) == textImg,
-              "ActionResultHud Save writes atomic PNG and copies its file path");
-
-        pinBtn->click();
-        app.processEvents();
-        QWidget *pinnedCard = nullptr;
-        for (QWidget *w : app.topLevelWidgets())
-            if (w->objectName() == QLatin1String("pinnedImageCard") && w->isVisible()) pinnedCard = w;
-        check(pinnedCard != nullptr && !hud->isVisible(),
-              "ActionResultHud Pin spawns independent floating reference card and dismisses HUD");
-        pinnedCard->close();
-
-        hud->presentCapture(textImg, temp.path() + "/shots", QPoint(bounds.center()));
-        annotateBtn->click();
-        app.processEvents();
-        check(ball.resultPanel()->isVisible() && ball.resultPanel()->currentImage() == textImg,
-              "ActionResultHud Annotate hands off directly to ScreenshotPanel in pen mode");
-        ball.resultPanel()->hide();
-    }
-
-    // ------------------------------------------------------------------------
-    // 5. ClipboardBubble & QuickDeck Touch Ergonomics
+    // 4. ClipboardBubble & QuickDeck Touch Ergonomics
     // ------------------------------------------------------------------------
     {
         ClipboardBubble *clip = ball.clipboardBubble();
@@ -583,7 +499,7 @@ int main(int argc, char **argv)
     // 9. Multi-Screen Scheme A: Per-Screen Replica Shares Content, Keeps Own Edge
     // ------------------------------------------------------------------------
     {
-        FloatingBall replica(nullptr, temp.path() + "/shots", screen, &ball);
+        FloatingBall replica(nullptr, screen, &ball);
         replica.show();
         app.processEvents();
         check(!replica.isPrimaryBall() &&

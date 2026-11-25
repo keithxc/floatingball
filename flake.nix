@@ -24,7 +24,6 @@
               pkgs.qt6.qtbase
               pkgs.qt6.qttools
               pkgs.qt6.qtimageformats
-              pkgs.qt6.qtmultimedia
             ] ++ pkgs.lib.optionals isLinux [
               pkgs.qt6.qtwayland
               pkgs.kdePackages.layer-shell-qt
@@ -32,8 +31,7 @@
             cmakeFlags = [ "-DFLOATINGBALL_BUILD_TESTS=ON" ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ "-DFLOATINGBALL_NATIVE_APP_ICON=OFF" ];
             qtWrapperArgs = pkgs.lib.optionals isLinux [
-              "--prefix" "LD_LIBRARY_PATH" ":" "${pkgs.pipewire}/lib"
-              "--prefix" "PATH" ":" "${pkgs.lib.makeBinPath [ pkgs.wireplumber pkgs.pulseaudio pkgs.dbus pkgs.wtype pkgs.tesseract ]}"
+              "--prefix" "PATH" ":" "${pkgs.lib.makeBinPath [ pkgs.wireplumber pkgs.pulseaudio pkgs.dbus pkgs.wtype ]}"
               "--prefix" "XDG_DATA_DIRS" ":" "${pkgs.kdePackages.breeze-icons}/share:${pkgs.hicolor-icon-theme}/share"
             ];
             doCheck = true;

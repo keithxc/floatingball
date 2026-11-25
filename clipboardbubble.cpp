@@ -1,7 +1,6 @@
 #include "clipboardbubble.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
-#include "screenshotstore.h"
 #include "touchscroll.h"
 #include "uiicons.h"
 
@@ -397,12 +396,7 @@ void ClipboardBubble::copySelected(bool pasteIntoWindow)
     if (item.image.isNull()) {
         QApplication::clipboard()->setText(item.text);
     } else {
-        QString err;
-        if (!ScreenshotStore::copyImage(item.image, &err)) {
-            m_internalCopy = false;
-            m_status->setText(err);
-            return;
-        }
+        QApplication::clipboard()->setImage(item.image);
     }
     m_internalCopy = false;
 

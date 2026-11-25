@@ -1,14 +1,11 @@
 #include "floatingball.h"
 #include "./ui_floatingball.h"
-#include "actionhud.h"
 #include "applauncher.h"
 #include "clipboardbubble.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
 #include "panelbackdrop.h"
 #include "quickdeck.h"
-#include "screenshotpanel.h"
-#include "screenshotstore.h"
 #include "systempopover.h"
 #include "uiicons.h"
 
@@ -68,8 +65,6 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return FloatingIcons::Crosshair;
     if (id == QLatin1String("clipboard")) return FloatingIcons::Clipboard;
     if (id == QLatin1String("deck")) return FloatingIcons::Deck;
-    if (id == QLatin1String("screenshots")) return FloatingIcons::Screenshot;
-    if (id == QLatin1String("ocr")) return FloatingIcons::Search;
     if (id == QLatin1String("paste")) return FloatingIcons::Paste;
     if (id == QLatin1String("copy")) return FloatingIcons::Copy;
     if (id == QLatin1String("record")) return FloatingIcons::Record;
@@ -357,13 +352,13 @@ void RadialFanOverlay::recomputeFanLayout()
         } else if (top.key == QLatin1String("tools")) {
             struct ToolDef { const char *id; const char *shortLbl; const char *color; };
             static const ToolDef kTools[]{
-                {"crosshair",    "准星截图", "#7cc8ff"},
+                {"crosshair",    "截图",     "#7cc8ff"},
+                {"record",       "录屏",     "#fb7185"},
                 {"clipboard",    "剪贴板",   "#e2e8f0"},
                 {"minimize_all", "全收桌面", "#34d399"},
+                {"deck",         "触控甲板", "#60a5fa"},
                 {"downloads",    "下载",     "#86e0b8"},
                 {"trash",        "废纸篓",   "#ff9dad"},
-                {"screenshots",  "截图库",   "#93c5fd"},
-                {"record",       "录屏",     "#fb7185"},
                 {"back",         "返回",     "#cbd5e1"},
                 {"overview",     "全览",     "#a5b4fc"}
             };
@@ -676,8 +671,8 @@ void RadialFanOverlay::recomputeFanLayout()
     if (targetRings <= 1) return;
 
     // ------------------------------------------------------------------------
-    // Ring 1 (Inner Ring 2): Second quick-action ring (Downloads, Screenshots,
-    // OCR, Record, IME, Trash, etc.), honeycomb-staggered into Ring 0 gaps!
+    // Ring 1 (Inner Ring 2): Second quick-action ring (Downloads, Record,
+    // IME, Trash, etc.), honeycomb-staggered into Ring 0 gaps!
     // Ring 2+ (Ring 3..30): Open/running desktop apps first, then pinned Dock &
     // installed apps, strictly alternating odd/even staggered honeycomb rings.
     // ------------------------------------------------------------------------
@@ -691,11 +686,9 @@ void RadialFanOverlay::recomputeFanLayout()
         QStringLiteral("clipboard"),
         QStringLiteral("downloads"),
         QStringLiteral("trash"),
-        QStringLiteral("screenshots"),
-        QStringLiteral("ocr"),
+        QStringLiteral("record"),
         QStringLiteral("back"),
         QStringLiteral("overview"),
-        QStringLiteral("record"),
         QStringLiteral("ime"),
         QStringLiteral("desktop"),
         QStringLiteral("forward"),
@@ -710,12 +703,10 @@ void RadialFanOverlay::recomputeFanLayout()
         QStringLiteral("crosshair"),
         QStringLiteral("clipboard"),
         QStringLiteral("downloads"),
-        QStringLiteral("screenshots"),
-        QStringLiteral("ocr"),
+        QStringLiteral("record"),
         QStringLiteral("trash"),
         QStringLiteral("back"),
         QStringLiteral("overview"),
-        QStringLiteral("record"),
         QStringLiteral("ime"),
         QStringLiteral("desktop"),
         QStringLiteral("forward"),
@@ -2023,8 +2014,6 @@ const QStringList &FloatingBall::availableActions()
         QStringLiteral("crosshair"),
         QStringLiteral("clipboard"),
         QStringLiteral("deck"),
-        QStringLiteral("screenshots"),
-        QStringLiteral("ocr"),
         QStringLiteral("paste"),
         QStringLiteral("copy"),
         QStringLiteral("record"),
@@ -2074,11 +2063,10 @@ QStringList FloatingBall::defaultOrbitActions()
 #endif
 }
 
-FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
+FloatingBall::FloatingBall(QWidget *parent,
                            QScreen *assignedScreen, FloatingBall *primaryPeer)
     : QWidget(parent),
       ui(new Ui::FloatingBall),
-      m_screenshotDirectory(screenshotDirectory),
       m_assignedScreen(assignedScreen),
       m_primaryPeer(primaryPeer)
 {
@@ -2215,52 +2203,6 @@ FloatingBall::FloatingBall(QWidget *parent, const QString &screenshotDirectory,
     });
     connect(m_fanOverlay, &RadialFanOverlay::dismissedByUser, this, [this] { closeFan(false); });
 
-    m_directCapture = new ScreenshotCapture(this);
-    connect(m_directCapture, &ScreenshotCapture::finished, this,
-            [this](const QImage &image, const QString &error, bool cancelled) {
-        restoreHiddenSurfaces();
-        if (!image.isNull()) {
-            actionHud()->presentCapture(
-                image,
-                m_screenshotDirectory.isEmpty() ? resultPanel()->screenshotDirectory() : m_screenshotDirectory,
-                m_directCaptureAnchor);
-        } else if (!cancelled && !error.isEmpty()) {
-            DesktopActions::showToast(error, geometry().center());
-        }
-    });
-    connect(m_directCapture, &ScreenshotCapture::studioFinished, this,
-            [this](CaptureStudioAction action, const QImage &image, const QRect &globalSel) {
-        restoreHiddenSurfaces();
-        if (image.isNull()) return;
-        const QString dir = m_screenshotDirectory.isEmpty()
-            ? resultPanel()->screenshotDirectory()
-            : m_screenshotDirectory;
-        const QPoint toastPt = globalSel.isEmpty() ? geometry().center() : globalSel.center();
-        if (action == CaptureStudioAction::Copy) {
-            QString err;
-            if (ScreenshotStore::copyImage(image, &err)) {
-                DesktopActions::showToast(QStringLiteral("✓ 已复制截图 (%1 × %2)")
-                                              .arg(image.width()).arg(image.height()), toastPt);
-            } else {
-                DesktopActions::showToast(err, toastPt);
-            }
-        } else if (action == CaptureStudioAction::Save) {
-            QString err;
-            const QString saved = ScreenshotStore::saveCapture(image, dir, &err);
-            if (!saved.isEmpty()) {
-                QApplication::clipboard()->setText(saved);
-                DesktopActions::showToast(QStringLiteral("✓ 已保存截图并复制路径"), toastPt);
-            } else {
-                DesktopActions::showToast(err, toastPt);
-            }
-        } else if (action == CaptureStudioAction::Pin) {
-            resultPanel()->pinImageDirect(image, QStringLiteral("贴图"), globalSel.topLeft());
-            DesktopActions::showToast(QStringLiteral("✓ 已贴图到桌面 · 滚轮缩放"), toastPt);
-        } else {
-            actionHud()->presentCapture(image, dir, globalSel.isEmpty() ? m_directCaptureAnchor : globalSel.bottomRight());
-        }
-    });
-
     if (m_primaryPeer) {
         syncSharedPreferencesFrom(m_primaryPeer);
         loadScreenPlacement();
@@ -2344,12 +2286,10 @@ FloatingBall::~FloatingBall()
 
     delete m_fanOverlay;
     if (isPrimaryBall()) {
-        delete m_actionHud;
         delete m_clipboardBubble;
         delete m_quickDeck;
         delete m_systemPopover;
         delete m_appLauncher;
-        delete m_screenshotPanel;
     }
     delete ui;
 }
@@ -2392,11 +2332,9 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("overview")) return tr("多任务全览");
     if (id == QLatin1String("desktop")) return tr("显示桌面");
     if (id == QLatin1String("minimize_all")) return tr("全收桌面（隐藏所有窗口）");
-    if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return tr("准星圈选");
+    if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) return tr("区域截图");
     if (id == QLatin1String("clipboard")) return tr("触控剪贴板");
     if (id == QLatin1String("deck")) return tr("触控甲板");
-    if (id == QLatin1String("screenshots")) return tr("截图工作台");
-    if (id == QLatin1String("ocr")) return tr("框选识字");
     if (id == QLatin1String("paste")) return tr("一键粘贴");
     if (id == QLatin1String("copy")) return tr("一键复制");
     if (id == QLatin1String("record")) return tr("屏幕录制");
@@ -2599,7 +2537,7 @@ void FloatingBall::syncScreenReplicas()
             keepKeys.insert(key);
             QPointer<FloatingBall> existing = m_screenReplicas.value(key);
             if (!existing) {
-                auto *replica = new FloatingBall(nullptr, m_screenshotDirectory, scr, this);
+                auto *replica = new FloatingBall(nullptr, scr, this);
                 m_screenReplicas.insert(key, replica);
                 if (!m_userHiddenAll && !replica->m_hiddenOnThisScreen && isVisible()) {
                     replica->show();
@@ -2847,34 +2785,6 @@ AppDockModel *FloatingBall::dockModel()
     return m_dockModel;
 }
 
-ScreenshotPanel *FloatingBall::resultPanel()
-{
-    if (m_primaryPeer) return m_primaryPeer->resultPanel();
-    if (!m_screenshotPanel)
-        m_screenshotPanel = new ScreenshotPanel(nullptr, m_screenshotDirectory);
-    return m_screenshotPanel;
-}
-
-ActionResultHud *FloatingBall::actionHud()
-{
-    if (m_primaryPeer) return m_primaryPeer->actionHud();
-    if (!m_actionHud) {
-        m_actionHud = new ActionResultHud(nullptr);
-        connect(m_actionHud, &ActionResultHud::pinRequested, this,
-                [this](const QImage &img, const QString &name, const QPoint &anchor) {
-            resultPanel()->pinImageDirect(img, name, anchor);
-        });
-        connect(m_actionHud, &ActionResultHud::annotateRequested, this,
-                [this](const QImage &img, const QString &savedPath, const QPoint &anchor) {
-            resultPanel()->openForAnnotation(img, savedPath, anchor);
-        });
-        connect(m_actionHud, &ActionResultHud::clipboardSaved, this, [this](const QString &text) {
-            clipboardBubble()->recordText(text, false);
-        });
-    }
-    return m_actionHud;
-}
-
 ClipboardBubble *FloatingBall::clipboardBubble()
 {
     if (m_primaryPeer) return m_primaryPeer->clipboardBubble();
@@ -2889,8 +2799,7 @@ QuickDeck *FloatingBall::quickDeck()
     if (!m_quickDeck) {
         m_quickDeck = new QuickDeck(nullptr);
         connect(m_quickDeck, &QuickDeck::captureRequested, this, &FloatingBall::captureRegion);
-        connect(m_quickDeck, &QuickDeck::screenshotsRequested, this, &FloatingBall::showScreenshots);
-        connect(m_quickDeck, &QuickDeck::recordRequested, this, [this] { recordScreen(false); });
+        connect(m_quickDeck, &QuickDeck::recordRequested, this, &FloatingBall::recordScreen);
         connect(m_quickDeck, &QuickDeck::settingsRequested, this, &FloatingBall::showSettings);
         connect(m_quickDeck, &QuickDeck::audioStateChanged, this, &FloatingBall::setSystemAudioState);
         connect(m_quickDeck, &QuickDeck::brightnessStateChanged, this, [this](int pct) {
@@ -3110,11 +3019,9 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("crosshair") || id == QLatin1String("capture")) captureRegion();
     else if (id == QLatin1String("clipboard")) toggleClipboardBubble();
     else if (id == QLatin1String("deck")) toggleQuickDeck();
-    else if (id == QLatin1String("screenshots")) showScreenshots();
-    else if (id == QLatin1String("ocr")) showScreenText();
     else if (id == QLatin1String("paste")) toastOutcome(DesktopActions::pasteClipboard());
     else if (id == QLatin1String("copy")) toastOutcome(DesktopActions::copySelection());
-    else if (id == QLatin1String("record")) recordScreen(false);
+    else if (id == QLatin1String("record")) recordScreen();
     else if (id == QLatin1String("ime")) toastOutcome(DesktopActions::switchInputMethod());
     else if (id == QLatin1String("terminal")) toastOutcome(DesktopActions::openTerminal());
     else if (id == QLatin1String("browser")) toastOutcome(DesktopActions::openBrowser());
@@ -3125,44 +3032,24 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("sys_hub")) openSystemPopover(SystemPopover::TabHome);
 }
 
-void FloatingBall::showScreenshots()
-{
-    resultPanel()->reveal(anchorCenterGlobal().toPoint());
-}
-
-void FloatingBall::showScreenText()
-{
-    resultPanel()->revealText(anchorCenterGlobal().toPoint());
-}
-
 void FloatingBall::captureRegion()
 {
-    if (m_directCapture->isActive()) return;
     closeFan(true);
-    m_directCaptureAnchor = anchorCenterGlobal().toPoint();
-    m_hiddenForDirectCapture.clear();
-    for (QWidget *w : QApplication::topLevelWidgets()) {
-        if (w->isVisible() && w->property("floatingballSurface").toBool())
-            m_hiddenForDirectCapture.append(w);
-    }
-    for (const auto &w : m_hiddenForDirectCapture) {
-        if (w) w->hide();
-    }
-    CaptureOptions opts;
-    opts.mode = CaptureOptions::Region;
-    m_directCapture->start(m_directCaptureAnchor, opts, true);
+    const QPoint center = anchorCenterGlobal().toPoint();
+    QTimer::singleShot(60, this, [center] {
+        const auto out = DesktopActions::triggerNativeScreenshot();
+        if (!out.message.isEmpty()) DesktopActions::showToast(out.message, center);
+    });
 }
 
-void FloatingBall::takeScreenshot(const CaptureOptions &options)
+void FloatingBall::recordScreen()
 {
     closeFan(true);
-    resultPanel()->takeScreenshot(anchorCenterGlobal().toPoint(), options);
-}
-
-void FloatingBall::recordScreen(bool window)
-{
-    closeFan(true);
-    resultPanel()->startRecording(window);
+    const QPoint center = anchorCenterGlobal().toPoint();
+    QTimer::singleShot(60, this, [center] {
+        const auto out = DesktopActions::triggerNativeScreenRecord();
+        if (!out.message.isEmpty()) DesktopActions::showToast(out.message, center);
+    });
 }
 
 void FloatingBall::toggleClipboardBubble()
@@ -3179,32 +3066,6 @@ void FloatingBall::toggleQuickDeck()
     if (m_systemPopover && m_systemPopover->isVisible()) m_systemPopover->hide();
     if (m_appLauncher && m_appLauncher->isVisible()) m_appLauncher->hide();
     quickDeck()->reveal(anchorCenterGlobal().toPoint(), true);
-}
-
-void FloatingBall::completeDirectCrosshairCapture(const QRect &globalRect)
-{
-    if (m_directCapture->isActive()) return;
-    QScreen *targetScreen = QGuiApplication::screenAt(globalRect.center());
-    if (!targetScreen) targetScreen = QGuiApplication::primaryScreen();
-    m_directCaptureAnchor = globalRect.bottomRight();
-    m_hiddenForDirectCapture.clear();
-    for (QWidget *w : QApplication::topLevelWidgets()) {
-        if (w->isVisible() && w->property("floatingballSurface").toBool())
-            m_hiddenForDirectCapture.append(w);
-    }
-    for (const auto &w : m_hiddenForDirectCapture) {
-        if (w) w->hide();
-    }
-    m_directCapture->startDirectRect(targetScreen, globalRect, 85);
-}
-
-void FloatingBall::restoreHiddenSurfaces()
-{
-    for (const auto &w : m_hiddenForDirectCapture) {
-        if (w && w != m_fanOverlay) w->show();
-    }
-    m_hiddenForDirectCapture.clear();
-    refreshBallOpacity();
 }
 
 // ============================================================================
@@ -3477,7 +3338,7 @@ void FloatingBall::endPointerInteraction(const QPointF &globalPos)
         refreshBallOpacity();
         update();
         if (cropRect.width() >= 8 && cropRect.height() >= 8) {
-            completeDirectCrosshairCapture(cropRect);
+            captureRegion();
         }
         return;
     }
@@ -4262,10 +4123,10 @@ void FloatingBall::initTray()
         const QSignalBlocker b(visibility);
         visibility->setChecked(isVisible());
     });
-    menu->addAction(tr("准星区域截图"), this, &FloatingBall::captureRegion);
+    menu->addAction(tr("区域截图"), this, &FloatingBall::captureRegion);
+    menu->addAction(tr("屏幕录制"), this, &FloatingBall::recordScreen);
     menu->addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
     menu->addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
-    menu->addAction(tr("截图工作台"), this, &FloatingBall::showScreenshots);
 
     auto *ringsMenu = menu->addMenu(tr("外围悬浮层数（1~%1 层）").arg(kMaxRingCount));
     for (int n : {1, 2, 3, 4, 6, 8, 10, 15, 20, 30}) {
@@ -4341,11 +4202,10 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
     m_menuOpen = true;
     refreshBallOpacity();
     QMenu menu(this);
-    menu.addAction(tr("准星区域截图"), this, &FloatingBall::captureRegion);
+    menu.addAction(tr("区域截图"), this, &FloatingBall::captureRegion);
+    menu.addAction(tr("屏幕录制"), this, &FloatingBall::recordScreen);
     menu.addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
     menu.addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
-    menu.addAction(tr("截图与标注工作台"), this, &FloatingBall::showScreenshots);
-    menu.addAction(tr("屏幕录制"), this, [this] { recordScreen(false); });
     menu.addSeparator();
 
     auto *ringsMenu = menu.addMenu(tr("外围悬浮层数（当前 %1 层）").arg(m_ringCount));
@@ -4460,7 +4320,7 @@ void FloatingBall::showSettings()
     auto *autoHide = new QCheckBox(tr("闲置时退入屏幕边缘呈小米 5 半隐圆环"), appearance);
     autoHide->setChecked(m_autoHideEnabled);
 
-    auto *crosshairPull = new QCheckBox(tr("拉出最外层环自动变身 fooView 十字准星"), appearance);
+    auto *crosshairPull = new QCheckBox(tr("拉出最外层环一键唤起系统截屏（Spectacle / macshot）"), appearance);
     crosshairPull->setChecked(m_crosshairPullEnabled);
 
     appForm->addRow(tr("外围悬浮层数"), ringSpin);
@@ -4478,10 +4338,9 @@ void FloatingBall::showSettings()
 
     auto *gestureGuide = new QLabel(
         tr("交互提示：\n"
-           "• 短按展开多层扇形（展开时滚轮可实时增减 1~10 层，右键 App 可固定/退出）\n"
-           "• 按住内拉一划即选第 1 层动作或第 2~10 层 Dock 应用，松手瞬间切换\n"
-           "• 拉出最外层环变身 fooView 准星，停顿 0.3s 原地拉框识字 / 贴图\n"
-           "• 系统静音时悬浮球自动亮起红色静音角标"),
+           "• 短按展开多层扇形（展开时滚轮可实时增减层数，右键 App 可固定/退出）\n"
+           "• 按住内拉一划即选第 1 层动作或外围应用，松手瞬间切换\n"
+           "• 拉出最外层环松手即可一键唤起系统原生截图（Linux: KDE Spectacle / macOS: macshot）"),
         appearance);
     gestureGuide->setWordWrap(true);
     appForm->addRow(gestureGuide);

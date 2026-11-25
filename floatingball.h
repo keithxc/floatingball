@@ -19,14 +19,11 @@
 #include <QVariantAnimation>
 #include <QWidget>
 #include "appdock.h"
-#include "screenshotcapture.h"
 #include "systemstatus.h"
 
-class ActionResultHud;
 class AppLauncherPopover;
 class ClipboardBubble;
 class QuickDeck;
-class ScreenshotPanel;
 class SystemPopover;
 class QScreen;
 class QSystemTrayIcon;
@@ -201,7 +198,6 @@ public:
     };
 
     explicit FloatingBall(QWidget *parent = nullptr,
-                          const QString &screenshotDirectory = QString(),
                           QScreen *assignedScreen = nullptr,
                           FloatingBall *primaryPeer = nullptr);
     ~FloatingBall() override;
@@ -209,19 +205,14 @@ public:
     // Actions & panels
     void executeAction(const QString &id);
     void executeSlotItem(const RadialSlotItem &item);
-    void showScreenshots();
-    void showScreenText();
     void captureRegion();
-    void takeScreenshot(const CaptureOptions &options);
-    void recordScreen(bool window = false);
+    void recordScreen();
     void toggleClipboardBubble();
     void toggleQuickDeck();
     void openSystemPopover(int tab);
     void toggleAppLauncher();
     void showSettings();
 
-    ScreenshotPanel *resultPanel();
-    ActionResultHud *actionHud();
     ClipboardBubble *clipboardBubble();
     QuickDeck *quickDeck();
     SystemPopover *systemPopover();
@@ -305,8 +296,6 @@ private:
     void removeOutsideDismissMonitor();
     void startCrosshairDwell(const QPointF &globalPos);
     void stopCrosshairDwell();
-    void completeDirectCrosshairCapture(const QRect &globalRect);
-    void restoreHiddenSurfaces();
     void showSlotContextMenu(int slotIndex, const QPoint &globalPos);
 
     void updateBallMask();
@@ -332,20 +321,14 @@ private:
     void initTray();
     void setBallVisible(bool visible);
 
-    QString m_screenshotDirectory;
     QStringList m_orbitActions;
     RadialFanOverlay *m_fanOverlay = nullptr;
     AppDockModel *m_dockModel = nullptr;
     SystemStatusMonitor *m_statusMonitor = nullptr;
-    ScreenshotPanel *m_screenshotPanel = nullptr;
-    ActionResultHud *m_actionHud = nullptr;
     ClipboardBubble *m_clipboardBubble = nullptr;
     QuickDeck *m_quickDeck = nullptr;
     SystemPopover *m_systemPopover = nullptr;
     AppLauncherPopover *m_appLauncher = nullptr;
-    ScreenshotCapture *m_directCapture = nullptr;
-    QList<QPointer<QWidget>> m_hiddenForDirectCapture;
-    QPoint m_directCaptureAnchor;
     QSystemTrayIcon *m_trayIcon = nullptr;
 
     GestureMode m_gestureMode = GestureIdle;

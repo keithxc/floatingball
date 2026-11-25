@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools Multimedia Network)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools Network)
 
 if(APPLE AND NOT IOS)
     enable_language(OBJCXX)
@@ -21,8 +21,6 @@ set(FLOATINGBALL_CORE_SOURCES
     floatingball.cpp
     floatingball.h
     floatingball.ui
-    actionhud.cpp
-    actionhud.h
     clipboardbubble.cpp
     clipboardbubble.h
     quickdeck.cpp
@@ -31,14 +29,6 @@ set(FLOATINGBALL_CORE_SOURCES
     systempopover.h
     applauncher.cpp
     applauncher.h
-    screenshotpanel.cpp
-    screenshotpanel.h
-    screenshotstore.cpp
-    screenshotstore.h
-    screenshotcapture.cpp
-    screenshotcapture.h
-    screenrecorder.cpp
-    screenrecorder.h
     floatingwindow.cpp
     floatingwindow.h
     touchscroll.h
@@ -54,14 +44,13 @@ qt_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES})
 
 function(floatingball_configure_common target)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(${target} PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::Network)
-    target_sources(${target} PRIVATE appdock.cpp appdock.h systemstatus.cpp systemstatus.h desktopactions.cpp desktopactions.h screentext.cpp screentext.h panelbackdrop.cpp panelbackdrop.h)
+    target_link_libraries(${target} PRIVATE Qt6::Widgets Qt6::Network)
+    target_sources(${target} PRIVATE appdock.cpp appdock.h systemstatus.cpp systemstatus.h desktopactions.cpp desktopactions.h panelbackdrop.cpp panelbackdrop.h)
 
     if(APPLE AND NOT IOS)
         target_sources(${target} PRIVATE
             appdock_mac.mm
             systemstatus_mac.mm
-            screentext_mac.mm
             panelbackdrop_mac.mm
             desktopactions_mac.mm
         )
@@ -74,11 +63,9 @@ function(floatingball_configure_common target)
             "-framework CoreGraphics"
             "-framework CoreWLAN"
             "-framework Foundation"
-            "-framework ImageIO"
             "-framework IOBluetooth"
             "-framework IOKit"
             "-framework QuartzCore"
-            "-framework Vision"
         )
     endif()
 
@@ -129,34 +116,9 @@ install(TARGETS FloatingBall
 
 qt_finalize_executable(FloatingBall)
 
-option(FLOATINGBALL_BUILD_TESTS "Build touch radial, crosshair, HUD and platform checks" OFF)
+option(FLOATINGBALL_BUILD_TESTS "Build touch radial, control center, launcher and platform checks" OFF)
 if(FLOATINGBALL_BUILD_TESTS)
     enable_testing()
-
-    add_executable(floatingball-screenshot-test
-        tests/screenshot-test.cpp
-        ${FLOATINGBALL_CORE_SOURCES}
-    )
-    floatingball_configure_common(floatingball-screenshot-test)
-    if(APPLE AND NOT IOS)
-        target_sources(floatingball-screenshot-test PRIVATE tests/native-window-check.mm)
-    endif()
-    add_test(NAME screenshot-integration
-             COMMAND floatingball-screenshot-test "${CMAKE_CURRENT_BINARY_DIR}/test-data")
-    set_tests_properties(screenshot-integration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-    add_executable(floatingball-capture-test
-        tests/capture-test.cpp
-        screenshotcapture.cpp screenshotcapture.h
-        screenshotpanel.cpp screenshotpanel.h
-        screenshotstore.cpp screenshotstore.h
-        screenrecorder.cpp screenrecorder.h
-        floatingwindow.cpp floatingwindow.h
-    )
-    floatingball_configure_common(floatingball-capture-test)
-    add_test(NAME capture-workflow
-             COMMAND floatingball-capture-test "${CMAKE_CURRENT_BINARY_DIR}/test-data")
-    set_tests_properties(capture-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(floatingball-touch-ux-test
         tests/touch-ux-test.cpp
@@ -166,16 +128,6 @@ if(FLOATINGBALL_BUILD_TESTS)
     add_test(NAME touch-ux-workflow
              COMMAND floatingball-touch-ux-test "${CMAKE_CURRENT_BINARY_DIR}/touch-ux-data")
     set_tests_properties(touch-ux-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-    add_executable(floatingball-native-capture-check
-        tests/native-capture-check.cpp
-        screenshotcapture.cpp screenshotcapture.h
-        screenshotpanel.cpp screenshotpanel.h
-        screenshotstore.cpp screenshotstore.h
-        screenrecorder.cpp screenrecorder.h
-        floatingwindow.cpp floatingwindow.h
-    )
-    floatingball_configure_common(floatingball-native-capture-check)
 
     if(APPLE AND NOT IOS)
         add_executable(floatingball-backdrop-check MACOSX_BUNDLE

@@ -36,6 +36,12 @@ Outcome openHomeFolder();
 Outcome openDownloadsFolder();
 Outcome openTrash();
 
+// Native OS / external screenshot & screen recording triggers
+// (KDE Spectacle on Linux, macshot / Screenshot.app on macOS)
+Outcome triggerNativeScreenshot();
+Outcome triggerNativeScreenRecord();
+Outcome triggerNativeScrollCapture();
+
 // System audio (non-blocking query/update)
 void queryVolume(std::function<void(int percent, bool muted, bool supported)> callback);
 void setVolume(int percent);

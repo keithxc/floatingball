@@ -249,14 +249,14 @@ QuickDeck::QuickDeck(QWidget *parent) : QWidget(parent)
     auto *utilRow = new QHBoxLayout();
     utilRow->setSpacing(8);
     auto *imeBtn = makeTile(QStringLiteral("切输入法"), FloatingIcons::Globe, "deckIme");
-    auto *shotsBtn = makeTile(QStringLiteral("截图工作台"), FloatingIcons::Screenshot, "deckScreenshots");
+    auto *shotsBtn = makeTile(QStringLiteral("区域截图"), FloatingIcons::Crosshair, "deckCapture");
     auto *recBtn = makeTile(QStringLiteral("屏幕录制"), FloatingIcons::Record, "deckRecord");
     auto *setBtn = makeTile(QStringLiteral("悬浮球设置"), FloatingIcons::Settings, "deckSettings");
     for (QToolButton *b : {imeBtn, shotsBtn, recBtn, setBtn}) utilRow->addWidget(b);
     layout->addLayout(utilRow);
 
     connect(imeBtn, &QToolButton::clicked, this, [runAndFeedback] { runAndFeedback(DesktopActions::switchInputMethod, false); });
-    connect(shotsBtn, &QToolButton::clicked, this, [this] { hide(); emit screenshotsRequested(); });
+    connect(shotsBtn, &QToolButton::clicked, this, [this] { hide(); emit captureRequested(); });
     connect(recBtn, &QToolButton::clicked, this, [this] { hide(); emit recordRequested(); });
     connect(setBtn, &QToolButton::clicked, this, [this] { hide(); emit settingsRequested(); });
 

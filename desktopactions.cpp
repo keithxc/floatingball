@@ -36,6 +36,9 @@ void macSetVolume(int percent);
 void macToggleMute(std::function<void(int, bool, bool)> callback);
 void macQueryBrightness(std::function<void(int, bool)> callback);
 void macSetBrightness(int percent);
+Outcome macTriggerNativeScreenshot();
+Outcome macTriggerNativeScreenRecord();
+Outcome macTriggerNativeScrollCapture();
 #endif
 
 namespace {
@@ -449,6 +452,61 @@ Outcome openTrash()
     if (QDesktopServices::openUrl(QUrl(QStringLiteral("trash:///"))))
         return {true, QStringLiteral("✓ 已打开回收站")};
     return {false, QStringLiteral("无法打开回收站")};
+#endif
+}
+
+Outcome triggerNativeScreenshot()
+{
+#ifdef Q_OS_MACOS
+    return macTriggerNativeScreenshot();
+#elif defined(Q_OS_LINUX)
+    const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
+    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {QStringLiteral("--region")})) {
+        return {true, {}};
+    }
+    const QString flameshot = QStandardPaths::findExecutable(QStringLiteral("flameshot"));
+    if (!flameshot.isEmpty() && QProcess::startDetached(flameshot, {QStringLiteral("gui")})) {
+        return {true, {}};
+    }
+    const QString gnomeShot = QStandardPaths::findExecutable(QStringLiteral("gnome-screenshot"));
+    if (!gnomeShot.isEmpty() && QProcess::startDetached(gnomeShot, {QStringLiteral("-a")})) {
+        return {true, {}};
+    }
+    return {false, QStringLiteral("未找到系统截图工具（建议安装 KDE Spectacle 或 Flameshot）")};
+#elif defined(Q_OS_WIN)
+    if (QDesktopServices::openUrl(QUrl(QStringLiteral("ms-screenclip:"))))
+        return {true, {}};
+    return {false, QStringLiteral("无法启动 Windows 截图工具")};
+#else
+    return {false, QStringLiteral("当前系统暂不支持快捷截图")};
+#endif
+}
+
+Outcome triggerNativeScreenRecord()
+{
+#ifdef Q_OS_MACOS
+    return macTriggerNativeScreenRecord();
+#elif defined(Q_OS_LINUX)
+    const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
+    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {QStringLiteral("--launchonly")})) {
+        return {true, QStringLiteral("✓ 已打开 KDE Spectacle（可选区域/全屏录屏）")};
+    }
+    const QString obs = QStandardPaths::findExecutable(QStringLiteral("obs"));
+    if (!obs.isEmpty() && QProcess::startDetached(obs, {})) {
+        return {true, QStringLiteral("✓ 已启动 OBS 录屏")};
+    }
+    return {false, QStringLiteral("未找到系统录屏工具（建议安装 KDE Spectacle）")};
+#else
+    return {false, QStringLiteral("当前系统暂不支持快捷录屏")};
+#endif
+}
+
+Outcome triggerNativeScrollCapture()
+{
+#ifdef Q_OS_MACOS
+    return macTriggerNativeScrollCapture();
+#else
+    return triggerNativeScreenshot();
 #endif
 }
 

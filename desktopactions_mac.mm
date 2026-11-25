@@ -1,11 +1,8 @@
 #include "desktopactions.h"
 
 #include <QCoreApplication>
-#include <QList>
 #include <QProcess>
-#include <QRect>
 #include <QRegularExpression>
-#include <unistd.h>
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -352,36 +349,86 @@ void macSetBrightness(int percent)
     }
 }
 
-QList<QRect> macVisibleWindowRects()
+namespace {
+bool isMacshotInstalled()
 {
-    QList<QRect> out;
     @autoreleasepool {
-        CFArrayRef list = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-            kCGNullWindowID);
-        if (!list) return out;
-        const pid_t selfPid = getpid();
-        const CFIndex count = CFArrayGetCount(list);
-        for (CFIndex i = 0; i < count; ++i) {
-            NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(list, i);
-            if (![info isKindOfClass:[NSDictionary class]]) continue;
-            NSNumber *layer = info[(id)kCGWindowLayer];
-            if (!layer || layer.intValue != 0) continue; // normal desktop windows only
-            NSNumber *pidNum = info[(id)kCGWindowOwnerPID];
-            if (pidNum && pidNum.intValue == selfPid) continue;
-            NSNumber *alpha = info[(id)kCGWindowAlpha];
-            if (alpha && alpha.doubleValue < 0.05) continue;
-            NSDictionary *boundsDict = info[(id)kCGWindowBounds];
-            CGRect r = CGRectZero;
-            if (!boundsDict || !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)boundsDict, &r))
-                continue;
-            if (r.size.width < 40 || r.size.height < 40) continue;
-            out.append(QRect(qRound(r.origin.x), qRound(r.origin.y),
-                             qRound(r.size.width), qRound(r.size.height)));
+        NSURL *appUrl = [[NSWorkspace sharedWorkspace]
+            URLForApplicationWithBundleIdentifier:@"com.sw33tlie.macshot.macshot"];
+        if (appUrl) return true;
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSArray<NSString *> *paths = @[
+            @"/Applications/macshot.app",
+            [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/macshot.app"],
+            [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Home Manager Apps/macshot.app"]
+        ];
+        for (NSString *p in paths) {
+            if ([fm fileExistsAtPath:p]) return true;
         }
-        CFRelease(list);
+        return false;
     }
-    return out;
+}
+
+bool isMacshotUrlSchemeEnabled()
+{
+    @autoreleasepool {
+        NSUserDefaults *defs = [[NSUserDefaults alloc] initWithSuiteName:@"com.sw33tlie.macshot.macshot"];
+        return defs && [defs boolForKey:@"urlSchemeEnabled"];
+    }
+}
+
+bool openMacUrl(const QString &urlStr)
+{
+    @autoreleasepool {
+        NSURL *url = [NSURL URLWithString:urlStr.toNSString()];
+        return url && [[NSWorkspace sharedWorkspace] openURL:url];
+    }
+}
+} // namespace
+
+Outcome macTriggerNativeScreenshot()
+{
+    if (isMacshotInstalled()) {
+        if (isMacshotUrlSchemeEnabled() && openMacUrl(QStringLiteral("macshot://capture"))) {
+            return {true, {}};
+        }
+        if (QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                    {QStringLiteral("-a"), QStringLiteral("Screenshot")})) {
+            return {true, QStringLiteral("已打开系统截屏（在 macshot 开启 URL scheme 后可直连）")};
+        }
+    }
+    if (QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                {QStringLiteral("-a"), QStringLiteral("Screenshot")})) {
+        return {true, {}};
+    }
+    return {false, QStringLiteral("无法启动 macOS 截屏工具")};
+}
+
+Outcome macTriggerNativeScreenRecord()
+{
+    if (isMacshotInstalled()) {
+        if (isMacshotUrlSchemeEnabled() && openMacUrl(QStringLiteral("macshot://record"))) {
+            return {true, {}};
+        }
+        if (QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                    {QStringLiteral("-a"), QStringLiteral("Screenshot")})) {
+            return {true, QStringLiteral("已打开系统录屏（在 macshot 开启 URL scheme 后可直连）")};
+        }
+    }
+    if (QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                {QStringLiteral("-a"), QStringLiteral("Screenshot")})) {
+        return {true, {}};
+    }
+    return {false, QStringLiteral("无法启动 macOS 录屏工具")};
+}
+
+Outcome macTriggerNativeScrollCapture()
+{
+    if (isMacshotInstalled() && isMacshotUrlSchemeEnabled() &&
+        openMacUrl(QStringLiteral("macshot://scroll-capture"))) {
+        return {true, {}};
+    }
+    return macTriggerNativeScreenshot();
 }
 
 } // namespace DesktopActions
