@@ -1122,6 +1122,48 @@ int main(int argc, char **argv)
         ball.dockModel()->setOpenWindowsForTest({});
     }
 
+#ifdef Q_OS_LINUX
+    // ------------------------------------------------------------------------
+    // 12. Linux Detached App Launch cgroup Isolation (systemd-run app.slice)
+    // ------------------------------------------------------------------------
+    {
+        const QStringList args = DesktopActions::buildSystemdLaunchArgs(
+            QStringLiteral("/usr/bin/google-chrome-stable"),
+            {QStringLiteral("--new-window"), QStringLiteral("https://example.com")},
+            QStringLiteral("Google Chrome.desktop"),
+            temp.path(),
+            QStringLiteral("ab12cd34"));
+        check(args.contains(QStringLiteral("--user")) &&
+                  args.contains(QStringLiteral("--collect")) &&
+                  args.contains(QStringLiteral("--no-block")) &&
+                  args.contains(QStringLiteral("--slice=app.slice")) &&
+                  args.contains(QStringLiteral("ExitType=cgroup")) &&
+                  args.contains(QStringLiteral("--unit=app-floatingball-google-chrome-desktop-ab12cd34.service")) &&
+                  args.contains(QStringLiteral("--working-directory=") + temp.path()),
+              "buildSystemdLaunchArgs builds isolated app.slice transient unit with ExitType=cgroup and sanitized unit name");
+        const int sepIdx = args.indexOf(QStringLiteral("--"));
+        check(sepIdx > 0 &&
+                  sepIdx + 4 == args.size() &&
+                  args[sepIdx + 1] == QStringLiteral("/usr/bin/google-chrome-stable") &&
+                  args[sepIdx + 2] == QStringLiteral("--new-window") &&
+                  args[sepIdx + 3] == QStringLiteral("https://example.com"),
+              "buildSystemdLaunchArgs preserves program and arguments verbatim after -- separator");
+
+        // Verify fallback still launches cleanly when systemd-run is disabled
+        qputenv("FLOATINGBALL_DISABLE_SYSTEMD_RUN", "1");
+        const QString marker = temp.path() + QStringLiteral("/fallback-launch.txt");
+        check(DesktopActions::launchDetachedApp(
+                  QStringLiteral("/bin/sh"),
+                  {QStringLiteral("-c"), QStringLiteral("echo ok > \"$1\""), QStringLiteral("_"), marker},
+                  QStringLiteral("fallback-probe"),
+                  temp.path()),
+              "launchDetachedApp falls back cleanly to QProcess::startDetached when systemd-run is disabled");
+        qunsetenv("FLOATINGBALL_DISABLE_SYSTEMD_RUN");
+        for (int i = 0; i < 20 && !QFileInfo::exists(marker); ++i) waitMs(25);
+        check(QFileInfo::exists(marker), "fallback detached launch executed target command");
+    }
+#endif
+
     // Restore original clipboard
     if (savedClip) app.clipboard()->setMimeData(savedClip);
     else app.clipboard()->clear();

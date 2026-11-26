@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPointer>
@@ -13,6 +14,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -190,9 +192,126 @@ Outcome linuxSendShortcut(const QString &wtypeMod, const QString &wtypeKey,
     }
     return {false, label + QStringLiteral("：当前桌面缺少虚拟按键工具（可装 wtype）")};
 }
+
+QString sanitizeSystemdUnitSlug(const QString &raw)
+{
+    QString slug;
+    slug.reserve(36);
+    bool lastDash = false;
+    for (const QChar ch : raw) {
+        if (slug.size() >= 36) break;
+        const QChar lower = ch.toLower();
+        if ((lower >= QLatin1Char('a') && lower <= QLatin1Char('z')) ||
+            (lower >= QLatin1Char('0') && lower <= QLatin1Char('9')) ||
+            lower == QLatin1Char('_')) {
+            slug.append(lower);
+            lastDash = false;
+        } else if (!slug.isEmpty() && !lastDash) {
+            slug.append(QLatin1Char('-'));
+            lastDash = true;
+        }
+    }
+    while (slug.endsWith(QLatin1Char('-'))) slug.chop(1);
+    return slug.isEmpty() ? QStringLiteral("app") : slug;
+}
+
+bool openUrlIsolated(const QUrl &url, const QString &hint)
+{
+    const QString urlStr = url.toString();
+    if (!urlStr.isEmpty()) {
+        const QString kio = QStandardPaths::findExecutable(QStringLiteral("kioclient"));
+        if (!kio.isEmpty() && launchDetachedApp(kio, {QStringLiteral("exec"), urlStr}, hint)) {
+            return true;
+        }
+        const QString xdg = QStandardPaths::findExecutable(QStringLiteral("xdg-open"));
+        if (!xdg.isEmpty() && launchDetachedApp(xdg, {urlStr}, hint)) {
+            return true;
+        }
+    }
+    return QDesktopServices::openUrl(url);
+}
 #endif
 
 } // namespace
+
+#ifdef Q_OS_LINUX
+QStringList buildSystemdLaunchArgs(const QString &program,
+                                   const QStringList &arguments,
+                                   const QString &appIdHint,
+                                   const QString &workingDir,
+                                   const QString &uniqueSuffix)
+{
+    const QString hintSource = !appIdHint.trimmed().isEmpty()
+        ? appIdHint.trimmed()
+        : QFileInfo(program).completeBaseName();
+    const QString slug = sanitizeSystemdUnitSlug(hintSource);
+    const QString suffix = !uniqueSuffix.trimmed().isEmpty()
+        ? sanitizeSystemdUnitSlug(uniqueSuffix.trimmed())
+        : QUuid::createUuid().toString(QUuid::Id128).left(8);
+
+    QStringList args{
+        QStringLiteral("--user"),
+        QStringLiteral("--collect"),
+        QStringLiteral("--no-block"),
+        QStringLiteral("--quiet"),
+        QStringLiteral("--slice=app.slice"),
+        QStringLiteral("-p"),
+        QStringLiteral("ExitType=cgroup"),
+        QStringLiteral("--unit=app-floatingball-%1-%2.service").arg(slug, suffix),
+    };
+
+    QString effectiveDir = workingDir.trimmed();
+    if (effectiveDir.isEmpty() || !QDir(effectiveDir).exists()) {
+        effectiveDir = QDir::homePath();
+    }
+    if (!effectiveDir.isEmpty() && QDir(effectiveDir).exists()) {
+        args << (QStringLiteral("--working-directory=") + effectiveDir);
+    }
+
+    args << QStringLiteral("--") << program;
+    args.append(arguments);
+    return args;
+}
+#endif
+
+bool launchDetachedApp(const QString &program,
+                       const QStringList &arguments,
+                       const QString &appIdHint,
+                       const QString &workingDir)
+{
+    const QString prog = program.trimmed();
+    if (prog.isEmpty()) return false;
+
+    QString effectiveDir = workingDir.trimmed();
+    if (effectiveDir.isEmpty() || !QDir(effectiveDir).exists()) {
+        effectiveDir = QDir::homePath();
+    }
+
+#ifdef Q_OS_LINUX
+    const QString systemdRun = QStandardPaths::findExecutable(QStringLiteral("systemd-run"));
+    if (!systemdRun.isEmpty() && !qEnvironmentVariableIsSet("FLOATINGBALL_DISABLE_SYSTEMD_RUN")) {
+        QProcess proc;
+        proc.setProgram(systemdRun);
+        proc.setArguments(buildSystemdLaunchArgs(prog, arguments, appIdHint, effectiveDir));
+        proc.setStandardInputFile(QProcess::nullDevice());
+        proc.setStandardOutputFile(QProcess::nullDevice());
+        proc.setStandardErrorFile(QProcess::nullDevice());
+        proc.start();
+        if (proc.waitForFinished(1500) &&
+            proc.exitStatus() == QProcess::NormalExit &&
+            proc.exitCode() == 0) {
+            return true;
+        }
+        if (proc.state() != QProcess::NotRunning) {
+            proc.kill();
+            proc.waitForFinished(200);
+        }
+    }
+#else
+    Q_UNUSED(appIdHint);
+#endif
+    return QProcess::startDetached(prog, arguments, effectiveDir);
+}
 
 void showToast(const QString &message, const QPoint &anchor)
 {
@@ -378,7 +497,7 @@ Outcome toggleVirtualKeyboard()
 #elif defined(Q_OS_LINUX)
     for (const QString &candidate : {QStringLiteral("qtvirtualkeyboard"), QStringLiteral("onboard"), QStringLiteral("maliit-keyboard")}) {
         const QString exe = QStandardPaths::findExecutable(candidate);
-        if (!exe.isEmpty() && QProcess::startDetached(exe, {}))
+        if (!exe.isEmpty() && launchDetachedApp(exe, {}, candidate))
             return {true, QStringLiteral("✓ 已唤起屏幕键盘")};
     }
     return {false, QStringLiteral("未检测到已安装的屏幕软键盘")};
@@ -400,7 +519,7 @@ Outcome openTerminal()
                                      QStringLiteral("alacritty"), QStringLiteral("gnome-terminal"),
                                      QStringLiteral("x-terminal-emulator"), QStringLiteral("xterm")}) {
         const QString exe = QStandardPaths::findExecutable(candidate);
-        if (!exe.isEmpty() && QProcess::startDetached(exe, {}))
+        if (!exe.isEmpty() && launchDetachedApp(exe, {}, candidate))
             return {true, QStringLiteral("✓ 已打开终端")};
     }
 #endif
@@ -409,7 +528,12 @@ Outcome openTerminal()
 
 Outcome openBrowser()
 {
-    if (QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.google.com"))))
+    const QUrl url(QStringLiteral("https://www.google.com"));
+#ifdef Q_OS_LINUX
+    if (openUrlIsolated(url, QStringLiteral("browser")))
+#else
+    if (QDesktopServices::openUrl(url))
+#endif
         return {true, QStringLiteral("✓ 已打开默认浏览器")};
     return {false, QStringLiteral("无法打开默认浏览器")};
 }
@@ -417,7 +541,12 @@ Outcome openBrowser()
 Outcome openHomeFolder()
 {
     const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-    if (QDesktopServices::openUrl(QUrl::fromLocalFile(home)))
+    const QUrl url = QUrl::fromLocalFile(home);
+#ifdef Q_OS_LINUX
+    if (openUrlIsolated(url, QStringLiteral("folder-home")))
+#else
+    if (QDesktopServices::openUrl(url))
+#endif
         return {true, QStringLiteral("✓ 已打开主目录")};
     return {false, QStringLiteral("无法打开主目录")};
 }
@@ -427,7 +556,12 @@ Outcome openDownloadsFolder()
     QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     if (downloads.isEmpty())
         downloads = QDir::homePath() + QStringLiteral("/Downloads");
-    if (QDesktopServices::openUrl(QUrl::fromLocalFile(downloads)))
+    const QUrl url = QUrl::fromLocalFile(downloads);
+#ifdef Q_OS_LINUX
+    if (openUrlIsolated(url, QStringLiteral("folder-downloads")))
+#else
+    if (QDesktopServices::openUrl(url))
+#endif
         return {true, QStringLiteral("✓ 已打开下载目录")};
     return {false, QStringLiteral("无法打开下载目录")};
 }
@@ -448,6 +582,10 @@ Outcome openTrash()
     if (QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("shell:RecycleBinFolder")}))
         return {true, QStringLiteral("✓ 已打开回收站")};
     return {false, QStringLiteral("无法打开回收站")};
+#elif defined(Q_OS_LINUX)
+    if (openUrlIsolated(QUrl(QStringLiteral("trash:///")), QStringLiteral("trash")))
+        return {true, QStringLiteral("✓ 已打开回收站")};
+    return {false, QStringLiteral("无法打开回收站")};
 #else
     if (QDesktopServices::openUrl(QUrl(QStringLiteral("trash:///"))))
         return {true, QStringLiteral("✓ 已打开回收站")};
@@ -463,15 +601,15 @@ Outcome triggerNativeScreenshot()
     // Match KDE Plasma's native PrtSc (_launch of org.kde.spectacle.desktop)
     // so users get their exact familiar Spectacle overlay (screenshot + recording).
     const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
-    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {})) {
+    if (!spectacle.isEmpty() && launchDetachedApp(spectacle, {}, QStringLiteral("spectacle"))) {
         return {true, {}};
     }
     const QString flameshot = QStandardPaths::findExecutable(QStringLiteral("flameshot"));
-    if (!flameshot.isEmpty() && QProcess::startDetached(flameshot, {QStringLiteral("gui")})) {
+    if (!flameshot.isEmpty() && launchDetachedApp(flameshot, {QStringLiteral("gui")}, QStringLiteral("flameshot"))) {
         return {true, {}};
     }
     const QString gnomeShot = QStandardPaths::findExecutable(QStringLiteral("gnome-screenshot"));
-    if (!gnomeShot.isEmpty() && QProcess::startDetached(gnomeShot, {QStringLiteral("-a")})) {
+    if (!gnomeShot.isEmpty() && launchDetachedApp(gnomeShot, {QStringLiteral("-a")}, QStringLiteral("gnome-screenshot"))) {
         return {true, {}};
     }
     return {false, QStringLiteral("未找到系统截图工具（建议安装 KDE Spectacle 或 Flameshot）")};
@@ -492,11 +630,11 @@ Outcome triggerNativeScreenRecord()
     // Match KDE Plasma's PrtSc Spectacle entry so users can pick full-screen or
     // region recording directly inside Spectacle's native UI.
     const QString spectacle = QStandardPaths::findExecutable(QStringLiteral("spectacle"));
-    if (!spectacle.isEmpty() && QProcess::startDetached(spectacle, {})) {
+    if (!spectacle.isEmpty() && launchDetachedApp(spectacle, {}, QStringLiteral("spectacle"))) {
         return {true, {}};
     }
     const QString obs = QStandardPaths::findExecutable(QStringLiteral("obs"));
-    if (!obs.isEmpty() && QProcess::startDetached(obs, {})) {
+    if (!obs.isEmpty() && launchDetachedApp(obs, {}, QStringLiteral("obs"))) {
         return {true, QStringLiteral("✓ 已启动 OBS 录屏")};
     }
     return {false, QStringLiteral("未找到系统录屏工具（建议安装 KDE Spectacle）")};

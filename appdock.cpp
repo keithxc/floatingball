@@ -68,6 +68,7 @@ struct DesktopFileInfo {
     QString keywords;
     QStringList categories;
     QString execCmd;
+    QString workingDir;
     QString iconName;
     QString wmClass;
     QString desktopPath;
@@ -158,6 +159,7 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out, bool *explicitl
     QString zhKeywords;
     QString categoriesRaw;
     QString exec;
+    QString workingDir;
     QString icon;
     QString wmClass;
 
@@ -184,6 +186,7 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out, bool *explicitl
         else if (key == QLatin1String("Keywords[zh_CN]")) zhKeywords = val;
         else if (key == QLatin1String("Categories")) categoriesRaw = val;
         else if (key == QLatin1String("Exec")) exec = val;
+        else if (key == QLatin1String("Path")) workingDir = val;
         else if (key == QLatin1String("Icon")) icon = val;
         else if (key == QLatin1String("StartupWMClass")) wmClass = val;
     }
@@ -211,6 +214,7 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out, bool *explicitl
     out->keywords = kwParts.join(QLatin1Char(' '));
     out->categories = categoriesRaw.split(QLatin1Char(';'), Qt::SkipEmptyParts);
     out->execCmd = stripExecFieldCodes(exec);
+    out->workingDir = workingDir;
     out->iconName = icon;
     out->wmClass = wmClass;
     out->desktopPath = path;
@@ -1401,17 +1405,18 @@ DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry
         DesktopFileInfo info;
         if (parseDesktopFile(entry.launchTarget, &info)) {
             if (!QStandardPaths::findExecutable(QStringLiteral("gtk-launch")).isEmpty() &&
-                QProcess::startDetached(QStringLiteral("gtk-launch"), {info.id})) {
+                DesktopActions::launchDetachedApp(QStringLiteral("gtk-launch"), {info.id}, info.id, info.workingDir)) {
                 return {true, QStringLiteral("✓ 已启动 ") + entry.name};
             }
             const QStringList args = QProcess::splitCommand(info.execCmd);
-            if (!args.isEmpty() && QProcess::startDetached(args.first(), args.mid(1))) {
+            if (!args.isEmpty() &&
+                DesktopActions::launchDetachedApp(args.first(), args.mid(1), info.id, info.workingDir)) {
                 return {true, QStringLiteral("✓ 已启动 ") + entry.name};
             }
         }
     }
     const QStringList args = QProcess::splitCommand(entry.launchTarget);
-    if (!args.isEmpty() && QProcess::startDetached(args.first(), args.mid(1)))
+    if (!args.isEmpty() && DesktopActions::launchDetachedApp(args.first(), args.mid(1), entry.id))
         return {true, QStringLiteral("✓ 已启动 ") + entry.name};
     return {false, QStringLiteral("无法启动 ") + entry.name};
 #endif

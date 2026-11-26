@@ -2247,9 +2247,10 @@ bool SystemStatusMonitor::openKdeModule(const QString &moduleName)
 #ifdef Q_OS_LINUX
     const QString kcm = QStandardPaths::findExecutable(QStringLiteral("kcmshell6"));
     if (!kcm.isEmpty() && !moduleName.isEmpty())
-        return QProcess::startDetached(kcm, {moduleName});
+        return DesktopActions::launchDetachedApp(kcm, {moduleName}, moduleName);
     const QString sys = QStandardPaths::findExecutable(QStringLiteral("systemsettings"));
-    if (!sys.isEmpty()) return QProcess::startDetached(sys, {});
+    if (!sys.isEmpty())
+        return DesktopActions::launchDetachedApp(sys, {}, QStringLiteral("systemsettings"));
 #elif defined(Q_OS_MACOS)
     return SystemStatusMac::openSystemSettings(moduleName);
 #else

@@ -2,6 +2,7 @@
 
 #include <QPoint>
 #include <QString>
+#include <QStringList>
 #include <functional>
 
 namespace DesktopActions {
@@ -30,6 +31,17 @@ Outcome switchInputMethod();
 Outcome toggleVirtualKeyboard();
 
 // Launchers
+bool launchDetachedApp(const QString &program,
+                       const QStringList &arguments = {},
+                       const QString &appIdHint = QString(),
+                       const QString &workingDir = QString());
+#ifdef Q_OS_LINUX
+QStringList buildSystemdLaunchArgs(const QString &program,
+                                   const QStringList &arguments,
+                                   const QString &appIdHint = QString(),
+                                   const QString &workingDir = QString(),
+                                   const QString &uniqueSuffix = QString());
+#endif
 Outcome openTerminal();
 Outcome openBrowser();
 Outcome openHomeFolder();
