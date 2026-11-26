@@ -360,6 +360,173 @@ int main(int argc, char **argv)
               "Control Center Bento cards and height stay rock-solid with zero jump");
     }
 
+    // 4c. Silky Circular-to-Capsule Bezel Gestures (gradual 2px push, outer-rim shove,
+    //     inward-then-bezel-fling, and calm center cancel without false tuck!)
+    {
+        const QScreen *scr = ball.assignedScreen() ? ball.assignedScreen() : QGuiApplication::primaryScreen();
+        const QRect b = scr ? scr->availableGeometry() : QRect(0, 0, 1920, 1080);
+        ball.expandFromEdge();
+        app.processEvents();
+        const qreal outSign = (ball.dockSide() == FloatingBall::DockLeft) ? -1.0 : 1.0;
+
+        // Path 1: Smooth gradual 2px-step outward push (previously failed due to 10px vs 13px bug!)
+        {
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent down(QEvent::MouseButtonPress, startLocal, startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            for (int step = 2; step <= 10; step += 2) {
+                const QPointF pt = startGlobal + QPointF(outSign * step, 0.0);
+                QMouseEvent mv(QEvent::MouseMove, pt - QPointF(ball.pos()), pt,
+                               Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                app.sendEvent(&ball, &mv);
+            }
+            const QPointF endPt = startGlobal + QPointF(outSign * 10.0, 0.0);
+            QMouseEvent up(QEvent::MouseButtonRelease, endPt - QPointF(ball.pos()), endPt,
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &up);
+            waitMs(180);
+            check(ball.isEdgeTucked() && ball.isManualTucked() && ball.width() < ball.height(),
+                  "smooth gradual 2px outward push reliably morphs round ball into edge capsule");
+            ball.expandFromEdge();
+            waitMs(40);
+        }
+
+        // Path 2: Click near outer rim (only 4px from screen bezel) and shove into bezel wall
+        {
+            const qreal bezelX = (ball.dockSide() == FloatingBall::DockLeft) ? b.left() : b.right();
+            const QPointF startGlobal(bezelX - outSign * 4.0, ball.geometry().center().y());
+            QMouseEvent down(QEvent::MouseButtonPress, startGlobal - QPointF(ball.pos()), startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            const QPointF wallGlobal(bezelX, startGlobal.y());
+            QMouseEvent mv(QEvent::MouseMove, wallGlobal - QPointF(ball.pos()), wallGlobal,
+                           Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mv);
+            QMouseEvent up(QEvent::MouseButtonRelease, wallGlobal - QPointF(ball.pos()), wallGlobal,
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &up);
+            waitMs(180);
+            check(ball.isEdgeTucked() && ball.isManualTucked(),
+                  "outer-rim short-runway shove against screen bezel morphs into edge capsule");
+            ball.expandFromEdge();
+            waitMs(40);
+        }
+
+        // Path 3: Pull inward first (opens FlickFan!), then fling outward into bezel & release -> capsule!
+        {
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent down(QEvent::MouseButtonPress, startLocal, startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            const QPointF inwardPt = startGlobal - QPointF(outSign * 26.0, 0.0);
+            QMouseEvent mvIn(QEvent::MouseMove, inwardPt - QPointF(ball.pos()), inwardPt,
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvIn);
+            check(ball.gestureMode() == FloatingBall::GestureFlickFan && ball.isOrbitVisible(),
+                  "initial inward pull enters FlickFan cleanly");
+            // Now fling back outward to the docked screen bezel!
+            const qreal bezelX = (ball.dockSide() == FloatingBall::DockLeft) ? b.left() : b.right();
+            const QPointF midOut = startGlobal + QPointF(outSign * 10.0, 0.0);
+            QMouseEvent mvMid(QEvent::MouseMove, midOut - QPointF(ball.pos()), midOut,
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvMid);
+            const QPointF bezelPt(bezelX, startGlobal.y());
+            QMouseEvent mvBezel(QEvent::MouseMove, bezelPt - QPointF(ball.pos()), bezelPt,
+                                Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvBezel);
+            QMouseEvent upBezel(QEvent::MouseButtonRelease, bezelPt - QPointF(ball.pos()), bezelPt,
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &upBezel);
+            waitMs(180);
+            check(ball.isEdgeTucked() && ball.isManualTucked() && !ball.isOrbitVisible(),
+                  "pulling inward first then flinging outward to screen bezel morphs into edge capsule");
+            ball.expandFromEdge();
+            waitMs(40);
+        }
+
+        // Path 3b: Pull inward + diagonally (exploring fan vertically), then fling straight to screen bezel
+        {
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent down(QEvent::MouseButtonPress, startLocal, startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            const QPointF diagIn = startGlobal + QPointF(-outSign * 34.0, 82.0);
+            QMouseEvent mvIn(QEvent::MouseMove, diagIn - QPointF(ball.pos()), diagIn,
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvIn);
+            check(ball.gestureMode() == FloatingBall::GestureFlickFan,
+                  "diagonal inward drag enters FlickFan cleanly");
+            const qreal bezelX = (ball.dockSide() == FloatingBall::DockLeft) ? b.left() : b.right();
+            const QPointF bezelPt(bezelX, diagIn.y());
+            QMouseEvent mvBezel(QEvent::MouseMove, bezelPt - QPointF(ball.pos()), bezelPt,
+                                Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvBezel);
+            QMouseEvent upBezel(QEvent::MouseButtonRelease, bezelPt - QPointF(ball.pos()), bezelPt,
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &upBezel);
+            waitMs(180);
+            check(ball.isEdgeTucked() && ball.isManualTucked() && !ball.isOrbitVisible(),
+                  "diagonal inward exploration then outward fling to screen bezel morphs into edge capsule");
+            ball.expandFromEdge();
+            waitMs(40);
+        }
+
+        // Path 3c: Pull inward first, then quick outward wrist-fling released mid-flight past ball center
+        {
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent down(QEvent::MouseButtonPress, startLocal, startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            const QPointF inwardPt = startGlobal - QPointF(outSign * 32.0, 0.0);
+            QMouseEvent mvIn(QEvent::MouseMove, inwardPt - QPointF(ball.pos()), inwardPt,
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvIn);
+            const QPointF flingReleasePt = startGlobal + QPointF(outSign * 8.0, 0.0);
+            QMouseEvent mvFling(QEvent::MouseMove, flingReleasePt - QPointF(ball.pos()), flingReleasePt,
+                                Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvFling);
+            QMouseEvent upFling(QEvent::MouseButtonRelease, flingReleasePt - QPointF(ball.pos()), flingReleasePt,
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &upFling);
+            waitMs(180);
+            check(ball.isEdgeTucked() && ball.isManualTucked() && !ball.isOrbitVisible(),
+                  "inward pull followed by fast outward fling released past center morphs into edge capsule");
+            ball.expandFromEdge();
+            waitMs(40);
+        }
+
+        // Path 4: Pull inward then return calmly (or snap straight) to center X -> cancels fan WITHOUT false tuck!
+        {
+            const QPointF startLocal(ball.rect().center());
+            const QPointF startGlobal = ball.mapToGlobal(startLocal.toPoint());
+            QMouseEvent down(QEvent::MouseButtonPress, startLocal, startGlobal,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &down);
+            const QPointF inwardPt = startGlobal - QPointF(outSign * 36.0, 0.0);
+            QMouseEvent mvIn(QEvent::MouseMove, inwardPt - QPointF(ball.pos()), inwardPt,
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            app.sendEvent(&ball, &mvIn);
+            // Step gently back to exact center of ball (not pushed into bezel)
+            for (int d = 24; d >= 0; d -= 6) {
+                const QPointF pt = startGlobal - QPointF(outSign * d, 0.0);
+                QMouseEvent mv(QEvent::MouseMove, pt - QPointF(ball.pos()), pt,
+                               Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                app.sendEvent(&ball, &mv);
+            }
+            QMouseEvent upCenter(QEvent::MouseButtonRelease, startLocal, startGlobal,
+                                 Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(&ball, &upCenter);
+            waitMs(120);
+            check(!ball.isEdgeTucked() && !ball.isOrbitVisible(),
+                  "calm return to ball center cancels FlickFan without triggering false capsule tuck");
+        }
+    }
+
     // 5. Live Cocoa verification: real macOS windows + native NSGlassEffectView Control Center + Notification Center
     if (liveMode) {
         const QList<DockAppEntry> realWins = AppDockMac::openWindowsFast();

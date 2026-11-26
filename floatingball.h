@@ -365,6 +365,10 @@ private:
     QPointF m_dragOffset;
     QPointF m_crosshairAnchorGlobal;
     QPointF m_crosshairDwellOrigin;
+    qreal m_recentOutwardStep = 0.0;
+    qreal m_outwardStroke = 0.0;
+    qreal m_outwardStrokeTan = 0.0;
+    QElapsedTimer m_outwardMoveTimer;
 
     QTimer *m_holdTimer = nullptr;
     QTimer *m_idleTimer = nullptr;
@@ -404,6 +408,7 @@ private:
     bool m_fullscreenTucked = false;
     bool m_startedInteractionTucked = false;
     bool m_dismissedPanelOnPress = false;
+    bool m_bezelTuckArmed = false;
     bool m_crosshairPullEnabled = true;
     bool m_edgeTucked = false;
     bool m_orbitVisible = false;

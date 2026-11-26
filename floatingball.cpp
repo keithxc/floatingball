@@ -3649,6 +3649,60 @@ void FloatingBall::stopCrosshairDwell()
 // Unified Pointer + Touch State Machine (Xiaomi Mi 5 + fooView Multi-Ring Fusion)
 // ============================================================================
 
+namespace {
+struct BezelGestureMetrics {
+    qreal outFromPress = 0.0;
+    qreal tanFromPress = 0.0;
+    qreal outFromCenter = 0.0;
+    qreal tanFromCenter = 0.0;
+    qreal distToBezel = 1e6;
+    qreal stepOutward = 0.0;
+    qreal stepTangential = 0.0;
+};
+
+BezelGestureMetrics computeBezelMetrics(const FloatingBall *ball,
+                                        QScreen *assignedScreen,
+                                        const QRect &fallbackBounds,
+                                        int dockSide,
+                                        const QPointF &pressGlobalPos,
+                                        const QPointF &prevGlobalPos,
+                                        const QPointF &globalPos)
+{
+    BezelGestureMetrics m;
+    const QPointF dPress = globalPos - pressGlobalPos;
+    const QPointF dCenter = globalPos - ball->anchorCenterGlobal();
+    const QPointF step = globalPos - prevGlobalPos;
+    QScreen *scr = (assignedScreen && QGuiApplication::screens().contains(assignedScreen))
+        ? assignedScreen
+        : QGuiApplication::screenAt(ball->anchorCenterGlobal().toPoint());
+    if (!scr) scr = ball->screen();
+    const QRect bounds = scr ? scr->availableGeometry()
+                             : (fallbackBounds.isEmpty() ? QRect(0, 0, 1920, 1080) : fallbackBounds);
+    if (dockSide == FloatingBall::DockRight) {
+        m.outFromPress = dPress.x(); m.tanFromPress = qAbs(dPress.y());
+        m.outFromCenter = dCenter.x(); m.tanFromCenter = qAbs(dCenter.y());
+        m.distToBezel = bounds.right() - globalPos.x();
+        m.stepOutward = step.x(); m.stepTangential = qAbs(step.y());
+    } else if (dockSide == FloatingBall::DockLeft) {
+        m.outFromPress = -dPress.x(); m.tanFromPress = qAbs(dPress.y());
+        m.outFromCenter = -dCenter.x(); m.tanFromCenter = qAbs(dCenter.y());
+        m.distToBezel = globalPos.x() - bounds.left();
+        m.stepOutward = -step.x(); m.stepTangential = qAbs(step.y());
+    } else if (dockSide == FloatingBall::DockTop) {
+        m.outFromPress = -dPress.y(); m.tanFromPress = qAbs(dPress.x());
+        m.outFromCenter = -dCenter.y(); m.tanFromCenter = qAbs(dCenter.x());
+        m.distToBezel = globalPos.y() - bounds.top();
+        m.stepOutward = -step.y(); m.stepTangential = qAbs(step.x());
+    } else if (dockSide == FloatingBall::DockBottom) {
+        m.outFromPress = dPress.y(); m.tanFromPress = qAbs(dPress.x());
+        m.outFromCenter = dCenter.y(); m.tanFromCenter = qAbs(dCenter.x());
+        m.distToBezel = bounds.bottom() - globalPos.y();
+        m.stepOutward = step.y(); m.stepTangential = qAbs(step.x());
+    }
+    return m;
+}
+} // namespace
+
 void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::KeyboardModifiers modifiers)
 {
     FloatingBall *primary = m_primaryPeer ? m_primaryPeer.data() : this;
@@ -3682,6 +3736,11 @@ void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::Keyboar
 
     m_pressGlobalPos = globalPos;
     m_lastGlobalPos = globalPos;
+    m_recentOutwardStep = 0.0;
+    m_outwardStroke = 0.0;
+    m_outwardStrokeTan = 0.0;
+    m_outwardMoveTimer.invalidate();
+    m_bezelTuckArmed = false;
     m_idleTimer->stop();
 
     if (modifiers & (Qt::AltModifier | Qt::ControlModifier | Qt::MetaModifier)) {
@@ -3703,28 +3762,38 @@ void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::Keyboar
 
 void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
 {
+    const QPointF prevGlobalPos = m_lastGlobalPos;
     m_lastGlobalPos = globalPos;
 
     if (m_gestureMode == GesturePressed) {
         const QPointF delta = globalPos - m_pressGlobalPos;
         const qreal dist = std::hypot(delta.x(), delta.y());
+        if (dist >= 6.0) m_holdTimer->stop();
+
+        if (!m_edgeTucked && m_dockSide != DockFree && dist >= 3.0) {
+            const BezelGestureMetrics bm = computeBezelMetrics(this, m_assignedScreen.data(), m_screenBounds,
+                                                               m_dockSide, m_pressGlobalPos, prevGlobalPos, globalPos);
+            // Smooth direct push toward the docked screen bezel -> instant Edge Capsule morph!
+            // Also handles clicks near the outer rim where only a few px of bezel runway remain.
+            const bool pushedToBezel =
+                (bm.outFromPress >= 7.0 && bm.outFromPress >= bm.tanFromPress * 0.72) ||
+                (bm.outFromPress >= 3.0 && bm.distToBezel <= 6.0 && bm.outFromPress >= bm.tanFromPress * 0.5);
+            if (pushedToBezel) {
+                m_holdTimer->stop();
+                m_gestureMode = GestureIdle;
+                m_bezelTuckArmed = false;
+                tuckToEdgeCapsule(true, true);
+                return;
+            }
+            // User is clearly nudging outward toward the bezel (not inward) -> wait for 7px/bezel
+            // instead of prematurely hijacking into GestureFlickFan!
+            if (bm.outFromPress > 2.0 && bm.outFromPress >= bm.tanFromPress * 0.65) {
+                return;
+            }
+        }
+
         if (dist >= 10.0) {
             m_holdTimer->stop();
-
-            // Outward push toward the docked screen bezel -> morph Primary Round Ball into Edge Capsule!
-            if (!m_edgeTucked && m_dockSide != DockFree) {
-                const bool pushedToBezel =
-                    (m_dockSide == DockRight && delta.x() >= 13.0 && qAbs(delta.x()) > qAbs(delta.y())) ||
-                    (m_dockSide == DockLeft && delta.x() <= -13.0 && qAbs(delta.x()) > qAbs(delta.y())) ||
-                    (m_dockSide == DockTop && delta.y() <= -13.0 && qAbs(delta.y()) > qAbs(delta.x())) ||
-                    (m_dockSide == DockBottom && delta.y() >= 13.0 && qAbs(delta.y()) > qAbs(delta.x()));
-                if (pushedToBezel) {
-                    m_gestureMode = GestureIdle;
-                    tuckToEdgeCapsule(true, true);
-                    return;
-                }
-            }
-
             // Inward pull (even starting from the tucked Edge Capsule!) -> restore circle & open FlickFan!
             if (m_edgeTucked) {
                 m_manualTucked = false;
@@ -3733,6 +3802,11 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
             }
             closeOtherFans(this);
             m_gestureMode = GestureFlickFan;
+            m_bezelTuckArmed = false;
+            m_recentOutwardStep = 0.0;
+            m_outwardStroke = 0.0;
+            m_outwardStrokeTan = 0.0;
+            m_outwardMoveTimer.invalidate();
             m_orbitVisible = true;
             m_orbitProgress = 1.0;
             m_fanOverlay->syncProgress(1.0);
@@ -3755,6 +3829,65 @@ void FloatingBall::updatePointerInteraction(const QPointF &globalPos)
     }
 
     if (m_gestureMode == GestureFlickFan) {
+        if (!m_fanOverlay->isDrilled() && m_dockSide != DockFree) {
+            const BezelGestureMetrics bm = computeBezelMetrics(this, m_assignedScreen.data(), m_screenBounds,
+                                                               m_dockSide, m_pressGlobalPos, prevGlobalPos, globalPos);
+            if (m_outwardMoveTimer.isValid() && m_outwardMoveTimer.elapsed() > 160) {
+                m_outwardStroke = 0.0;
+                m_outwardStrokeTan = 0.0;
+                m_recentOutwardStep = 0.0;
+            }
+            if (bm.stepOutward > 0.5) {
+                m_outwardStroke += bm.stepOutward;
+                m_outwardStrokeTan += bm.stepTangential;
+                m_outwardMoveTimer.restart();
+            } else if (bm.stepOutward < -1.5) {
+                m_outwardStroke = 0.0;
+                m_outwardStrokeTan = 0.0;
+            }
+            m_recentOutwardStep = m_recentOutwardStep * 0.45 + bm.stepOutward * 0.55;
+
+            const qreal ballD = qMax(width(), height());
+            const qreal tanLimit = qMax(ballD * 3.0, m_fanOverlay->fanOuterRadius() + 40.0);
+            // Use direct orb hit (not wide ±34° magnetic sector cone) so flinging into the screen
+            // bezel near top/bottom fan angles is never stolen by the top/bottom Ring 0 sector!
+            const int directSlot = m_bezelTuckArmed ? -1 : m_fanOverlay->hitSlotAtGlobal(globalPos, false);
+            const bool outwardDominantStep = bm.stepOutward >= bm.stepTangential * 0.75;
+
+            // Moving inward first (even exploring fan slots vertically/diagonally) and then pushing or
+            // flinging outward toward the docked screen bezel smoothly folds the fan and arms Edge Capsule!
+            // Calm or even fast return strictly to ball center (outFromCenter <= 0) never false-triggers.
+            const bool inBezelZone = (directSlot < 0) && (bm.tanFromCenter <= tanLimit) &&
+                ((bm.distToBezel <= 14.0 && (bm.outFromCenter >= 2.0 || m_outwardStroke >= 14.0)) ||
+                 (bm.outFromCenter >= 3.0 && bm.distToBezel <= ballD * 0.85 &&
+                  ((outwardDominantStep && (bm.stepOutward >= 4.5 || m_recentOutwardStep >= 4.5)) ||
+                   (m_outwardStroke >= 16.0 && m_outwardStroke >= m_outwardStrokeTan * 1.15))));
+
+            if (inBezelZone) {
+                if (!m_bezelTuckArmed) {
+                    m_bezelTuckArmed = true;
+                    m_orbitVisible = false;
+                    m_fanOverlay->dismissOverlay(true);
+                    update();
+                }
+                return;
+            }
+            if (m_bezelTuckArmed) {
+                // Pulling back inward disarms capsule tuck and smoothly restores FlickFan
+                if (bm.distToBezel > 24.0 && bm.outFromCenter < -4.0) {
+                    m_bezelTuckArmed = false;
+                    m_orbitVisible = true;
+                    m_orbitProgress = 1.0;
+                    m_fanOverlay->syncProgress(1.0);
+                    m_fanOverlay->openFlickFan(globalPos);
+                    raise();
+                    update();
+                } else {
+                    return;
+                }
+            }
+        }
+
         const qreal distFromBall = QLineF(anchorCenterGlobal(), globalPos).length();
         // Pull past the outermost active ring at Root -> seamless fooView Crosshair handoff!
         // Never steal continuous drags when drilled inside a branch ring!
@@ -3834,6 +3967,37 @@ void FloatingBall::endPointerInteraction(const QPointF &globalPos)
     }
 
     if (finishedMode == GestureFlickFan) {
+        const int directReleaseSlot = m_bezelTuckArmed ? -1 : m_fanOverlay->hitSlotAtGlobal(globalPos, false);
+        if (!m_bezelTuckArmed && directReleaseSlot < 0 && !m_fanOverlay->isDrilled() && m_dockSide != DockFree) {
+            const BezelGestureMetrics bm = computeBezelMetrics(this, m_assignedScreen.data(), m_screenBounds,
+                                                               m_dockSide, m_pressGlobalPos, m_lastGlobalPos, globalPos);
+            const qreal ballD = qMax(width(), height());
+            const qreal tanLimit = qMax(ballD * 3.0, m_fanOverlay->fanOuterRadius() + 40.0);
+            const bool recentOutward = !m_outwardMoveTimer.isValid() || m_outwardMoveTimer.elapsed() <= 160;
+            const bool outwardDominantStep = bm.stepOutward >= bm.stepTangential * 0.75;
+            const bool releasedAtBezel = (bm.tanFromCenter <= tanLimit) &&
+                ((bm.distToBezel <= 14.0 && (bm.outFromCenter >= 2.0 || m_outwardStroke >= 14.0)) ||
+                 (recentOutward && bm.outFromCenter >= 3.0 && bm.distToBezel <= ballD * 0.85 &&
+                  ((outwardDominantStep && (bm.stepOutward >= 4.5 || m_recentOutwardStep >= 4.5)) ||
+                   (m_outwardStroke >= 16.0 && m_outwardStroke >= m_outwardStrokeTan * 1.15))));
+            if (releasedAtBezel) {
+                m_bezelTuckArmed = true;
+            }
+        }
+        if (m_bezelTuckArmed && m_dockSide != DockFree) {
+            m_bezelTuckArmed = false;
+            m_outwardStroke = 0.0;
+            m_outwardStrokeTan = 0.0;
+            m_outwardMoveTimer.invalidate();
+            closeFan(true);
+            tuckToEdgeCapsule(true, true);
+            refreshBallOpacity();
+            return;
+        }
+        m_bezelTuckArmed = false;
+        m_outwardStroke = 0.0;
+        m_outwardStrokeTan = 0.0;
+        m_outwardMoveTimer.invalidate();
         const int slot = m_fanOverlay->hitSlotAtGlobal(globalPos, true);
         const auto slotsData = m_fanOverlay->slotsData();
         const bool valid = (slot >= 0 && slot < slotsData.size());
@@ -3891,6 +4055,11 @@ void FloatingBall::cancelPointerInteraction()
     stopCrosshairDwell();
     unsetCursor();
     m_gestureMode = GestureIdle;
+    m_bezelTuckArmed = false;
+    m_recentOutwardStep = 0.0;
+    m_outwardStroke = 0.0;
+    m_outwardStrokeTan = 0.0;
+    m_outwardMoveTimer.invalidate();
     m_activeTouchId = -1;
     m_isPinching = false;
     closeFan(true);
@@ -4349,6 +4518,7 @@ void FloatingBall::snapToEdge(bool animate)
         targetRect = QRect(bounds.right() - d + 1, clampedY, d, d);
     }
 
+    m_screenBounds = bounds;
     m_expandedDockGeometry = targetRect;
     applyGeometry(targetRect, animate);
     refreshAttentionBearings();
@@ -4632,12 +4802,23 @@ void FloatingBall::paintEvent(QPaintEvent *)
         surface.setColorAt(1.0, QColor(20, 23, 30, 244));
     }
     p.setBrush(surface);
-    const QColor rimColor = (m_gestureMode == GestureMoveBall || m_orbitVisible)
+    const QColor rimColor = (m_gestureMode == GestureMoveBall || m_orbitVisible || m_bezelTuckArmed)
         ? QColor("#7cc8ff")
         : QColor(255, 255, 255, 62);
-    const qreal rimWidth = (m_gestureMode == GestureMoveBall || m_orbitVisible) ? 1.5 : 1.2;
+    const qreal rimWidth = (m_gestureMode == GestureMoveBall || m_orbitVisible || m_bezelTuckArmed) ? 1.5 : 1.2;
     p.setPen(QPen(rimColor, rimWidth));
     p.drawEllipse(sphereRect);
+
+    // Subtle bezel-hugging cyan morph arc when inward-then-outward bezel tuck is armed
+    if (m_bezelTuckArmed && m_dockSide != DockFree) {
+        int centerDeg = 0;
+        if (m_dockSide == DockLeft) centerDeg = 180;
+        else if (m_dockSide == DockTop) centerDeg = 90;
+        else if (m_dockSide == DockBottom) centerDeg = 270;
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor("#7dd3fc"), 2.8, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(sphereRect.adjusted(0.8, 0.8, -0.8, -0.8), (centerDeg - 40) * 16, 80 * 16);
+    }
 
     if (m_orbitVisible) {
         const qreal iconDim = d * 0.34;
