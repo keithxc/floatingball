@@ -795,13 +795,32 @@ bool SystemStatusMonitor::parseDbusMonitorNotifyBlock(const QString &block,
     const QString cleanSummary = cleanNotificationText(summary);
     const QString cleanBody = cleanNotificationText(body);
 
-    // Filter pure OSD/system noise (volume, brightness, floatingball self-notifications, empty payloads)
+    // Filter pure OSD / non-critical system infrastructure status noise
+    // (volume, brightness, floatingball self-notifications, Network Management /
+    // plasma-nm connect/disconnect/modem churn, BlueDevil, low/normal PowerDevil).
     const QString lowerApp = cleanApp.toLower();
     const QString lowerDe = cleanDe.toLower();
+    const bool isNetworkSystemNotif =
+        lowerApp == QLatin1String("network management") ||
+        lowerApp == QStringLiteral("网络管理") ||
+        lowerApp == QStringLiteral("網路管理") ||
+        lowerApp == QLatin1String("networkmanager") ||
+        lowerApp == QLatin1String("nm-applet") ||
+        lowerDe == QLatin1String("networkmanagement") ||
+        lowerDe == QLatin1String("plasma-nm") ||
+        lowerDe == QLatin1String("org.kde.plasma.networkmanagement") ||
+        lowerDe == QLatin1String("nm-applet") ||
+        lowerDe.contains(QLatin1String("networkmanagement"));
+    const bool isBluetoothSystemNotif =
+        lowerApp == QLatin1String("bluedevil") ||
+        lowerDe == QLatin1String("bluedevil") ||
+        lowerDe == QLatin1String("org.kde.bluedevil");
     if (lowerApp == QLatin1String("floatingball") || lowerDe == QLatin1String("floatingball") ||
         lowerDe == QLatin1String("org.kde.plasma.volume") ||
         lowerDe == QLatin1String("org.kde.plasma.brightness") ||
-        (urgency == 0 && (lowerDe.contains(QLatin1String("powerdevil")) || lowerApp.contains(QLatin1String("powerdevil"))))) {
+        (urgency < 2 && (isNetworkSystemNotif || isBluetoothSystemNotif ||
+                         lowerDe.contains(QLatin1String("powerdevil")) ||
+                         lowerApp.contains(QLatin1String("powerdevil"))))) {
         isTransient = true;
     }
     if (cleanSummary.isEmpty() && cleanBody.isEmpty()) {
@@ -2200,7 +2219,16 @@ QString SystemStatusMonitor::toggleWifi()
 #ifdef Q_OS_LINUX
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return QStringLiteral("未找到 nmcli");
-    const bool turnOn = !m_snapshot.networkConnected;
+    bool currentlyEnabled = m_snapshot.networkConnected;
+    {
+        QProcess probe;
+        probe.start(nm, {QStringLiteral("radio"), QStringLiteral("wifi")});
+        if (probe.waitForFinished(700) && probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == 0) {
+            const QString state = QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
+            currentlyEnabled = (state.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
+        }
+    }
+    const bool turnOn = !currentlyEnabled;
     QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wifi"),
                                  turnOn ? QStringLiteral("on") : QStringLiteral("off")});
     QTimer::singleShot(1200, this, [this] { refreshLinuxNetwork(); });

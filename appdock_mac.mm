@@ -1,6 +1,8 @@
 #include "appdock.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QHash>
 #include <QImage>
@@ -43,9 +45,15 @@ QIcon iconFromNSImage(void *rawImage)
     return QIcon(QPixmap::fromImage(img));
 }
 
-QIcon iconForPath(const QString &path)
+QHash<QString, QIcon> &macIconCache()
 {
     static QHash<QString, QIcon> cache;
+    return cache;
+}
+
+QIcon iconForPath(const QString &path)
+{
+    QHash<QString, QIcon> &cache = macIconCache();
     const auto it = cache.constFind(path);
     if (it != cache.constEnd()) return it.value();
     @autoreleasepool {
@@ -262,15 +270,60 @@ DockAppEntry entryForPath(const QString &appPath, bool pinned)
     return entry;
 }
 
-QList<DockAppEntry> installedApps(int maxCount)
+static QStringList macAppSearchDirs()
 {
-    QList<DockAppEntry> list;
-    static const QStringList searchDirs{
+    return {
         QStringLiteral("/Applications"),
+        QStringLiteral("/Applications/Nix Apps"),
+        QStringLiteral("/Applications/Utilities"),
         QDir::homePath() + QStringLiteral("/Applications"),
+        QDir::homePath() + QStringLiteral("/Applications/Home Manager Apps"),
         QStringLiteral("/System/Applications"),
         QStringLiteral("/System/Applications/Utilities")
     };
+}
+
+bool refreshInstalledCatalog(bool force)
+{
+    static QString lastFingerprint;
+    static QElapsedTimer lastCheck;
+    static bool initialized = false;
+    if (!force && initialized && lastCheck.isValid() && lastCheck.elapsed() < 1500) {
+        return false;
+    }
+    QStringList parts;
+    for (const QString &dirPath : macAppSearchDirs()) {
+        QFileInfo di(dirPath);
+        if (!di.exists() || !di.isDir()) {
+            parts.append(dirPath + QStringLiteral("|0"));
+            continue;
+        }
+        parts.append(QStringLiteral("%1|1|%2|%3")
+                         .arg(dirPath, di.canonicalFilePath())
+                         .arg(di.lastModified().toMSecsSinceEpoch()));
+        QDir dir(dirPath);
+        const QFileInfoList bundles = dir.entryInfoList(
+            {QStringLiteral("*.app")}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo &fi : bundles) {
+            parts.append(QStringLiteral("%1=%2:%3")
+                             .arg(fi.fileName(), fi.canonicalFilePath())
+                             .arg(fi.lastModified().toMSecsSinceEpoch()));
+        }
+    }
+    lastCheck.restart();
+    const QString fp = parts.join(QLatin1Char('\n'));
+    if (initialized && fp == lastFingerprint) return false;
+    lastFingerprint = fp;
+    initialized = true;
+    macIconCache().clear();
+    return true;
+}
+
+QList<DockAppEntry> installedApps(int maxCount)
+{
+    refreshInstalledCatalog(true);
+    QList<DockAppEntry> list;
+    const QStringList searchDirs = macAppSearchDirs();
     QSet<QString> seen;
     for (const QString &dirPath : searchDirs) {
         QDir dir(dirPath);

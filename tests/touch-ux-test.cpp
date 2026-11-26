@@ -829,6 +829,73 @@ int main(int argc, char **argv)
         app.processEvents();
         check(!ball.appLauncher()->isVisible(),
               "re-triggering launcher toggles AppLauncherPopover closed");
+
+#ifndef Q_OS_MACOS
+        // Verify AppLauncher auto-refreshes across NixOS atomic symlink swaps,
+        // mutable .desktop add/remove, and higher-priority NoDisplay overrides!
+        {
+            const QString catRoot = temp.path() + QStringLiteral("/launcher-catalog");
+            const QString localDir = catRoot + QStringLiteral("/local");
+            const QString gen1Dir = catRoot + QStringLiteral("/gen1");
+            const QString gen2Dir = catRoot + QStringLiteral("/gen2");
+            const QString curLink = catRoot + QStringLiteral("/current");
+            QDir().mkpath(localDir);
+            QDir().mkpath(gen1Dir);
+            QDir().mkpath(gen2Dir);
+
+            auto writeDesktop = [](const QString &path, const QString &name, bool noDisplay = false) {
+                QFile f(path);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+                    f.write("[Desktop Entry]\nType=Application\n");
+                    f.write(QStringLiteral("Name=%1\nExec=/bin/true\nCategories=Utility;\n").arg(name).toUtf8());
+                    if (noDisplay) f.write("NoDisplay=true\n");
+                }
+            };
+            writeDesktop(gen1Dir + QStringLiteral("/alpha-app.desktop"), QStringLiteral("AlphaApp"));
+            writeDesktop(gen2Dir + QStringLiteral("/beta-app.desktop"), QStringLiteral("BetaApp"));
+            check(QFile::link(gen1Dir, curLink), "created initial generation symlink for AppLauncher test");
+
+            ball.dockModel()->setDesktopSearchDirsForTest({localDir, curLink});
+            ball.appLauncher()->setAutoDismissEnabled(false);
+            ball.appLauncher()->reveal(bounds.center(), false);
+            app.processEvents();
+            check(ball.appLauncher()->visibleAppIds().contains(QStringLiteral("alpha-app")) &&
+                      !ball.appLauncher()->visibleAppIds().contains(QStringLiteral("beta-app")),
+                  "AppLauncher lists initial generation desktop entries");
+
+            // Simulate NixOS switch swapping symlink target while launcher is open
+            QFile::remove(curLink);
+            check(QFile::link(gen2Dir, curLink), "swapped generation symlink to gen2");
+            check(ball.dockModel()->refreshInstalledCatalog(true),
+                  "AppDockModel detects symlink generation swap via canonical path fingerprint");
+            app.processEvents();
+            check(!ball.appLauncher()->visibleAppIds().contains(QStringLiteral("alpha-app")) &&
+                      ball.appLauncher()->visibleAppIds().contains(QStringLiteral("beta-app")),
+                  "visible AppLauncher live-updates immediately when generation symlink swaps");
+
+            // Add app in mutable local dir & hide beta-app via higher-priority NoDisplay override
+            writeDesktop(localDir + QStringLiteral("/gamma-app.desktop"), QStringLiteral("GammaApp"));
+            writeDesktop(localDir + QStringLiteral("/beta-app.desktop"), QStringLiteral("BetaApp"), true);
+            check(ball.dockModel()->refreshInstalledCatalog(true),
+                  "AppDockModel detects mutable directory desktop entry additions and overrides");
+            app.processEvents();
+            check(ball.appLauncher()->visibleAppIds().contains(QStringLiteral("gamma-app")) &&
+                      !ball.appLauncher()->visibleAppIds().contains(QStringLiteral("beta-app")),
+                  "AppLauncher shows added app and respects higher-priority NoDisplay masking");
+
+            // Remove gamma-app and verify it disappears on refresh
+            QFile::remove(localDir + QStringLiteral("/gamma-app.desktop"));
+            check(ball.dockModel()->refreshInstalledCatalog(true),
+                  "AppDockModel detects removed desktop entry");
+            app.processEvents();
+            check(!ball.appLauncher()->visibleAppIds().contains(QStringLiteral("gamma-app")),
+                  "AppLauncher removes uninstalled app automatically");
+
+            ball.appLauncher()->hide();
+            ball.appLauncher()->setAutoDismissEnabled(true);
+            ball.dockModel()->clearDesktopSearchDirsForTest();
+        }
+#endif
     }
 
     // ------------------------------------------------------------------------
@@ -893,6 +960,59 @@ int main(int argc, char **argv)
         bool osdTransient = false;
         check(SystemStatusMonitor::parseDbusMonitorNotifyBlock(transientOsd, &osdItem, &osdTransient) && osdTransient,
               "transient OSD notifications are flagged and filtered out from unread badge");
+
+        // KDE plasma-nm Network Management connect/disconnect/modem churn (no transient hint!)
+        const QString nmNotify = QStringLiteral(
+            "method call time=1795703208.123 sender=:1.42 -> destination=org.freedesktop.Notifications serial=91 "
+            "path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify\n"
+            "   string \"Network Management\"\n"
+            "   uint32 0\n"
+            "   string \"applications-internet\"\n"
+            "   string \"Mobile Broadband\"\n"
+            "   string \"Connection 'Mobile Broadband' activated.\"\n"
+            "   array [\n"
+            "   ]\n"
+            "   array [\n"
+            "      dict entry(\n"
+            "         string \"desktop-entry\"\n"
+            "         variant             string \"networkmanagement\"\n"
+            "      )\n"
+            "      dict entry(\n"
+            "         string \"urgency\"\n"
+            "         variant             byte 1\n"
+            "      )\n"
+            "   ]\n"
+            "   int32 -1\n");
+        NotificationItem nmItem;
+        bool nmTransient = false;
+        check(SystemStatusMonitor::parseDbusMonitorNotifyBlock(nmNotify, &nmItem, &nmTransient) && nmTransient,
+              "KDE Network Management / Mobile Broadband status notifications are filtered out from unread badge");
+
+        const QString critPowerNotify = QStringLiteral(
+            "method call time=1795703209.000 sender=:1.42 -> destination=org.freedesktop.Notifications serial=92 "
+            "path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify\n"
+            "   string \"Power Management\"\n"
+            "   uint32 0\n"
+            "   string \"battery-caution\"\n"
+            "   string \"Battery Critical\"\n"
+            "   string \"System will suspend soon\"\n"
+            "   array [\n"
+            "   ]\n"
+            "   array [\n"
+            "      dict entry(\n"
+            "         string \"desktop-entry\"\n"
+            "         variant             string \"powerdevil\"\n"
+            "      )\n"
+            "      dict entry(\n"
+            "         string \"urgency\"\n"
+            "         variant             byte 2\n"
+            "      )\n"
+            "   ]\n"
+            "   int32 -1\n");
+        NotificationItem critItem;
+        bool critTransient = true;
+        check(SystemStatusMonitor::parseDbusMonitorNotifyBlock(critPowerNotify, &critItem, &critTransient) && !critTransient,
+              "critical urgency=2 PowerDevil alerts remain visible and are not filtered out");
 
         // 11b. Open window notification attribution + auto-clear (ZERO ghost red dot!)
         ball.statusMonitor()->clearAllNotifications();

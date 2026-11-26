@@ -8,6 +8,9 @@
 #include <QString>
 #include <QStringList>
 
+class QFileSystemWatcher;
+class QTimer;
+
 struct DockAppEntry {
     QString id;
     QString appKey;       // Normalized app identifier for stable same-app window clustering
@@ -44,6 +47,7 @@ public:
     QList<DockAppEntry> dockApps(int maxCount = 80, bool includeInstalledOverflow = true,
                                  bool runningFirst = true) const;
     QList<DockAppEntry> installedApps(int maxCount = 120) const;
+    bool refreshInstalledCatalog(bool force = true);
 
     QStringList pinnedTargets() const { return m_pinnedTargets; }
     void setPinnedTargets(const QStringList &targets);
@@ -59,6 +63,8 @@ public:
     void setOpenWindowsForTest(const QList<DockAppEntry> &windows);
     void clearOpenWindowsForTest();
     void setActiveFullscreenForTest(bool fullscreen);
+    void setDesktopSearchDirsForTest(const QStringList &dirs);
+    void clearDesktopSearchDirsForTest();
 
 #ifdef Q_OS_MACOS
     void applyMacWindowSnapshot(const QList<DockAppEntry> &windows, bool activeFullscreen);
@@ -78,6 +84,7 @@ public:
 
 signals:
     void appsChanged();
+    void catalogChanged();
     void activeFullscreenChanged(bool fullscreen);
     void windowActivated(const QString &appKey, const QString &appName, const QString &desktopEntry);
 
@@ -97,8 +104,12 @@ private:
 #elif defined(Q_OS_LINUX)
     void initKWinBridge();
     void teardownKWinBridge();
+    void initDesktopWatcher();
+    void syncDesktopWatcherPaths();
     QList<DockAppEntry> m_linuxRunningApps;
     QObject *m_kwinAdaptor = nullptr;
     QString m_kwinBridgeScriptPath;
+    QFileSystemWatcher *m_desktopWatcher = nullptr;
+    QTimer *m_desktopWatchDebounce = nullptr;
 #endif
 };

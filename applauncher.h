@@ -13,6 +13,7 @@ class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QScrollArea;
+class QTimer;
 class QToolButton;
 
 // macOS Tahoe-style centered floating App Launcher popover.
@@ -30,6 +31,7 @@ public:
     void reveal(const QPoint &anchorGlobal, bool toggle = true);
     void setAutoDismissEnabled(bool enabled) { m_autoDismissEnabled = enabled; }
     int visibleAppCount() const { return m_filteredApps.size(); }
+    QStringList visibleAppIds() const;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -58,6 +60,7 @@ private:
     bool m_menuOpen = false;
     QElapsedTimer m_openedTimer;
     void *m_outsideClickMonitor = nullptr;
+    QTimer *m_liveRefreshTimer = nullptr;
 
     QLineEdit *m_searchEdit = nullptr;
     QToolButton *m_clearBtn = nullptr;

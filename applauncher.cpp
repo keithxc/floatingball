@@ -262,7 +262,29 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     root->addWidget(m_footerLbl);
 
     loadLaunchCounts();
+
+    m_liveRefreshTimer = new QTimer(this);
+    m_liveRefreshTimer->setInterval(2000);
+    connect(m_liveRefreshTimer, &QTimer::timeout, this, [this] {
+        if (isVisible() && m_dockModel) {
+            m_dockModel->refreshInstalledCatalog(true);
+        }
+    });
+    if (m_dockModel) {
+        connect(m_dockModel, &AppDockModel::catalogChanged, this, [this] {
+            if (isVisible()) reloadCatalog();
+        });
+    }
+
     FloatingWindow::prepare(this, true);
+}
+
+QStringList AppLauncherPopover::visibleAppIds() const
+{
+    QStringList ids;
+    ids.reserve(m_filteredApps.size());
+    for (const DockAppEntry &e : m_filteredApps) ids.append(e.id);
+    return ids;
 }
 
 AppLauncherPopover::~AppLauncherPopover()
@@ -275,6 +297,7 @@ AppLauncherPopover::~AppLauncherPopover()
 
 void AppLauncherPopover::hideEvent(QHideEvent *event)
 {
+    if (m_liveRefreshTimer) m_liveRefreshTimer->stop();
     if (m_outsideClickMonitor) {
         PanelBackdrop::removeGlobalPointerDownMonitor(m_outsideClickMonitor);
         m_outsideClickMonitor = nullptr;
@@ -296,6 +319,9 @@ void AppLauncherPopover::reveal(const QPoint &anchorGlobal, bool toggle)
     show();
     raise();
     activateWindow();
+    if (m_liveRefreshTimer && QGuiApplication::platformName() != QLatin1String("offscreen")) {
+        m_liveRefreshTimer->start();
+    }
     if (!m_outsideClickMonitor) {
         QPointer<AppLauncherPopover> self(this);
         m_outsideClickMonitor = PanelBackdrop::installGlobalPointerDownMonitor(this, [self](const QPoint &globalPos) {
@@ -463,7 +489,7 @@ void AppLauncherPopover::reloadCatalog()
             runningById.insert(d.id.toLower(), d);
     }
 
-    QList<DockAppEntry> installed = m_dockModel->installedApps(260);
+    QList<DockAppEntry> installed = m_dockModel->installedApps(512);
     for (DockAppEntry &e : installed) {
         if (runningByTarget.contains(e.launchTarget)) {
             const DockAppEntry &live = runningByTarget.value(e.launchTarget);
@@ -509,8 +535,16 @@ void AppLauncherPopover::rebuildCategoryBar()
         if (key == QLatin1String("top") && topCount == 0) continue;
         if (key != QLatin1String("all") && key != QLatin1String("top") && counts.value(key) == 0)
             continue;
-
         m_visibleCategories.append(key);
+    }
+    if (!m_visibleCategories.contains(m_activeCategory)) {
+        m_activeCategory = QStringLiteral("all");
+    }
+
+    for (const CatDef &cd : kCategories) {
+        const QString key = QString::fromLatin1(cd.key);
+        if (!m_visibleCategories.contains(key)) continue;
+
         auto *pill = new QToolButton(this);
         pill->setObjectName(QStringLiteral("catPill"));
         pill->setText(QString::fromUtf8(cd.label));

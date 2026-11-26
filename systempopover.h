@@ -87,6 +87,8 @@ private:
         QString rate;
         QString freq;
         bool active = false;
+        bool saved = false;
+        QString savedUuid;
     };
     struct HotspotClient {
         QString ip;
@@ -147,6 +149,9 @@ private:
     void rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &entries);
     void toggleWifiRadio();
     void connectWifi(const WifiEntry &entry);
+    void connectWifiWithPassword(const WifiEntry &entry, const QString &password);
+    void showWifiPasswordPrompt(const WifiEntry &entry, const QString &hint = QString());
+    void hideWifiPasswordPrompt();
 
     // 4G Cellular async actions (4G only)
     void refreshCellular();
@@ -156,6 +161,8 @@ private:
     // Hotspot (Wi-Fi AP, pure Hotspot view + Edit/Save mode + clients & traffic)
     void loadHotspotPrefs();
     void saveHotspotPrefs();
+    bool shouldSkip5gHotspotFor(const QString &wifiDev) const;
+    void markSkip5gHotspotFor(const QString &wifiDev, bool skip);
     void refreshHotspot();
     void rebuildHotspotView();
     void setHotspotEditMode(bool editing);
@@ -251,6 +258,8 @@ private:
 
     // Live 1s speed/traffic stats
     QTimer *m_netStatsTimer = nullptr;
+    QTimer *m_netStatusRefreshDebounce = nullptr;
+    QString m_lastMonitorNetKey;
     QString m_lastStatsIface;
     quint64 m_lastRxBytes = 0;
     quint64 m_lastTxBytes = 0;
@@ -262,8 +271,16 @@ private:
     QLabel *m_wifiDetailTitle = nullptr;
     QLabel *m_wifiDetailMeta = nullptr;
     QLabel *m_wifiSpeedLbl = nullptr;
+    QWidget *m_wifiPassCard = nullptr;
+    QLabel *m_wifiPassTitle = nullptr;
+    QLineEdit *m_wifiPassEdit = nullptr;
+    QToolButton *m_wifiPassEyeBtn = nullptr;
+    WifiEntry m_pendingWifiEntry;
     QVBoxLayout *m_wifiListLayout = nullptr;
     bool m_wifiRadioEnabled = true;
+    bool m_wifiRadioBusy = false;
+    bool m_wifiConnecting = false;
+    quint64 m_wifiRefreshSeq = 0;
     QString m_wifiIface;
     QString m_wifiIp;
     QString m_wifiRate;
@@ -282,6 +299,8 @@ private:
     bool m_wwanAvailable = false;
     bool m_wwanEnabled = false;
     bool m_wwanConnected = false;
+    bool m_wwanBusy = false;
+    quint64 m_cellRefreshSeq = 0;
     QString m_cellOperator;
     QString m_cellTech;
     QString m_cellStateText;
@@ -308,6 +327,7 @@ private:
     bool m_hsBusy = false;
     bool m_hsEditing = false;
     bool m_hsPassRevealed = false;
+    quint64 m_hsRefreshSeq = 0;
     QString m_hsSsid;
     QString m_hsPassword;
     bool m_hsUseWpa3 = true; // default WPA3-Personal (SAE)

@@ -792,9 +792,35 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_netStatsTimer->setInterval(1000);
     connect(m_netStatsTimer, &QTimer::timeout, this, &SystemPopover::pollLiveNetStats);
 
+    // Debounced live refresh when NetworkManager reports connectivity changes while visible
+    m_netStatusRefreshDebounce = new QTimer(this);
+    m_netStatusRefreshDebounce->setSingleShot(true);
+    m_netStatusRefreshDebounce->setInterval(650);
+    connect(m_netStatusRefreshDebounce, &QTimer::timeout, this, [this] {
+        if (!isVisible()) return;
+        if (m_currentPage == PageHome) {
+            refreshWifi(false);
+            refreshCellular();
+            refreshHotspot();
+        } else if (m_currentPage == PageWifi) {
+            refreshWifi(false);
+        } else if (m_currentPage == PageCellular) {
+            refreshCellular();
+        } else if (m_currentPage == PageHotspot) {
+            refreshHotspot();
+        }
+    });
+
     if (m_monitor) {
-        connect(m_monitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &) {
+        connect(m_monitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &st) {
             syncHomeFromSnapshot();
+            const QString netKey = QStringLiteral("%1|%2").arg(st.networkConnected ? 1 : 0).arg(st.networkText);
+            if (netKey != m_lastMonitorNetKey) {
+                m_lastMonitorNetKey = netKey;
+                if (isVisible() && m_netStatusRefreshDebounce) {
+                    m_netStatusRefreshDebounce->start();
+                }
+            }
         });
         connect(m_monitor, &SystemStatusMonitor::notificationsChanged, this, [this] {
             syncHomeFromSnapshot();
@@ -1182,6 +1208,74 @@ QWidget *SystemPopover::buildWifiPage(QWidget *parent)
     dv->addWidget(m_wifiSpeedLbl);
     m_wifiDetailCard->hide();
     v->addWidget(m_wifiDetailCard);
+
+    // Inline Wi-Fi password prompt (for unsaved secured networks or auth retry —
+    // avoids firing doomed passwordless nmcli calls or launching KDE System Settings)
+    m_wifiPassCard = new QWidget(page);
+    m_wifiPassCard->setObjectName(QStringLiteral("bentoGroup"));
+    auto *pv = new QVBoxLayout(m_wifiPassCard);
+    pv->setContentsMargins(11, 9, 11, 10);
+    pv->setSpacing(7);
+
+    m_wifiPassTitle = new QLabel(m_wifiPassCard);
+    m_wifiPassTitle->setObjectName(QStringLiteral("rowTitle"));
+    m_wifiPassTitle->setWordWrap(true);
+    pv->addWidget(m_wifiPassTitle);
+
+    auto *passInputRow = new QHBoxLayout();
+    passInputRow->setSpacing(6);
+    m_wifiPassEdit = new QLineEdit(m_wifiPassCard);
+    m_wifiPassEdit->setObjectName(QStringLiteral("hsInput"));
+    m_wifiPassEdit->setEchoMode(QLineEdit::Password);
+    m_wifiPassEdit->setPlaceholderText(QStringLiteral("输入 Wi-Fi 密码"));
+    passInputRow->addWidget(m_wifiPassEdit, 1);
+
+    m_wifiPassEyeBtn = new QToolButton(m_wifiPassCard);
+    m_wifiPassEyeBtn->setObjectName(QStringLiteral("tabBtn"));
+    m_wifiPassEyeBtn->setText(QStringLiteral("显示"));
+    m_wifiPassEyeBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_wifiPassEyeBtn, &QToolButton::clicked, this, [this] {
+        const bool show = (m_wifiPassEdit->echoMode() == QLineEdit::Password);
+        m_wifiPassEdit->setEchoMode(show ? QLineEdit::Normal : QLineEdit::Password);
+        m_wifiPassEyeBtn->setText(show ? QStringLiteral("隐藏") : QStringLiteral("显示"));
+    });
+    passInputRow->addWidget(m_wifiPassEyeBtn);
+    pv->addLayout(passInputRow);
+
+    auto *passActRow = new QHBoxLayout();
+    passActRow->setSpacing(8);
+    auto *cancelPassBtn = new QToolButton(m_wifiPassCard);
+    cancelPassBtn->setObjectName(QStringLiteral("footBtn"));
+    cancelPassBtn->setText(QStringLiteral("取消"));
+    cancelPassBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    cancelPassBtn->setMinimumHeight(30);
+    cancelPassBtn->setCursor(Qt::PointingHandCursor);
+    connect(cancelPassBtn, &QToolButton::clicked, this, [this] { hideWifiPasswordPrompt(); });
+
+    auto *joinPassBtn = new QToolButton(m_wifiPassCard);
+    joinPassBtn->setObjectName(QStringLiteral("primaryBtn"));
+    joinPassBtn->setText(QStringLiteral("连接"));
+    joinPassBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    joinPassBtn->setMinimumHeight(30);
+    joinPassBtn->setCursor(Qt::PointingHandCursor);
+    auto submitWifiPass = [this] {
+        const QString psk = m_wifiPassEdit ? m_wifiPassEdit->text() : QString();
+        if (psk.size() < 8) {
+            showStatusBanner(QStringLiteral("Wi-Fi 密码至少需要 8 位"), true);
+            return;
+        }
+        const WifiEntry target = m_pendingWifiEntry;
+        hideWifiPasswordPrompt();
+        connectWifiWithPassword(target, psk);
+    };
+    connect(joinPassBtn, &QToolButton::clicked, this, submitWifiPass);
+    connect(m_wifiPassEdit, &QLineEdit::returnPressed, this, submitWifiPass);
+    passActRow->addWidget(cancelPassBtn, 1);
+    passActRow->addWidget(joinPassBtn, 1);
+    pv->addLayout(passActRow);
+
+    m_wifiPassCard->hide();
+    v->addWidget(m_wifiPassCard);
 
     auto *scroll = makeTouchScrollArea(page, &m_wifiListLayout);
     if (auto *ts = TouchScrollController::install(scroll)) {
@@ -1687,6 +1781,10 @@ void SystemPopover::rebuildNotificationsView()
 void SystemPopover::keyPressEvent(QKeyEvent *event)
 {
     if (event->key() == Qt::Key_Escape) {
+        if (m_currentPage == PageWifi && m_wifiPassCard && m_wifiPassCard->isVisible()) {
+            hideWifiPasswordPrompt();
+            return;
+        }
         if (m_currentPage != PageHome) showPage(PageHome);
         else hide();
         return;
@@ -1859,6 +1957,9 @@ void SystemPopover::showPage(Page page)
         m_hsEditing = false;
         if (m_hsViewCard) m_hsViewCard->show();
         if (m_hsEditCard) m_hsEditCard->hide();
+    }
+    if (page != PageWifi) {
+        hideWifiPasswordPrompt();
     }
     syncHeaderForPage();
     syncNetStatsTimer();
@@ -2378,25 +2479,31 @@ void SystemPopover::refreshWifi(bool rescan)
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return;
+    if (rescan && (!m_wifiRadioEnabled || m_hsActive)) {
+        rescan = false;
+    }
     if (rescan) showStatusBanner(QStringLiteral("正在扫描附近 Wi-Fi…"));
+    const quint64 seq = ++m_wifiRefreshSeq;
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
     connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [self, proc](int, QProcess::ExitStatus) {
+            [self, proc, seq](int, QProcess::ExitStatus) {
         const QString out = QString::fromUtf8(proc->readAllStandardOutput());
         proc->deleteLater();
-        if (!self) return;
+        if (!self || seq != self->m_wifiRefreshSeq) return;
 
         bool wifiEnabled = true;
         QString wifiIface;
         QString wifiIp;
+        QHash<QString, QString> savedUuids;
         QList<WifiEntry> entries;
         QHash<QString, int> seenIndex;
         int section = 0;
         for (const QString &raw : out.split(QLatin1Char('\n'))) {
             const QString line = raw.trimmed();
             if (line == QLatin1String("---DEV---")) { section = 1; continue; }
-            if (line == QLatin1String("---WIFI---")) { section = 2; continue; }
+            if (line == QLatin1String("---SAVED---")) { section = 2; continue; }
+            if (line == QLatin1String("---WIFI---")) { section = 3; continue; }
             if (line.isEmpty()) continue;
 
             if (section == 0) {
@@ -2405,6 +2512,15 @@ void SystemPopover::refreshWifi(bool rescan)
                 if (line.startsWith(QLatin1String("IFACE="))) wifiIface = line.mid(6).trimmed();
                 else if (line.startsWith(QLatin1String("IP="))) wifiIp = line.mid(3).trimmed().section(QLatin1Char('/'), 0, 0);
             } else if (section == 2) {
+                const int tab = raw.indexOf(QLatin1Char('\t'));
+                if (tab > 0) {
+                    const QString uuid = raw.left(tab).trimmed();
+                    const QString ssid = raw.mid(tab + 1).trimmed();
+                    if (!uuid.isEmpty() && !ssid.isEmpty() && !savedUuids.contains(ssid)) {
+                        savedUuids.insert(ssid, uuid);
+                    }
+                }
+            } else if (section == 3) {
                 QStringList parts;
                 QString cur;
                 for (int i = 0; i < line.size(); ++i) {
@@ -2429,12 +2545,20 @@ void SystemPopover::refreshWifi(bool rescan)
                 e.security = parts[3].trimmed();
                 if (parts.size() >= 5) e.rate = parts[4].trimmed();
                 if (parts.size() >= 6) e.freq = parts[5].trimmed();
+                if (savedUuids.contains(ssid)) {
+                    e.saved = true;
+                    e.savedUuid = savedUuids.value(ssid);
+                }
                 if (seenIndex.contains(ssid)) {
                     WifiEntry &ex = entries[seenIndex[ssid]];
                     if (e.active) {
                         ex.active = true;
                         if (!e.rate.isEmpty()) ex.rate = e.rate;
                         if (!e.freq.isEmpty()) ex.freq = e.freq;
+                    }
+                    if (e.saved && !ex.saved) {
+                        ex.saved = true;
+                        ex.savedUuid = e.savedUuid;
                     }
                     ex.signal = qMax(ex.signal, e.signal);
                 } else {
@@ -2445,6 +2569,7 @@ void SystemPopover::refreshWifi(bool rescan)
         }
         std::sort(entries.begin(), entries.end(), [](const WifiEntry &a, const WifiEntry &b) {
             if (a.active != b.active) return a.active;
+            if (a.saved != b.saved) return a.saved;
             return a.signal > b.signal;
         });
         self->m_wifiIface = wifiIface;
@@ -2455,12 +2580,27 @@ void SystemPopover::refreshWifi(bool rescan)
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
-                     "nmcli -t -f WIFI radio wifi; echo '---DEV---'; "
-                     "WDEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
+                     "RADIO=$(nmcli -t -f WIFI radio wifi 2>/dev/null | head -n1); "
+                     "echo \"$RADIO\"; echo '---DEV---'; "
+                     "WDEV=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2==\"wifi\"{print $1; exit}'); "
                      "echo \"IFACE=$WDEV\"; "
                      "[ -n \"$WDEV\" ] && echo \"IP=$(nmcli -g IP4.ADDRESS device show \"$WDEV\" 2>/dev/null | head -n1)\"; "
+                     "echo '---SAVED---'; "
+                     "nmcli -t -f UUID,TYPE connection show 2>/dev/null | awk -F: '$2==\"802-11-wireless\"{print $1}' | while read -r U; do "
+                     "  M=$(nmcli -g 802-11-wireless.mode connection show \"$U\" 2>/dev/null | head -n1); "
+                     "  [ \"$M\" = \"ap\" ] && continue; "
+                     "  S=$(nmcli -g 802-11-wireless.ssid connection show \"$U\" 2>/dev/null | head -n1); "
+                     "  [ -n \"$S\" ] && printf '%s\\t%s\\n' \"$U\" \"$S\"; "
+                     "done; "
                      "echo '---WIFI---'; "
-                     "nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan %1").arg(rescanFlag)});
+                     "if [ \"$RADIO\" = \"enabled\" ]; then "
+                     "  if [ \"%1\" = \"yes\" ]; then "
+                     "    nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan yes 2>/dev/null "
+                     "      || nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan no 2>/dev/null || true; "
+                     "  else "
+                     "    nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,RATE,FREQ device wifi list --rescan no 2>/dev/null || true; "
+                     "  fi; "
+                     "fi").arg(rescanFlag)});
 #elif defined(Q_OS_MACOS)
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     if (rescan) showStatusBanner(QStringLiteral("正在扫描附近 Wi-Fi…"));
@@ -2572,7 +2712,8 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &en
             ? QStringLiteral("🔒 ") : QString();
         const QString rightTag = entry.active
             ? QStringLiteral("已连 · %1%").arg(entry.signal)
-            : QStringLiteral("%1%").arg(entry.signal);
+            : (entry.saved ? QStringLiteral("已存 · %1%").arg(entry.signal)
+                           : QStringLiteral("%1%").arg(entry.signal));
         btn->setText(QStringLiteral("%1%2   [%3]").arg(lock, elideText(entry.ssid, 17), rightTag));
         btn->setToolTip(entry.ssid);
         connect(btn, &QPushButton::clicked, this, [this, entry] { connectWifi(entry); });
@@ -2585,13 +2726,57 @@ void SystemPopover::rebuildWifiList(bool wifiEnabled, const QList<WifiEntry> &en
 void SystemPopover::toggleWifiRadio()
 {
 #ifdef Q_OS_LINUX
+    if (m_wifiRadioBusy) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return;
     const bool turnOn = !m_wifiRadioEnabled;
-    QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wifi"),
-                                 turnOn ? QStringLiteral("on") : QStringLiteral("off")});
-    showStatusBanner(turnOn ? QStringLiteral("正在开启 Wi-Fi…") : QStringLiteral("已关闭 Wi-Fi"));
-    QTimer::singleShot(1100, this, [this] { refreshWifi(false); });
+    m_wifiRadioBusy = true;
+    m_wifiRadioEnabled = turnOn;
+    if (!turnOn) {
+        m_hsActive = false;
+        m_cachedWifiSsid.clear();
+        hideWifiPasswordPrompt();
+    }
+    if (m_wifiToggle) {
+        m_wifiToggle->setChecked(turnOn);
+        m_wifiToggle->setEnabled(false);
+    }
+    syncHomeFromSnapshot();
+    showStatusBanner(turnOn ? QStringLiteral("正在开启 Wi-Fi…") : QStringLiteral("正在关闭 Wi-Fi…"));
+
+    auto *proc = new QProcess(this);
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc, turnOn](int code, QProcess::ExitStatus st) {
+        const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
+        proc->deleteLater();
+        if (!self) return;
+        self->m_wifiRadioBusy = false;
+        if (self->m_wifiToggle) self->m_wifiToggle->setEnabled(true);
+        if (st != QProcess::NormalExit || code != 0) {
+            self->m_wifiRadioEnabled = !turnOn;
+            if (self->m_wifiToggle) self->m_wifiToggle->setChecked(self->m_wifiRadioEnabled);
+            self->syncHomeFromSnapshot();
+            self->showStatusBanner(err.isEmpty() ? QStringLiteral("切换 Wi-Fi 失败")
+                                                 : QStringLiteral("切换 Wi-Fi 失败: %1").arg(err.left(60)),
+                                   true);
+            return;
+        }
+        self->showStatusBanner(turnOn ? QStringLiteral("✓ Wi-Fi 已开启") : QStringLiteral("✓ Wi-Fi 已关闭"));
+        if (self->m_monitor) self->m_monitor->refreshNow();
+        QTimer::singleShot(1200, self, [self] {
+            if (!self) return;
+            self->refreshWifi(false);
+            self->refreshHotspot();
+        });
+        if (turnOn) {
+            QTimer::singleShot(3800, self, [self] {
+                if (self) self->refreshWifi(false);
+            });
+        }
+    });
+    proc->start(nm, {QStringLiteral("radio"), QStringLiteral("wifi"),
+                     turnOn ? QStringLiteral("on") : QStringLiteral("off")});
 #elif defined(Q_OS_MACOS)
     showStatusBanner(SystemStatusMac::toggleWifi());
     QTimer::singleShot(1100, this, [this] { refreshWifi(false); });
@@ -2608,16 +2793,18 @@ void SystemPopover::refreshCellular()
     if (QGuiApplication::platformName() == QLatin1String("offscreen")) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return;
+    const quint64 seq = ++m_cellRefreshSeq;
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
     connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [self, proc](int, QProcess::ExitStatus) {
+            [self, proc, seq](int, QProcess::ExitStatus) {
         const QString out = QString::fromUtf8(proc->readAllStandardOutput());
         proc->deleteLater();
-        if (!self) return;
+        if (!self || seq != self->m_cellRefreshSeq) return;
 
         bool wwanHw = false;
         bool wwanOn = false;
+        bool hasModemDevice = false;
         bool connected = false;
         QString ipIface;
         QString ipAddr;
@@ -2641,7 +2828,9 @@ void SystemPopover::refreshCellular()
                     wwanOn = (r[1].compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0);
                 }
             } else if (section == 1) {
-                if (line.startsWith(QLatin1String("STATE="))) {
+                if (line.startsWith(QLatin1String("GDEV="))) {
+                    hasModemDevice = !line.mid(5).trimmed().isEmpty();
+                } else if (line.startsWith(QLatin1String("STATE="))) {
                     connected = line.mid(6).contains(QLatin1String("connected"), Qt::CaseInsensitive)
                              && !line.mid(6).contains(QLatin1String("disconnected"), Qt::CaseInsensitive);
                 } else if (line.startsWith(QLatin1String("IPIF="))) {
@@ -2655,6 +2844,7 @@ void SystemPopover::refreshCellular()
                 const QString k = line.left(colon).trimmed();
                 const QString v = line.mid(colon + 1).trimmed();
                 if (v.isEmpty() || v == QLatin1String("--")) continue;
+                hasModemDevice = true;
                 if (k == QLatin1String("modem.3gpp.operator-name")) opName = v;
                 else if (k == QLatin1String("modem.generic.access-technologies.value[1]")) tech = v.toUpper();
                 else if (k == QLatin1String("modem.generic.signal-quality.value")) signal = v.toInt();
@@ -2663,7 +2853,7 @@ void SystemPopover::refreshCellular()
             }
         }
 
-        self->m_wwanAvailable = wwanHw;
+        self->m_wwanAvailable = wwanHw && hasModemDevice;
         self->m_wwanEnabled = wwanOn;
         self->m_wwanConnected = connected || (mmState == QLatin1String("connected"));
         self->m_cellNetIface = ipIface;
@@ -2679,8 +2869,9 @@ void SystemPopover::refreshCellular()
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
-                     "nmcli -t -f WWAN-HW,WWAN radio all; echo '---DEV---'; "
-                     "GDEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"gsm\" || $2==\"cdma\"{print $1; exit}'); "
+                     "nmcli -t -f WWAN-HW,WWAN radio all 2>/dev/null; echo '---DEV---'; "
+                     "GDEV=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2==\"gsm\" || $2==\"cdma\"{print $1; exit}'); "
+                     "echo \"GDEV=$GDEV\"; "
                      "if [ -n \"$GDEV\" ]; then "
                      "  echo \"STATE=$(nmcli -g GENERAL.STATE device show \"$GDEV\" 2>/dev/null | head -n1)\"; "
                      "  echo \"IPIF=$(nmcli -g GENERAL.IP-IFACE device show \"$GDEV\" 2>/dev/null | head -n1)\"; "
@@ -2725,22 +2916,80 @@ void SystemPopover::rebuildCellularView()
 void SystemPopover::toggleWwanRadio()
 {
 #ifdef Q_OS_LINUX
+    if (m_wwanBusy) return;
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return;
     const bool turnOn = !m_wwanEnabled;
-    QProcess::startDetached(nm, {QStringLiteral("radio"), QStringLiteral("wwan"),
-                                 turnOn ? QStringLiteral("on") : QStringLiteral("off")});
-    showStatusBanner(turnOn ? QStringLiteral("正在开启 4G 移动网络…") : QStringLiteral("已关闭 4G 移动网络"));
+    m_wwanBusy = true;
+    m_wwanEnabled = turnOn;
+    if (!turnOn) m_wwanConnected = false;
+    if (m_cellToggle) {
+        m_cellToggle->setChecked(turnOn);
+        m_cellToggle->setEnabled(false);
+    }
+    rebuildCellularView();
+    syncHomeFromSnapshot();
+    showStatusBanner(turnOn ? QStringLiteral("正在开启 4G 移动网络…") : QStringLiteral("正在关闭 4G 移动网络…"));
+
+    auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
-    QTimer::singleShot(1400, this, [self] {
-        if (self) self->refreshCellular();
-    });
-    if (turnOn) {
-        QTimer::singleShot(4000, this, [self] {
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc, turnOn](int code, QProcess::ExitStatus st) {
+        const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
+        proc->deleteLater();
+        if (!self) return;
+        self->m_wwanBusy = false;
+        if (self->m_cellToggle) self->m_cellToggle->setEnabled(true);
+        if (st != QProcess::NormalExit || code != 0) {
+            self->m_wwanEnabled = !turnOn;
+            if (self->m_cellToggle) self->m_cellToggle->setChecked(self->m_wwanEnabled);
+            self->rebuildCellularView();
+            self->syncHomeFromSnapshot();
+            self->showStatusBanner(err.isEmpty() ? QStringLiteral("切换 4G 网络失败")
+                                                 : QStringLiteral("切换 4G 失败: %1").arg(err.left(60)),
+                                   true);
+            return;
+        }
+        self->showStatusBanner(turnOn ? QStringLiteral("✓ 4G 已开启，正在注网…") : QStringLiteral("✓ 4G 网络已关闭"));
+        if (self->m_monitor) self->m_monitor->refreshNow();
+        QTimer::singleShot(1500, self, [self] {
             if (self) self->refreshCellular();
         });
-    }
+        if (turnOn) {
+            QTimer::singleShot(5000, self, [self] {
+                if (self) self->refreshCellular();
+            });
+            QTimer::singleShot(12000, self, [self] {
+                if (self) self->refreshCellular();
+            });
+        }
+    });
+    proc->start(nm, {QStringLiteral("radio"), QStringLiteral("wwan"),
+                     turnOn ? QStringLiteral("on") : QStringLiteral("off")});
 #endif
+}
+
+void SystemPopover::showWifiPasswordPrompt(const WifiEntry &entry, const QString &hint)
+{
+    m_pendingWifiEntry = entry;
+    if (m_wifiPassTitle) {
+        m_wifiPassTitle->setText(hint.isEmpty()
+            ? QStringLiteral("输入「%1」的密码").arg(elideText(entry.ssid, 20))
+            : QStringLiteral("%1 · %2").arg(elideText(entry.ssid, 14), hint));
+    }
+    if (m_wifiPassEdit) {
+        m_wifiPassEdit->clear();
+        m_wifiPassEdit->setEchoMode(QLineEdit::Password);
+        if (m_wifiPassEyeBtn) m_wifiPassEyeBtn->setText(QStringLiteral("显示"));
+    }
+    if (m_wifiPassCard) m_wifiPassCard->show();
+    if (m_wifiPassEdit) m_wifiPassEdit->setFocus(Qt::ActiveWindowFocusReason);
+}
+
+void SystemPopover::hideWifiPasswordPrompt()
+{
+    if (m_wifiPassEdit) m_wifiPassEdit->clear();
+    if (m_wifiPassCard) m_wifiPassCard->hide();
 }
 
 void SystemPopover::connectWifi(const WifiEntry &entry)
@@ -2750,24 +2999,16 @@ void SystemPopover::connectWifi(const WifiEntry &entry)
         showStatusBanner(QStringLiteral("当前已连接 %1").arg(entry.ssid));
         return;
     }
-    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
-    if (nm.isEmpty()) return;
-    showStatusBanner(QStringLiteral("正在连接 %1…").arg(entry.ssid));
-    auto *proc = new QProcess(this);
-    QPointer<SystemPopover> self(this);
-    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [self, proc, entry](int code, QProcess::ExitStatus st) {
-        proc->deleteLater();
-        if (!self) return;
-        if (st == QProcess::NormalExit && code == 0) {
-            self->showStatusBanner(QStringLiteral("✓ 已连接到 %1").arg(entry.ssid));
-            self->refreshWifi(false);
-        } else {
-            self->showStatusBanner(QStringLiteral("需输入密码，正在打开 KDE 网络设置…"), true);
-            if (self->m_monitor) self->m_monitor->openKdeModule(QStringLiteral("kcm_networkmanagement"));
-        }
-    });
-    proc->start(nm, {QStringLiteral("device"), QStringLiteral("wifi"), QStringLiteral("connect"), entry.ssid});
+    if (m_wifiConnecting) {
+        showStatusBanner(QStringLiteral("正在连接网络，请稍候…"));
+        return;
+    }
+    const bool secured = !entry.security.isEmpty() && entry.security != QLatin1String("--");
+    if (!entry.saved && secured) {
+        showWifiPasswordPrompt(entry);
+        return;
+    }
+    connectWifiWithPassword(entry, QString());
 #elif defined(Q_OS_MACOS)
     if (entry.active) {
         showStatusBanner(QStringLiteral("当前已连接 %1").arg(entry.ssid));
@@ -2787,6 +3028,86 @@ void SystemPopover::connectWifi(const WifiEntry &entry)
     });
 #else
     Q_UNUSED(entry);
+#endif
+}
+
+void SystemPopover::connectWifiWithPassword(const WifiEntry &entry, const QString &password)
+{
+#ifdef Q_OS_LINUX
+    if (m_wifiConnecting) return;
+    const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
+    if (nm.isEmpty()) return;
+
+    m_wifiConnecting = true;
+    showStatusBanner(QStringLiteral("正在连接 %1…").arg(entry.ssid));
+    auto *proc = new QProcess(this);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("FB_WIFI_SSID"), entry.ssid);
+    env.insert(QStringLiteral("FB_WIFI_UUID"), (entry.saved && password.isEmpty()) ? entry.savedUuid : QString());
+    env.insert(QStringLiteral("FB_WIFI_PSK"), password);
+    env.insert(QStringLiteral("FB_WIFI_STOP_HS"), m_hsActive ? QStringLiteral("1") : QStringLiteral("0"));
+    proc->setProcessEnvironment(env);
+
+    QPointer<SystemPopover> self(this);
+    connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [self, proc, entry](int code, QProcess::ExitStatus st) {
+        const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
+        const QString out = QString::fromUtf8(proc->readAllStandardOutput()).trimmed();
+        proc->deleteLater();
+        if (!self) return;
+        self->m_wifiConnecting = false;
+        if (st == QProcess::NormalExit && code == 0) {
+            self->m_hsActive = false;
+            self->hideWifiPasswordPrompt();
+            self->showStatusBanner(QStringLiteral("✓ 已连接到 %1").arg(entry.ssid));
+            if (self->m_monitor) self->m_monitor->refreshNow();
+            self->refreshWifi(false);
+            self->refreshHotspot();
+        } else {
+            const QString combined = (err + QLatin1Char(' ') + out).toLower();
+            const bool authErr = combined.contains(QLatin1String("secrets were required")) ||
+                                 combined.contains(QLatin1String("no-secrets")) ||
+                                 combined.contains(QLatin1String("802-11-wireless-security")) ||
+                                 combined.contains(QLatin1String("invalid password")) ||
+                                 combined.contains(QLatin1String("psk"));
+            if (authErr) {
+                self->showWifiPasswordPrompt(entry, QStringLiteral("密码错误或需要密码"));
+                self->showStatusBanner(QStringLiteral("请输入「%1」的密码").arg(entry.ssid), true);
+            } else if (combined.contains(QLatin1String("timeout")) || combined.contains(QLatin1String("timed out"))) {
+                self->showStatusBanner(QStringLiteral("连接 %1 超时，请重试").arg(entry.ssid), true);
+            } else if (combined.contains(QLatin1String("no network with ssid"))) {
+                self->showStatusBanner(QStringLiteral("未找到 %1，请刷新列表").arg(entry.ssid), true);
+            } else {
+                QString detail = err.isEmpty() ? out : err;
+                detail.remove(QStringLiteral("Error: "));
+                if (detail.size() > 54) detail = detail.left(54) + QStringLiteral("…");
+                self->showStatusBanner(detail.isEmpty()
+                    ? QStringLiteral("连接 %1 失败").arg(entry.ssid)
+                    : QStringLiteral("连接失败: %1").arg(detail), true);
+            }
+            self->refreshWifi(false);
+        }
+    });
+
+    // Prefer activating an existing saved profile by UUID (avoids duplicate profiles
+    // and WPA3-SAE mismatch errors from `device wifi connect`). Only fall back to
+    // `device wifi connect` when connecting to a new network or updating its password.
+    proc->start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"),
+                 QStringLiteral(
+                     "if [ \"$FB_WIFI_STOP_HS\" = \"1\" ]; then "
+                     "  nmcli connection down FloatingBall-Hotspot >/dev/null 2>&1 || true; "
+                     "fi; "
+                     "if [ -n \"$FB_WIFI_UUID\" ]; then "
+                     "  exec nmcli -w 15 connection up uuid \"$FB_WIFI_UUID\"; "
+                     "elif [ -n \"$FB_WIFI_PSK\" ]; then "
+                     "  exec nmcli -w 15 device wifi connect \"$FB_WIFI_SSID\" password \"$FB_WIFI_PSK\"; "
+                     "else "
+                     "  exec nmcli -w 15 device wifi connect \"$FB_WIFI_SSID\"; "
+                     "fi")});
+#else
+    Q_UNUSED(entry);
+    Q_UNUSED(password);
 #endif
 }
 
@@ -3334,6 +3655,20 @@ void SystemPopover::saveHotspotPrefs()
     s.setValue(QStringLiteral("hotspot/wpa3"), m_hsUseWpa3);
 }
 
+bool SystemPopover::shouldSkip5gHotspotFor(const QString &wifiDev) const
+{
+    if (wifiDev.trimmed().isEmpty()) return false;
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    return s.value(QStringLiteral("hotspot/skip5g_") + wifiDev.trimmed(), false).toBool();
+}
+
+void SystemPopover::markSkip5gHotspotFor(const QString &wifiDev, bool skip)
+{
+    if (wifiDev.trimmed().isEmpty()) return;
+    QSettings s(QSettings::defaultFormat(), QSettings::UserScope, "FloatingBall", "FloatingBall");
+    s.setValue(QStringLiteral("hotspot/skip5g_") + wifiDev.trimmed(), skip);
+}
+
 void SystemPopover::refreshHotspot()
 {
 #ifdef Q_OS_LINUX
@@ -3341,13 +3676,14 @@ void SystemPopover::refreshHotspot()
     const QString nm = QStandardPaths::findExecutable(QStringLiteral("nmcli"));
     if (nm.isEmpty()) return;
 
+    const quint64 seq = ++m_hsRefreshSeq;
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
     connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [self, proc](int, QProcess::ExitStatus) {
+            [self, proc, seq](int, QProcess::ExitStatus) {
         const QString out = QString::fromUtf8(proc->readAllStandardOutput());
         proc->deleteLater();
-        if (!self) return;
+        if (!self || seq != self->m_hsRefreshSeq) return;
 
         QString wifiDev;
         bool apActive = false;
@@ -3586,6 +3922,9 @@ void SystemPopover::startHotspotAsync()
     env.insert(QStringLiteral("FB_HS_SSID"), m_hsSsid);
     env.insert(QStringLiteral("FB_HS_PSK"), m_hsPassword);
     env.insert(QStringLiteral("FB_HS_SEC"), m_hsUseWpa3 ? QStringLiteral("sae") : QStringLiteral("wpa-psk"));
+    const QString effectiveDev = !m_hsWifiDev.isEmpty() ? m_hsWifiDev : m_wifiIface;
+    env.insert(QStringLiteral("FB_HS_SKIP_5G"),
+               shouldSkip5gHotspotFor(effectiveDev) ? QStringLiteral("1") : QStringLiteral("0"));
     proc->setProcessEnvironment(env);
 
     QPointer<SystemPopover> self(this);
@@ -3596,9 +3935,21 @@ void SystemPopover::startHotspotAsync()
         proc->deleteLater();
         if (!self) return;
         self->m_hsBusy = false;
+
+        QString usedDev = self->m_hsWifiDev;
+        for (const QString &line : out.split(QLatin1Char('\n'))) {
+            if (line.startsWith(QLatin1String("FB_HS_DEV="))) {
+                usedDev = line.mid(10).trimmed();
+                if (!usedDev.isEmpty()) self->m_hsWifiDev = usedDev;
+            }
+        }
         const bool active5g = out.contains(QLatin1String("FB_BAND_5G"));
+        const bool fellBack24g = out.contains(QLatin1String("FB_BAND_24G_FALLBACK"));
         const QString sec = self->m_hsUseWpa3 ? QStringLiteral("WPA3") : QStringLiteral("WPA2");
         if (st == QProcess::NormalExit && code == 0) {
+            if (fellBack24g && !usedDev.isEmpty()) {
+                self->markSkip5gHotspotFor(usedDev, true);
+            }
             self->m_hsActive = true;
             self->m_hsActiveBand = active5g ? QStringLiteral("5GHz") : QStringLiteral("2.4GHz");
             const QString msg = QStringLiteral("✓ 热点已开启 · %1 (%2 / %3)")
@@ -3607,28 +3958,42 @@ void SystemPopover::startHotspotAsync()
             if (!self->isVisible()) DesktopActions::showToast(msg, self->geometry().center());
         } else {
             QString msg = err.isEmpty() ? out : err;
+            msg.remove(QStringLiteral("Error: "));
             if (msg.size() > 80) msg = msg.left(80) + QStringLiteral("…");
             const QString fullErr = QStringLiteral("开启热点失败: %1")
                 .arg(msg.isEmpty() ? QStringLiteral("请检查 Wi-Fi 网卡状态") : msg);
             self->showStatusBanner(fullErr, true);
             if (!self->isVisible()) DesktopActions::showToast(fullErr, self->geometry().center());
         }
+        if (self->m_monitor) self->m_monitor->refreshNow();
         self->refreshHotspot();
         self->refreshWifi(false);
     });
 
     // Safe env-driven NM WPA3-SAE / WPA2-PSK shared AP startup:
-    // Automatically prefers 5GHz first and seamlessly falls back to 2.4GHz
-    // when Wi-Fi firmware (such as Intel LAR) disallows 5GHz AP radiation.
+    // - Cleanly brings down any existing client Wi-Fi connection before starting AP
+    //   so NetworkManager autoconnect does not fight mid-transition.
+    // - Once an adapter rejects 5GHz AP (e.g. regulatory LAR/NO-IR), skip 5GHz on
+    //   future starts (FB_HS_SKIP_5G=1) to avoid repeated failed AP attempts & NM errors.
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
                      "set -e; "
-                     "if [ \"$(nmcli radio wifi)\" != \"enabled\" ]; then "
-                     "  nmcli radio wifi on; sleep 1.2; "
+                     "if [ \"$(nmcli radio wifi 2>/dev/null)\" != \"enabled\" ]; then "
+                     "  nmcli radio wifi on; "
+                     "  for _ in 1 2 3 4 5 6 7 8; do "
+                     "    WST=$(nmcli -t -f TYPE,STATE device status 2>/dev/null | awk -F: '$1==\"wifi\"{print $2; exit}'); "
+                     "    [ -n \"$WST\" ] && [ \"$WST\" != \"unavailable\" ] && break; "
+                     "    sleep 0.4; "
+                     "  done; "
                      "fi; "
-                     "WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2==\"wifi\"{print $1; exit}'); "
+                     "WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2==\"wifi\"{print $1; exit}'); "
                      "if [ -z \"$WIFI_DEV\" ]; then echo '未找到可用 Wi-Fi 网卡' >&2; exit 2; fi; "
+                     "echo \"FB_HS_DEV=$WIFI_DEV\"; "
+                     "OLD_CON=$(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null | awk -F: '$2==\"wifi\" && $3==\"connected\"{print $4; exit}'); "
+                     "if [ -n \"$OLD_CON\" ] && [ \"$OLD_CON\" != \"$FB_HS_CON\" ]; then "
+                     "  nmcli connection down \"$OLD_CON\" >/dev/null 2>&1 || true; "
+                     "fi; "
                      "create_ap() { "
                      "  nmcli connection down \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
                      "  nmcli connection delete \"$FB_HS_CON\" >/dev/null 2>&1 || true; "
@@ -3646,13 +4011,19 @@ void SystemPopover::startHotspotAsync()
                      "      wifi-sec.psk \"$FB_HS_PSK\" >/dev/null; "
                      "  fi; "
                      "}; "
-                     "create_ap a; "
-                     "if nmcli -w 6 connection up \"$FB_HS_CON\" >/dev/null 2>&1; then "
-                     "  echo 'FB_BAND_5G'; "
-                     "else "
+                     "if [ \"$FB_HS_SKIP_5G\" = \"1\" ]; then "
                      "  create_ap bg; "
-                     "  nmcli -w 15 connection up \"$FB_HS_CON\"; "
+                     "  nmcli -w 15 connection up \"$FB_HS_CON\" >/dev/null; "
                      "  echo 'FB_BAND_24G'; "
+                     "else "
+                     "  create_ap a; "
+                     "  if nmcli -w 6 connection up \"$FB_HS_CON\" >/dev/null 2>&1; then "
+                     "    echo 'FB_BAND_5G'; "
+                     "  else "
+                     "    create_ap bg; "
+                     "    nmcli -w 15 connection up \"$FB_HS_CON\" >/dev/null; "
+                     "    echo 'FB_BAND_24G_FALLBACK'; "
+                     "  fi; "
                      "fi")});
 #endif
 }
@@ -3669,23 +4040,36 @@ void SystemPopover::stopHotspotAsync()
     auto *proc = new QProcess(this);
     QPointer<SystemPopover> self(this);
     connect(proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [self, proc](int, QProcess::ExitStatus) {
+            [self, proc](int code, QProcess::ExitStatus st) {
+        const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
         proc->deleteLater();
         if (!self) return;
         self->m_hsBusy = false;
-        self->m_hsActive = false;
-        self->showStatusBanner(QStringLiteral("✓ 热点已关闭"));
+        if (st == QProcess::NormalExit && code == 0) {
+            self->m_hsActive = false;
+            self->showStatusBanner(QStringLiteral("✓ 热点已关闭"));
+        } else {
+            self->showStatusBanner(err.isEmpty() ? QStringLiteral("关闭热点失败")
+                                                 : QStringLiteral("关闭热点失败: %1").arg(err.left(60)),
+                                   true);
+        }
+        if (self->m_monitor) self->m_monitor->refreshNow();
         self->refreshHotspot();
         self->refreshWifi(false);
+        QTimer::singleShot(2600, self, [self] {
+            if (!self) return;
+            self->refreshWifi(false);
+            self->refreshHotspot();
+        });
     });
     proc->start(QStringLiteral("/bin/sh"),
                 {QStringLiteral("-c"),
                  QStringLiteral(
-                     "ACTIVE_CON=$(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status | awk -F: '$2==\"wifi\" && $3==\"connected\"{print $4; exit}'); "
+                     "ACTIVE_CON=$(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null | awk -F: '$2==\"wifi\" && $3==\"connected\"{print $4; exit}'); "
                      "if [ -n \"$ACTIVE_CON\" ] && [ \"$(nmcli -g 802-11-wireless.mode connection show \"$ACTIVE_CON\" 2>/dev/null)\" = \"ap\" ]; then "
-                     "  nmcli connection down \"$ACTIVE_CON\" >/dev/null 2>&1 || true; "
-                     "else "
-                     "  nmcli connection down FloatingBall-Hotspot >/dev/null 2>&1 || true; "
+                     "  nmcli connection down \"$ACTIVE_CON\" >/dev/null; "
+                     "elif nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq FloatingBall-Hotspot; then "
+                     "  nmcli connection down FloatingBall-Hotspot >/dev/null; "
                      "fi")});
 #endif
 }

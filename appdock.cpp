@@ -2,9 +2,12 @@
 #include "systemstatus.h"
 #include "uiicons.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QGuiApplication>
 #include <QHash>
 #include <QJsonArray>
@@ -32,6 +35,7 @@ QList<DockAppEntry> runningApps();
 QList<DockAppEntry> openWindowsFast();
 QStringList systemDockPinnedPaths();
 QList<DockAppEntry> installedApps(int maxCount);
+bool refreshInstalledCatalog(bool force);
 DockAppEntry entryForPath(const QString &appPath, bool pinned);
 DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry);
 DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry);
@@ -69,10 +73,10 @@ struct DesktopFileInfo {
     QString desktopPath;
 };
 
-void ensureLinuxIconThemeConfigured()
+void ensureLinuxIconThemeConfigured(bool forceRefresh = false)
 {
     static bool configured = false;
-    if (configured) return;
+    if (configured && !forceRefresh) return;
     configured = true;
 
     QStringList search = QIcon::themeSearchPaths();
@@ -81,15 +85,22 @@ void ensureLinuxIconThemeConfigured()
         QDir::homePath() + QStringLiteral("/.local/share/icons"),
         QDir::homePath() + QStringLiteral("/.local/share/flatpak/exports/share/icons"),
         QStringLiteral("/var/lib/flatpak/exports/share/icons"),
+        QDir::homePath() + QStringLiteral("/.nix-profile/share/icons"),
         QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/icons"),
         QStringLiteral("/run/current-system/sw/share/icons"),
         QStringLiteral("/usr/share/icons"),
         QStringLiteral("/usr/share/pixmaps")
     };
+    bool changed = false;
     for (const QString &d : extraDirs) {
-        if (QDir(d).exists() && !search.contains(d)) search.append(d);
+        if (QDir(d).exists() && !search.contains(d)) {
+            search.append(d);
+            changed = true;
+        }
     }
-    QIcon::setThemeSearchPaths(search);
+    if (changed || !forceRefresh) {
+        QIcon::setThemeSearchPaths(search);
+    }
 
     if (QIcon::themeName().isEmpty() || QIcon::themeName() == QLatin1String("hicolor")) {
         for (const QString &candidate : {QStringLiteral("breeze-dark"), QStringLiteral("breeze"),
@@ -112,6 +123,12 @@ void ensureLinuxIconThemeConfigured()
     }
 }
 
+QHash<QString, QIcon> &linuxIconCache()
+{
+    static QHash<QString, QIcon> cache;
+    return cache;
+}
+
 QString stripExecFieldCodes(QString exec)
 {
     static const QStringList codes{
@@ -123,8 +140,9 @@ QString stripExecFieldCodes(QString exec)
     return exec.simplified();
 }
 
-bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
+bool parseDesktopFile(const QString &path, DesktopFileInfo *out, bool *explicitlyHiddenOut = nullptr)
 {
+    if (explicitlyHiddenOut) *explicitlyHiddenOut = false;
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
     QTextStream in(&f);
@@ -170,7 +188,11 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
         else if (key == QLatin1String("StartupWMClass")) wmClass = val;
     }
 
-    if (type != QLatin1String("Application") || noDisplay || hidden || exec.isEmpty())
+    if (noDisplay || hidden) {
+        if (explicitlyHiddenOut) *explicitlyHiddenOut = true;
+        return false;
+    }
+    if (type != QLatin1String("Application") || exec.isEmpty())
         return false;
     const QString displayName = !zhName.isEmpty() ? zhName : name;
     if (displayName.isEmpty()) return false;
@@ -198,7 +220,7 @@ bool parseDesktopFile(const QString &path, DesktopFileInfo *out)
 QIcon resolveLinuxIcon(const QString &iconName)
 {
     ensureLinuxIconThemeConfigured();
-    static QHash<QString, QIcon> iconCache;
+    QHash<QString, QIcon> &iconCache = linuxIconCache();
     if (!iconName.isEmpty()) {
         const auto it = iconCache.constFind(iconName);
         if (it != iconCache.constEnd()) return it.value();
@@ -263,29 +285,92 @@ QIcon resolveLinuxIcon(const QString &iconName)
     return FloatingIcons::make(FloatingIcons::Orb, QColor("#dce8f8"), 32);
 }
 
-QList<DesktopFileInfo> scanLinuxDesktopFiles(int maxCount)
+QStringList &testDesktopSearchDirs()
 {
+    static QStringList dirs;
+    return dirs;
+}
+
+bool &hasTestDesktopSearchDirs()
+{
+    static bool enabled = false;
+    return enabled;
+}
+
+QStringList linuxDesktopDirs()
+{
+    if (hasTestDesktopSearchDirs()) return testDesktopSearchDirs();
     const QString user = qEnvironmentVariable("USER");
-    const QStringList dirs{
+    QStringList raw{
+        QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation),
         QDir::homePath() + QStringLiteral("/.local/share/applications"),
         QDir::homePath() + QStringLiteral("/.local/share/flatpak/exports/share/applications"),
         QStringLiteral("/var/lib/flatpak/exports/share/applications"),
+        QDir::homePath() + QStringLiteral("/.nix-profile/share/applications"),
         QStringLiteral("/etc/profiles/per-user/") + user + QStringLiteral("/share/applications"),
         QStringLiteral("/run/current-system/sw/share/applications"),
         QStringLiteral("/usr/share/applications")
     };
+    QStringList dirs;
+    for (const QString &d : raw) {
+        const QString clean = normalizeTarget(d);
+        if (!clean.isEmpty() && !dirs.contains(clean)) dirs.append(clean);
+    }
+    return dirs;
+}
+
+// Fast NixOS-aware fingerprint of all XDG .desktop directories:
+// - canonicalFilePath() instantly catches atomic NixOS symlink swaps on
+//   /run/current-system/sw/share/applications and /etc/profiles/per-user/$USER
+//   even though /nix/store directory mtimes are fixed at 1970-01-01.
+// - Mutable directories (e.g. ~/.local/share/applications, Flatpak exports)
+//   also fingerprint their *.desktop filenames, resolved targets, sizes, and mtimes.
+QString linuxDesktopCatalogFingerprint()
+{
+    QStringList parts;
+    for (const QString &dirPath : linuxDesktopDirs()) {
+        QFileInfo di(dirPath);
+        if (!di.exists() || !di.isDir()) {
+            parts.append(dirPath + QStringLiteral("|0"));
+            continue;
+        }
+        const QString canonical = di.canonicalFilePath();
+        const qint64 dirMtime = di.lastModified().toMSecsSinceEpoch();
+        parts.append(QStringLiteral("%1|1|%2|%3").arg(dirPath, canonical).arg(dirMtime));
+
+        if (!canonical.startsWith(QLatin1String("/nix/store/"))) {
+            QDir dir(dirPath);
+            const QFileInfoList files = dir.entryInfoList(
+                {QStringLiteral("*.desktop")}, QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+            for (const QFileInfo &fi : files) {
+                parts.append(QStringLiteral("%1=%2:%3:%4")
+                                 .arg(fi.fileName(), fi.canonicalFilePath())
+                                 .arg(fi.size())
+                                 .arg(fi.lastModified().toMSecsSinceEpoch()));
+            }
+        }
+    }
+    return parts.join(QLatin1Char('\n'));
+}
+
+QList<DesktopFileInfo> scanLinuxDesktopFiles(int maxCount)
+{
     QList<DesktopFileInfo> results;
     QSet<QString> seenNames;
-    for (const QString &dirPath : dirs) {
+    for (const QString &dirPath : linuxDesktopDirs()) {
         QDir dir(dirPath);
         if (!dir.exists()) continue;
         const QFileInfoList files = dir.entryInfoList({QStringLiteral("*.desktop")}, QDir::Files, QDir::Name);
         for (const QFileInfo &fi : files) {
             if (results.size() >= maxCount) return results;
-            DesktopFileInfo info;
-            if (!parseDesktopFile(fi.absoluteFilePath(), &info)) continue;
-            const QString dedupKey = info.id.toLower();
+            const QString dedupKey = fi.completeBaseName().toLower();
             if (seenNames.contains(dedupKey)) continue;
+            DesktopFileInfo info;
+            bool explicitlyHidden = false;
+            if (!parseDesktopFile(fi.absoluteFilePath(), &info, &explicitlyHidden)) {
+                if (explicitlyHidden) seenNames.insert(dedupKey);
+                continue;
+            }
             seenNames.insert(dedupKey);
             results.append(info);
         }
@@ -293,11 +378,42 @@ QList<DesktopFileInfo> scanLinuxDesktopFiles(int maxCount)
     return results;
 }
 
-const QList<DesktopFileInfo> &cachedLinuxDesktopCatalog()
+struct LinuxDesktopCatalogState {
+    QList<DesktopFileInfo> catalog;
+    QString fingerprint;
+    QElapsedTimer lastCheck;
+    bool initialized = false;
+};
+
+LinuxDesktopCatalogState &linuxDesktopCatalogState()
 {
-    static QList<DesktopFileInfo> catalog;
-    if (catalog.isEmpty()) catalog = scanLinuxDesktopFiles(360);
-    return catalog;
+    static LinuxDesktopCatalogState state;
+    return state;
+}
+
+bool refreshLinuxDesktopCatalog(bool forceCheck)
+{
+    LinuxDesktopCatalogState &st = linuxDesktopCatalogState();
+    if (!forceCheck && st.initialized && st.lastCheck.isValid() && st.lastCheck.elapsed() < 1500) {
+        return false;
+    }
+    const QString fp = linuxDesktopCatalogFingerprint();
+    st.lastCheck.restart();
+    if (st.initialized && fp == st.fingerprint) {
+        return false;
+    }
+    st.catalog = scanLinuxDesktopFiles(1024);
+    st.fingerprint = fp;
+    st.initialized = true;
+    linuxIconCache().clear();
+    ensureLinuxIconThemeConfigured(true);
+    return true;
+}
+
+const QList<DesktopFileInfo> &cachedLinuxDesktopCatalog(bool forceCheck = false)
+{
+    refreshLinuxDesktopCatalog(forceCheck);
+    return linuxDesktopCatalogState().catalog;
 }
 
 const DesktopFileInfo *matchDesktopFile(const QString &desktopFileName, const QString &resourceClass)
@@ -459,6 +575,7 @@ AppDockModel::AppDockModel(QObject *parent) : QObject(parent)
 #elif defined(Q_OS_LINUX)
     if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
         ensureLinuxIconThemeConfigured();
+        initDesktopWatcher();
         QPointer<AppDockModel> self(this);
         QTimer::singleShot(180, this, [self] {
             if (self) self->initKWinBridge();
@@ -466,6 +583,52 @@ AppDockModel::AppDockModel(QObject *parent) : QObject(parent)
     }
 #endif
 }
+
+#ifdef Q_OS_LINUX
+void AppDockModel::initDesktopWatcher()
+{
+    if (m_desktopWatcher) return;
+    m_desktopWatcher = new QFileSystemWatcher(this);
+    m_desktopWatchDebounce = new QTimer(this);
+    m_desktopWatchDebounce->setSingleShot(true);
+    m_desktopWatchDebounce->setInterval(250);
+    connect(m_desktopWatchDebounce, &QTimer::timeout, this, [this] {
+        refreshInstalledCatalog(true);
+    });
+    auto schedule = [this] {
+        if (m_desktopWatchDebounce) m_desktopWatchDebounce->start();
+    };
+    connect(m_desktopWatcher, &QFileSystemWatcher::directoryChanged, this, schedule);
+    connect(m_desktopWatcher, &QFileSystemWatcher::fileChanged, this, schedule);
+    syncDesktopWatcherPaths();
+}
+
+void AppDockModel::syncDesktopWatcherPaths()
+{
+    if (!m_desktopWatcher) return;
+    QStringList want;
+    for (const QString &dirPath : linuxDesktopDirs()) {
+        QFileInfo di(dirPath);
+        if (!di.exists() || !di.isDir()) continue;
+        // Watch mutable application directories directly; /nix/store dirs are
+        // immutable and detected via canonicalFilePath() fingerprinting.
+        if (!di.canonicalFilePath().startsWith(QLatin1String("/nix/store/"))) {
+            want.append(dirPath);
+        }
+    }
+    const QStringList existing = m_desktopWatcher->directories();
+    QStringList toRemove;
+    for (const QString &p : existing) {
+        if (!want.contains(p)) toRemove.append(p);
+    }
+    if (!toRemove.isEmpty()) m_desktopWatcher->removePaths(toRemove);
+    QStringList toAdd;
+    for (const QString &p : want) {
+        if (!existing.contains(p)) toAdd.append(p);
+    }
+    if (!toAdd.isEmpty()) m_desktopWatcher->addPaths(toAdd);
+}
+#endif
 
 AppDockModel::~AppDockModel()
 {
@@ -906,6 +1069,46 @@ void AppDockModel::setActiveFullscreenForTest(bool fullscreen)
     emit activeFullscreenChanged(fullscreen);
 }
 
+void AppDockModel::setDesktopSearchDirsForTest(const QStringList &dirs)
+{
+#ifndef Q_OS_MACOS
+    hasTestDesktopSearchDirs() = true;
+    testDesktopSearchDirs() = dirs;
+    linuxDesktopCatalogState().initialized = false;
+    linuxDesktopCatalogState().fingerprint.clear();
+    refreshInstalledCatalog(true);
+#else
+    Q_UNUSED(dirs);
+#endif
+}
+
+void AppDockModel::clearDesktopSearchDirsForTest()
+{
+#ifndef Q_OS_MACOS
+    hasTestDesktopSearchDirs() = false;
+    testDesktopSearchDirs().clear();
+    linuxDesktopCatalogState().initialized = false;
+    linuxDesktopCatalogState().fingerprint.clear();
+#endif
+}
+
+bool AppDockModel::refreshInstalledCatalog(bool force)
+{
+#ifdef Q_OS_MACOS
+    const bool changed = AppDockMac::refreshInstalledCatalog(force);
+#else
+    const bool changed = refreshLinuxDesktopCatalog(force);
+#ifdef Q_OS_LINUX
+    if (m_desktopWatcher) syncDesktopWatcherPaths();
+#endif
+#endif
+    if (changed) {
+        emit catalogChanged();
+        emit appsChanged();
+    }
+    return changed;
+}
+
 QList<DockAppEntry> AppDockModel::dockApps(int maxCount, bool includeInstalledOverflow,
                                            bool runningFirst) const
 {
@@ -1021,6 +1224,7 @@ QList<DockAppEntry> AppDockModel::dockApps(int maxCount, bool includeInstalledOv
             if (result.size() >= maxCount) return;
             const QString norm = normalizeTarget(target);
             if (norm.isEmpty() || addedTargets.contains(norm)) continue;
+            if (norm.endsWith(QLatin1String(".desktop")) && !QFileInfo::exists(norm)) continue;
             DesktopFileInfo info;
             if (parseDesktopFile(norm, &info)) {
                 DockAppEntry e;
@@ -1031,7 +1235,7 @@ QList<DockAppEntry> AppDockModel::dockApps(int maxCount, bool includeInstalledOv
                 e.pinned = true;
                 result.append(e);
                 addedTargets.insert(norm);
-            } else {
+            } else if (!norm.endsWith(QLatin1String(".desktop"))) {
                 DockAppEntry e;
                 e.id = norm;
                 e.name = displayNameForTarget(norm);
@@ -1079,7 +1283,7 @@ QList<DockAppEntry> AppDockModel::installedApps(int maxCount) const
     return AppDockMac::installedApps(maxCount);
 #else
     QList<DockAppEntry> list;
-    const QList<DesktopFileInfo> &all = cachedLinuxDesktopCatalog();
+    const QList<DesktopFileInfo> &all = cachedLinuxDesktopCatalog(true);
     for (const DesktopFileInfo &info : all) {
         if (list.size() >= maxCount) break;
         DockAppEntry e;
