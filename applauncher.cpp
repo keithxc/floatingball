@@ -1,6 +1,7 @@
 #include "applauncher.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
+#include "panelbackdrop.h"
 #include "touchscroll.h"
 #include "uiicons.h"
 
@@ -264,6 +265,23 @@ AppLauncherPopover::AppLauncherPopover(AppDockModel *dockModel, QWidget *parent)
     FloatingWindow::prepare(this, true);
 }
 
+AppLauncherPopover::~AppLauncherPopover()
+{
+    if (m_outsideClickMonitor) {
+        PanelBackdrop::removeGlobalPointerDownMonitor(m_outsideClickMonitor);
+        m_outsideClickMonitor = nullptr;
+    }
+}
+
+void AppLauncherPopover::hideEvent(QHideEvent *event)
+{
+    if (m_outsideClickMonitor) {
+        PanelBackdrop::removeGlobalPointerDownMonitor(m_outsideClickMonitor);
+        m_outsideClickMonitor = nullptr;
+    }
+    QWidget::hideEvent(event);
+}
+
 void AppLauncherPopover::reveal(const QPoint &anchorGlobal, bool toggle)
 {
     if (isVisible() && toggle) {
@@ -278,6 +296,16 @@ void AppLauncherPopover::reveal(const QPoint &anchorGlobal, bool toggle)
     show();
     raise();
     activateWindow();
+    if (!m_outsideClickMonitor) {
+        QPointer<AppLauncherPopover> self(this);
+        m_outsideClickMonitor = PanelBackdrop::installGlobalPointerDownMonitor(this, [self](const QPoint &globalPos) {
+            if (!self || !self->isVisible() || !self->m_autoDismissEnabled || self->m_menuOpen) return;
+            if (self->m_openedTimer.isValid() && self->m_openedTimer.elapsed() < 180) return;
+            if (QApplication::activePopupWidget() || QApplication::activeModalWidget()) return;
+            if (self->geometry().adjusted(-4, -4, 4, 4).contains(globalPos)) return;
+            self->hide();
+        });
+    }
     // Avoid auto-popping touch virtual keyboards; physical typing is captured
     // seamlessly in keyPressEvent() and forwarded into m_searchEdit.
     setFocus(Qt::ActiveWindowFocusReason);

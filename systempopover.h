@@ -53,6 +53,7 @@ public:
     };
 
     explicit SystemPopover(SystemStatusMonitor *monitor, QWidget *parent = nullptr);
+    ~SystemPopover() override;
 
     void revealHome(const QPoint &anchorGlobal, bool toggle = true);
     void revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle = true);
@@ -63,6 +64,7 @@ public:
     // Optional hooks for automated tests / preview rendering
     void setMprisPreviewForTest(const QString &title, const QString &artist, bool playing);
     void setAutoDismissEnabled(bool enabled) { m_autoDismissEnabled = enabled; }
+    void showStatusBanner(const QString &msg, bool isError = false);
     QString defaultHotspotSsid() const;
 
 signals:
@@ -120,7 +122,9 @@ private:
 
     void positionNear(const QPoint &anchorGlobal);
     void updatePopoverHeight();
-    void showStatusBanner(const QString &msg, bool isError = false);
+    void positionStatusBanner();
+    void installOutsideDismissMonitor();
+    void removeOutsideDismissMonitor();
     void syncHeaderForPage();
     void syncHomeFromSnapshot();
 
@@ -191,7 +195,10 @@ private:
     QToolButton *m_hdrLockBtn = nullptr;
     QToolButton *m_hdrPowerBtn = nullptr;
     QToolButton *m_refreshBtn = nullptr;
+    QToolButton *m_closeBtn = nullptr;
     QLabel *m_statusBanner = nullptr;
+    quint64 m_statusBannerSeq = 0;
+    void *m_outsideClickMonitor = nullptr;
     QStackedWidget *m_stack = nullptr;
 
     // Home Bento connectivity rows (tap left glass orb = instant toggle; tap text/chevron = subpage)

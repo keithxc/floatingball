@@ -25,6 +25,7 @@ class AppLauncherPopover : public QWidget
     Q_OBJECT
 public:
     explicit AppLauncherPopover(AppDockModel *dockModel, QWidget *parent = nullptr);
+    ~AppLauncherPopover() override;
 
     void reveal(const QPoint &anchorGlobal, bool toggle = true);
     void setAutoDismissEnabled(bool enabled) { m_autoDismissEnabled = enabled; }
@@ -32,6 +33,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -55,6 +57,7 @@ private:
     bool m_autoDismissEnabled = true;
     bool m_menuOpen = false;
     QElapsedTimer m_openedTimer;
+    void *m_outsideClickMonitor = nullptr;
 
     QLineEdit *m_searchEdit = nullptr;
     QToolButton *m_clearBtn = nullptr;

@@ -403,6 +403,7 @@ private:
     bool m_manualTucked = false;
     bool m_fullscreenTucked = false;
     bool m_startedInteractionTucked = false;
+    bool m_dismissedPanelOnPress = false;
     bool m_crosshairPullEnabled = true;
     bool m_edgeTucked = false;
     bool m_orbitVisible = false;

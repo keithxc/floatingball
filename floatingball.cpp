@@ -3651,6 +3651,27 @@ void FloatingBall::stopCrosshairDwell()
 
 void FloatingBall::beginPointerInteraction(const QPointF &globalPos, Qt::KeyboardModifiers modifiers)
 {
+    FloatingBall *primary = m_primaryPeer ? m_primaryPeer.data() : this;
+    m_dismissedPanelOnPress = false;
+    if (primary) {
+        if (primary->m_systemPopover && primary->m_systemPopover->isVisible()) {
+            primary->m_systemPopover->hide();
+            m_dismissedPanelOnPress = true;
+        }
+        if (primary->m_appLauncher && primary->m_appLauncher->isVisible()) {
+            primary->m_appLauncher->hide();
+            m_dismissedPanelOnPress = true;
+        }
+        if (primary->m_quickDeck && primary->m_quickDeck->isVisible()) {
+            primary->m_quickDeck->hide();
+            m_dismissedPanelOnPress = true;
+        }
+        if (primary->m_clipboardBubble && primary->m_clipboardBubble->isVisible()) {
+            primary->m_clipboardBubble->hide();
+            m_dismissedPanelOnPress = true;
+        }
+    }
+
     m_startedInteractionTucked = m_edgeTucked;
     if (m_edgeTucked && !m_manualTucked && !m_fullscreenTucked) {
         expandFromEdge();
@@ -3787,6 +3808,12 @@ void FloatingBall::endPointerInteraction(const QPointF &globalPos)
     m_gestureMode = GestureIdle;
 
     if (finishedMode == GesturePressed) {
+        if (m_dismissedPanelOnPress) {
+            m_dismissedPanelOnPress = false;
+            refreshBallOpacity();
+            update();
+            return;
+        }
         if (m_startedInteractionTucked && m_edgeTucked) {
             // Clicking / tapping the tucked Edge Capsule restores the Primary Round Ball!
             m_manualTucked = false;

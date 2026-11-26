@@ -1,6 +1,7 @@
 #include "systempopover.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
+#include "panelbackdrop.h"
 #include "systemstatus.h"
 #include "touchscroll.h"
 #include "uiicons.h"
@@ -603,16 +604,16 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QLabel#sliderTag { color:rgba(203,213,225,180); font-size:11px; font-weight:600; }"
         "QLabel#sliderVal { color:#f2f6fc; font-size:11.5px; font-weight:600; }"
         "QToolButton#powerPill { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,24);"
-        "                        border-radius:15px; padding:0 11px; font-size:11.5px; font-weight:600; }"
+        "                        border-radius:14px; padding:0 10px; font-size:11.5px; font-weight:600; }"
         "QToolButton#powerPill:hover { background:rgba(255,255,255,22); }"
         "QToolButton#powerPill[accent=\"green\"] { background:rgba(110,219,160,24); border:1px solid rgba(110,219,160,92); color:#d1fae5; }"
         "QToolButton#powerPill[accent=\"blue\"]  { background:rgba(124,200,255,24); border:1px solid rgba(124,200,255,92); color:#dbeafe; }"
         "QToolButton#powerPill[accent=\"rose\"]  { background:rgba(255,82,114,28);  border:1px solid rgba(255,107,138,105); color:#ffe4e6; }"
-        "QToolButton#hdrIconBtn { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,22); border-radius:15px; font-size:14px; }"
+        "QToolButton#hdrIconBtn { background:rgba(255,255,255,11); color:#e2e8f0; border:1px solid rgba(255,255,255,22); border-radius:14px; font-size:14px; }"
         "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,24); border:1px solid rgba(255,255,255,44); }"
         "QToolButton#hdrIconBtn[unread=\"true\"] { background:rgba(255,77,109,46); color:#ffe4e6; border:1px solid rgba(255,107,138,150); }"
         "QToolButton#hdrIconBtn[unread=\"true\"]:hover { background:rgba(255,77,109,74); }"
-        "QToolButton#hdrDangerBtn { background:rgba(255,255,255,11); color:#fda4af; border:1px solid rgba(255,255,255,22); border-radius:15px; }"
+        "QToolButton#hdrDangerBtn { background:rgba(255,255,255,11); color:#fda4af; border:1px solid rgba(255,255,255,22); border-radius:14px; }"
         "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,52); border:1px solid rgba(251,113,133,125); }"
         "QPushButton#notifBanner { background:rgba(255,77,109,28); border:1px solid rgba(255,112,140,105); border-radius:15px; text-align:left; }"
         "QPushButton#notifBanner:hover { background:rgba(255,77,109,44); }"
@@ -623,7 +624,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QToolButton#notifDismissBtn { background:rgba(255,255,255,10); color:#cbd5e1; border:1px solid rgba(255,255,255,18); border-radius:12px; }"
         "QToolButton#notifDismissBtn:hover { background:rgba(244,63,94,75); color:#ffffff; }"
         "QToolButton#backPill { background:rgba(255,255,255,12); color:#f2f6fc; border:1px solid rgba(255,255,255,24);"
-        "                       border-radius:15px; padding:0 11px 0 7px; font-size:12px; font-weight:600; }"
+        "                       border-radius:14px; padding:0 11px 0 7px; font-size:12px; font-weight:600; }"
         "QToolButton#backPill:hover { background:rgba(255,255,255,24); }"
         "QPushButton#connRow { background:transparent; border:none; border-radius:11px; text-align:left; }"
         "QPushButton#connRow:hover { background:rgba(255,255,255,14); }"
@@ -667,7 +668,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(6);
+    hdrRow->setSpacing(5);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
@@ -675,7 +676,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_backBtn->setIconSize(QSize(14, 14));
     m_backBtn->setText(QStringLiteral("返回"));
     m_backBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_backBtn->setFixedHeight(30);
+    m_backBtn->setFixedHeight(28);
     m_backBtn->setCursor(Qt::PointingHandCursor);
     m_backBtn->hide();
     connect(m_backBtn, &QToolButton::clicked, this, [this] { showPage(PageHome); });
@@ -691,7 +692,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_powerPill = new QToolButton(header);
     m_powerPill->setObjectName(QStringLiteral("powerPill"));
     m_powerPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    m_powerPill->setFixedHeight(30);
+    m_powerPill->setFixedHeight(28);
     m_powerPill->setText(QStringLiteral("平衡"));
     m_powerPill->setToolTip(QStringLiteral("点击切换功耗模式（节能 / 平衡 / 性能）"));
     m_powerPill->setCursor(Qt::PointingHandCursor);
@@ -707,10 +708,10 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     auto makeHdrBtn = [&](const QString &objName, FloatingIcons::Icon icon, const QColor &ink, const QString &tip) {
         auto *b = new QToolButton(header);
         b->setObjectName(objName);
-        b->setIcon(FloatingIcons::make(icon, ink, 15));
-        b->setIconSize(QSize(15, 15));
+        b->setIcon(FloatingIcons::make(icon, ink, 14));
+        b->setIconSize(QSize(14, 14));
         b->setToolTip(tip);
-        b->setFixedSize(30, 30);
+        b->setFixedSize(28, 28);
         b->setCursor(Qt::PointingHandCursor);
         return b;
     };
@@ -748,7 +749,7 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_refreshBtn->setObjectName(QStringLiteral("hdrIconBtn"));
     m_refreshBtn->setText(QStringLiteral("↻"));
     m_refreshBtn->setToolTip(QStringLiteral("刷新列表"));
-    m_refreshBtn->setFixedSize(30, 30);
+    m_refreshBtn->setFixedSize(28, 28);
     m_refreshBtn->setCursor(Qt::PointingHandCursor);
     m_refreshBtn->hide();
     connect(m_refreshBtn, &QToolButton::clicked, this, [this] {
@@ -756,13 +757,21 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         else refreshCurrentPage();
     });
     hdrRow->addWidget(m_refreshBtn);
+
+    m_closeBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Close, QColor("#cbd5e1"),
+                            QStringLiteral("关闭控制中心"));
+    m_closeBtn->setProperty("role", QStringLiteral("close"));
+    m_closeBtn->setAccessibleName(QStringLiteral("关闭控制中心"));
+    connect(m_closeBtn, &QToolButton::clicked, this, &QWidget::hide);
+    hdrRow->addWidget(m_closeBtn);
     root->addWidget(header);
 
-    // ---- Inline Action Status Banner ----
-    m_statusBanner = new QLabel(card);
-    m_statusBanner->setWordWrap(true);
+    // ---- Floating Overlay Action Status Pill (NEVER inserted into layout -> zero layout shift!) ----
+    m_statusBanner = new QLabel(this);
+    m_statusBanner->setObjectName(QStringLiteral("floatingStatusPill"));
+    m_statusBanner->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_statusBanner->setAlignment(Qt::AlignCenter);
     m_statusBanner->hide();
-    root->addWidget(m_statusBanner);
 
     loadHotspotPrefs();
 
@@ -795,6 +804,11 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
 
     FloatingWindow::prepare(this, true);
     syncHomeFromSnapshot();
+}
+
+SystemPopover::~SystemPopover()
+{
+    removeOutsideDismissMonitor();
 }
 
 // ============================================================================
@@ -1712,8 +1726,29 @@ void SystemPopover::positionNear(const QPoint &anchorGlobal)
     move(x, y);
 }
 
+void SystemPopover::installOutsideDismissMonitor()
+{
+    if (m_outsideClickMonitor) return;
+    QPointer<SystemPopover> self(this);
+    m_outsideClickMonitor = PanelBackdrop::installGlobalPointerDownMonitor(this, [self](const QPoint &globalPos) {
+        if (!self || !self->isVisible() || !self->m_autoDismissEnabled) return;
+        if (self->m_openedTimer.isValid() && self->m_openedTimer.elapsed() < 180) return;
+        if (QApplication::activePopupWidget() || QApplication::activeModalWidget()) return;
+        if (self->geometry().adjusted(-4, -4, 4, 4).contains(globalPos)) return;
+        self->hide();
+    });
+}
+
+void SystemPopover::removeOutsideDismissMonitor()
+{
+    if (!m_outsideClickMonitor) return;
+    PanelBackdrop::removeGlobalPointerDownMonitor(m_outsideClickMonitor);
+    m_outsideClickMonitor = nullptr;
+}
+
 void SystemPopover::hideEvent(QHideEvent *event)
 {
+    removeOutsideDismissMonitor();
     if (m_netStatsTimer) m_netStatsTimer->stop();
     m_hasLastStats = false;
     QWidget::hideEvent(event);
@@ -1732,14 +1767,16 @@ void SystemPopover::updatePopoverHeight()
         const bool hasWwan = m_wwanAvailable || (m_homeWwanRow && m_homeWwanRow->isVisible());
         const bool hasNotif = m_notifHomeCard && !m_notifHomeCard->isHidden();
         const bool hasMpris = m_mprisVisible && m_mprisCard && !m_mprisCard->isHidden();
-        const bool hasStatus = m_statusBanner && !m_statusBanner->isHidden();
         targetH = (hasWwan ? 314 : 276)
                 + (hasNotif ? 54 : 0)
-                + (hasMpris ? 56 : 0)
-                + (hasStatus ? 22 : 0);
+                + (hasMpris ? 56 : 0);
     }
-    if (height() == targetH) return;
+    if (height() == targetH) {
+        if (m_statusBanner && m_statusBanner->isVisible()) positionStatusBanner();
+        return;
+    }
     setFixedHeight(targetH);
+    if (m_statusBanner && m_statusBanner->isVisible()) positionStatusBanner();
     if (isVisible()) {
         QScreen *scr = QGuiApplication::screenAt(geometry().center());
         if (!FloatingWindow::isValidScreen(scr)) scr = screen();
@@ -1752,24 +1789,42 @@ void SystemPopover::updatePopoverHeight()
     }
 }
 
+void SystemPopover::positionStatusBanner()
+{
+    if (!m_statusBanner) return;
+    m_statusBanner->adjustSize();
+    const int maxW = qMax(120, width() - 40);
+    const int w = qMin(maxW, qMax(84, m_statusBanner->sizeHint().width() + 4));
+    const int h = qMax(26, m_statusBanner->sizeHint().height());
+    m_statusBanner->setGeometry((width() - w) / 2, height() - h - 18, w, h);
+    m_statusBanner->raise();
+}
+
 void SystemPopover::showStatusBanner(const QString &msg, bool isError)
 {
-    if (msg.isEmpty()) {
+    if (!m_statusBanner) return;
+    if (msg.trimmed().isEmpty()) {
         m_statusBanner->hide();
-        updatePopoverHeight();
         return;
     }
-    m_statusBanner->setStyleSheet(isError ? QStringLiteral("color:#fb7185; font-size:11px; font-weight:600;")
-                                          : QStringLiteral("color:#7cc8ff; font-size:11px; font-weight:600;"));
-    m_statusBanner->setText(msg);
+    const quint64 seq = ++m_statusBannerSeq;
+    m_statusBanner->setStyleSheet(isError
+        ? QStringLiteral("QLabel#floatingStatusPill { background:rgba(44,16,24,242); color:#fda4af;"
+                         " border:1px solid rgba(251,113,133,130); border-radius:13px;"
+                         " padding:4px 12px; font-size:11.5px; font-weight:600; }")
+        : QStringLiteral("QLabel#floatingStatusPill { background:rgba(16,20,28,240); color:#93d5ff;"
+                         " border:1px solid rgba(124,200,255,105); border-radius:13px;"
+                         " padding:4px 12px; font-size:11.5px; font-weight:600; }"));
+    const QFontMetrics fm(m_statusBanner->font());
+    const QString clipped = fm.elidedText(msg.simplified(), Qt::ElideRight, qMax(100, width() - 68));
+    m_statusBanner->setText(clipped);
+    positionStatusBanner();
     m_statusBanner->show();
-    updatePopoverHeight();
+    m_statusBanner->raise();
     QPointer<SystemPopover> self(this);
-    QPointer<QLabel> banner(m_statusBanner);
-    QTimer::singleShot(2500, this, [self, banner, msg] {
-        if (banner && banner->text() == msg) {
-            banner->hide();
-            if (self) self->updatePopoverHeight();
+    QTimer::singleShot(2200, this, [self, seq] {
+        if (self && self->m_statusBanner && self->m_statusBannerSeq == seq) {
+            self->m_statusBanner->hide();
         }
     });
 }
@@ -1792,6 +1847,7 @@ void SystemPopover::revealTab(Tab tab, const QPoint &anchorGlobal, bool toggle)
     show();
     raise();
     activateWindow();
+    installOutsideDismissMonitor();
     syncNetStatsTimer();
 }
 
