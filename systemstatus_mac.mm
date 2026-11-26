@@ -158,7 +158,6 @@ QString iconTypeForBluetoothDevice(IOBluetoothDevice *dev)
 
 bool readMacFocusEnabled()
 {
-    // macOS Focus / Do Not Disturb stores live assertions in ~/Library/DoNotDisturb/DB/Assertions.json
     const QString path = QDir::homePath() + QStringLiteral("/Library/DoNotDisturb/DB/Assertions.json");
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return false;
@@ -166,8 +165,7 @@ bool readMacFocusEnabled()
     if (!doc.isObject()) return false;
     const QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
     for (const QJsonValue &v : data) {
-        const QJsonArray records = v.toObject().value(QStringLiteral("storeAssertionRecords")).toArray();
-        if (!records.isEmpty()) return true;
+        if (!v.toObject().value(QStringLiteral("storeAssertionRecords")).toArray().isEmpty()) return true;
     }
     return false;
 }
@@ -348,13 +346,15 @@ bool openSystemSettings(const QString &moduleName)
             url = QStringLiteral("x-apple.systempreferences:com.apple.BluetoothSettings");
         else if (m.contains(QLatin1String("sharing")) || m.contains(QLatin1String("hotspot")))
             url = QStringLiteral("x-apple.systempreferences:com.apple.Sharing-Settings.extension");
+        else if (m.contains(QLatin1String("notification")))
+            url = QStringLiteral("x-apple.systempreferences:com.apple.Notifications-Settings.extension");
         else if (m.contains(QLatin1String("focus")) || m.contains(QLatin1String("dnd")))
             url = QStringLiteral("x-apple.systempreferences:com.apple.Focus-Settings.extension");
         else if (m.contains(QLatin1String("battery")) || m.contains(QLatin1String("power")))
             url = QStringLiteral("x-apple.systempreferences:com.apple.Battery-Settings.extension");
-        else if (m.contains(QLatin1String("sound")) || m.contains(QLatin1String("audio")))
+        else if (m.contains(QLatin1String("sound")) || m.contains(QLatin1String("audio")) || m.contains(QLatin1String("pulse")))
             url = QStringLiteral("x-apple.systempreferences:com.apple.Sound-Settings.extension");
-        else if (m.contains(QLatin1String("display")))
+        else if (m.contains(QLatin1String("display")) || m.contains(QLatin1String("kscreen")) || m.contains(QLatin1String("night")))
             url = QStringLiteral("x-apple.systempreferences:com.apple.Displays-Settings.extension");
 
         NSURL *nsUrl = [NSURL URLWithString:url.toNSString()];

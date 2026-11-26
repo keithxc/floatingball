@@ -60,6 +60,11 @@ public:
     void clearOpenWindowsForTest();
     void setActiveFullscreenForTest(bool fullscreen);
 
+#ifdef Q_OS_MACOS
+    void applyMacWindowSnapshot(const QList<DockAppEntry> &windows, bool activeFullscreen);
+    void handleMacAppActivated(const QString &appKey, const QString &appName, const QString &bundleId);
+#endif
+
     DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry) const;
     DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry) const;
     bool activateOrLaunchByHint(const QString &appName,
@@ -87,6 +92,8 @@ private:
     QList<DockAppEntry> m_testWindows;
 #ifdef Q_OS_MACOS
     void *m_macObservers = nullptr;
+    QList<DockAppEntry> m_macRunningWindows;
+    bool m_macWindowCacheReady = false;
 #elif defined(Q_OS_LINUX)
     void initKWinBridge();
     void teardownKWinBridge();

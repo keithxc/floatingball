@@ -990,11 +990,11 @@ QWidget *SystemPopover::buildHomePage(QWidget *parent)
         b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         b->setCursor(Qt::PointingHandCursor);
         b->setStyleSheet(QStringLiteral(
-            "QToolButton#dndCard { background:rgba(255,255,255,18); color:#e2e8f0;"
-            "  border:1px solid rgba(255,255,255,26); border-radius:18px;"
+            "QToolButton#dndCard { background:rgba(255,255,255,10); color:#e2e8f0;"
+            "  border:1px solid rgba(255,255,255,22); border-radius:16px;"
             "  font-size:11px; font-weight:600; padding:6px 2px; }"
-            "QToolButton#dndCard:hover { background:rgba(255,255,255,30); color:#ffffff; }"
-            "QToolButton#dndCard:pressed { background:rgba(255,255,255,42); }"));
+            "QToolButton#dndCard:hover { background:rgba(255,255,255,20); color:#ffffff; }"
+            "QToolButton#dndCard:pressed { background:rgba(255,255,255,30); }"));
         connect(b, &QToolButton::clicked, this, [onClick] { onClick(); });
         return b;
     };

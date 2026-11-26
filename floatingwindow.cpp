@@ -569,27 +569,32 @@ void FloatingWindow::paintLiquidGlass(QPainter &p, const QRect &widgetRect, doub
 
     if (nativeMacGlass) {
         // On macOS 26/27+, native NSGlassEffectView renders real optical refraction,
-        // adaptive lensing, specular edge highlights, and concentric shadow. Keep a
-        // whisper-light dark contrast veil + hairline catch-light so foreground controls
-        // stay legible over bright windows without muddying Apple's native Liquid Glass.
+        // adaptive lensing, specular edge highlights, and concentric shadow. Layer a
+        // neutral Obsidian Frosted Glass veil + linear top catch-light so controls stay
+        // crisp over bright windows while matching the unified Obsidian glass palette.
         QLinearGradient veil(base.topLeft(), base.bottomRight());
-        veil.setColorAt(0.0, QColor(34, 46, 72, 42));
-        veil.setColorAt(0.45, QColor(18, 24, 40, 48));
-        veil.setColorAt(1.0, QColor(12, 16, 28, 60));
+        veil.setColorAt(0.0, QColor(32, 35, 42, 46));
+        veil.setColorAt(0.45, QColor(18, 20, 26, 58));
+        veil.setColorAt(1.0, QColor(12, 14, 19, 72));
         p.setBrush(veil);
         p.drawRoundedRect(base, radius, radius);
 
-        QRadialGradient topSheen(base.topLeft() + QPointF(base.width() * 0.24, 0.0), base.width() * 0.85);
-        topSheen.setColorAt(0.0, QColor(255, 255, 255, 22));
-        topSheen.setColorAt(0.5, QColor(200, 226, 255, 6));
-        topSheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-        p.setBrush(topSheen);
-        p.drawRoundedRect(base, radius, radius);
+        QPainterPath clip;
+        clip.addRoundedRect(base, radius, radius);
+        p.save();
+        p.setClipPath(clip);
+        const qreal sheenH = qMin(40.0, base.height() * 0.22);
+        QLinearGradient topCatch(base.topLeft(), QPointF(base.left(), base.top() + sheenH));
+        topCatch.setColorAt(0.0, QColor(255, 255, 255, 18));
+        topCatch.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setBrush(topCatch);
+        p.drawRect(QRectF(base.left(), base.top(), base.width(), sheenH));
+        p.restore();
 
         QLinearGradient rimGrad(base.topLeft(), base.bottomRight());
-        rimGrad.setColorAt(0.0, QColor(255, 255, 255, 36));
-        rimGrad.setColorAt(0.45, QColor(255, 255, 255, 6));
-        rimGrad.setColorAt(1.0, QColor(165, 216, 255, 18));
+        rimGrad.setColorAt(0.0, QColor(255, 255, 255, 54));
+        rimGrad.setColorAt(0.42, QColor(255, 255, 255, 14));
+        rimGrad.setColorAt(1.0, QColor(255, 255, 255, 28));
         p.setPen(QPen(QBrush(rimGrad), 1.0));
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(base.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5);

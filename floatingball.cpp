@@ -406,7 +406,11 @@ void RadialFanOverlay::recomputeFanLayout()
             addSys(QStringLiteral("sys_display"), QStringLiteral("显示器与多屏"), QStringLiteral("多屏"), false, QColor("#60a5fa"));
             addSys(QStringLiteral("sys_lock"), QStringLiteral("立即锁屏"), QStringLiteral("锁屏"), false, QColor("#cbd5e1"));
             addSys(QStringLiteral("sys_sleep"), QStringLiteral("休眠 / 关机菜单"), QStringLiteral("关机"), false, QColor("#fb7185"));
+#ifdef Q_OS_MACOS
+            addSys(QStringLiteral("sys_settings"), QStringLiteral("系统设置"), QStringLiteral("设置"), false, QColor("#9aa8ff"));
+#else
             addSys(QStringLiteral("sys_settings"), QStringLiteral("KDE 系统设置"), QStringLiteral("设置"), false, QColor("#9aa8ff"));
+#endif
         } else if (top.key == QLatin1String("tools")) {
             struct ToolDef { const char *id; const char *shortLbl; const char *color; };
             static const ToolDef kTools[]{
@@ -1067,16 +1071,32 @@ void RadialFanOverlay::updateHitMask()
 #ifdef Q_OS_MACOS
         // On macOS, a global non-consuming NSEvent monitor dismisses the fan on
         // outside clicks without swallowing the user's click on desktop windows.
+        // Pad slot ellipses generously so halos, fisheye hover zoom, and red badge
+        // pills never clip, and cover the full drilled focus backdrop when drilled.
         QRegion region;
+        const QPointF origin = geometry().topLeft();
+        if (!m_drillStack.isEmpty()) {
+            const DrillFrame &top = m_drillStack.last();
+            const QPointF centerLocal = top.centerGlobal - origin;
+            qreal maxR = 96.0;
+            for (const RadialSlotItem &s : m_slots) {
+                if (s.ringIndex == 1) {
+                    maxR = qMax(maxR, QLineF(centerLocal, s.centerGlobal - origin).length() + s.rectGlobal.width() * 0.5);
+                }
+            }
+            const qreal bdR = maxR + 36.0;
+            region += QRegion(QRectF(centerLocal.x() - bdR, centerLocal.y() - bdR, bdR * 2.0, bdR * 2.0).toAlignedRect(),
+                              QRegion::Ellipse);
+        }
         for (const RadialSlotItem &s : m_slots) {
-            const int pad = (s.kind == RadialSlotItem::AppSlot || s.kind == RadialSlotItem::NotificationSlot) ? 11 : 3;
-            const QRect local = s.rectGlobal.translated(-geometry().topLeft()).toAlignedRect().adjusted(-pad, -pad, pad, pad);
+            const int pad = (s.kind == RadialSlotItem::AppSlot || s.kind == RadialSlotItem::NotificationSlot) ? 16 : 12;
+            const QRect local = s.rectGlobal.translated(-origin).toAlignedRect().adjusted(-pad, -pad, pad, pad);
             if (!local.isEmpty())
                 region += QRegion(local, QRegion::Ellipse);
         }
         const QRectF pill = labelPillRectLocal();
         if (!pill.isEmpty()) {
-            region += QRegion(pill.toAlignedRect().adjusted(-2, -2, 2, 2));
+            region += QRegion(pill.toAlignedRect().adjusted(-4, -4, 4, 4));
         }
         setMask(region);
 #else
@@ -1377,9 +1397,15 @@ void RadialFanOverlay::updateCrosshairRect(const QPointF &anchorGlobal, const QP
 
 void RadialFanOverlay::updateFinger(const QPointF &fingerGlobal, int highlightedSlot, qreal dwellProgress)
 {
+    const bool slotChanged = (m_highlightedSlot != highlightedSlot);
     m_fingerGlobal = fingerGlobal;
     m_highlightedSlot = highlightedSlot;
     m_dwellProgress = dwellProgress;
+#ifdef Q_OS_MACOS
+    if (m_mode == TapFanMode && slotChanged) updateHitMask();
+#else
+    Q_UNUSED(slotChanged);
+#endif
     update();
 }
 
@@ -1602,6 +1628,14 @@ void RadialFanOverlay::wheelEvent(QWheelEvent *event)
 void RadialFanOverlay::leaveEvent(QEvent *event)
 {
     if (m_mode == TapFanMode && m_highlightedSlot >= 0) {
+#ifdef Q_OS_MACOS
+        // Updating setMask() on Cocoa refreshes NSTrackingArea and can emit a
+        // synthetic Leave while the pointer is still squarely over a slot.
+        if (hitSlotAtGlobal(QCursor::pos(), false) >= 0) {
+            QWidget::leaveEvent(event);
+            return;
+        }
+#endif
         m_highlightedSlot = -1;
         updateHitMask();
         update();
@@ -4949,7 +4983,7 @@ void FloatingBall::showSettings()
     panels->setValue(qRound(FloatingWindow::panelOpacity() * 100));
     panels->setSuffix(QStringLiteral(" %"));
 
-    auto *blur = new QCheckBox(tr("原生毛玻璃背景（macOS Vibrancy）"), appearance);
+    auto *blur = new QCheckBox(tr("原生毛玻璃背景（macOS Liquid Glass）"), appearance);
     blur->setObjectName(QStringLiteral("panelBlur"));
     blur->setEnabled(FloatingWindow::panelBlurSupported());
     blur->setChecked(blur->isEnabled() && FloatingWindow::panelBlurEnabled());

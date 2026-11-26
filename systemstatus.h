@@ -196,6 +196,9 @@ public:
     void updateBrightness(int percent, bool available = true);
     void setSnapshotForTest(const SystemStatusSnapshot &snapshot);
     void setTrayItemsForTest(const QList<TrayItemInfo> &items);
+#ifdef Q_OS_MACOS
+    void handleMacInputSourceChanged(const QString &label, const QString &description);
+#endif
 
 signals:
     void statusChanged(const SystemStatusSnapshot &snapshot);
@@ -246,6 +249,9 @@ private:
     QTimer *m_imeFastTimer = nullptr;
     QProcess *m_notifMonitor = nullptr;
     int m_brightnessMax = 100;
+#ifdef Q_OS_MACOS
+    void *m_macLiveWatchers = nullptr;
+#endif
 };
 
 #ifdef Q_OS_MACOS
@@ -276,10 +282,17 @@ struct MacBluetoothDevice {
 };
 
 void populateSnapshot(SystemStatusSnapshot *out);
+void populatePrivacyAndNightShift(SystemStatusSnapshot *out);
 QString toggleWifi();
 QString toggleBluetooth();
 QString toggleDoNotDisturb();
+QString toggleNightLight();
 QString cyclePowerProfile();
+QIcon lookupAppIcon(const QString &desktopEntry, const QString &appName);
+bool parseUserNotedPlist(const QByteArray &plistBytes, const QString &bundleId,
+                         double deliveredDate, NotificationItem *out);
+void *startLiveWatchers(SystemStatusMonitor *monitor);
+void stopLiveWatchers(void *token);
 bool openSystemSettings(const QString &moduleName);
 bool lockScreen();
 bool openPowerMenu();

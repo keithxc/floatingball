@@ -5,19 +5,20 @@
 #include <QHash>
 #include <QImage>
 #include <QPixmap>
-#include <QPointer>
 #include <QSet>
-#include <QTimer>
 
 #import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <CoreFoundation/CoreFoundation.h>
+#include <unistd.h>
+
+extern "C" AXError _AXUIElementGetWindow(AXUIElementRef element, CGWindowID *outWindowID) __attribute__((weak_import));
 
 namespace AppDockMac {
 
-namespace {
-
-QIcon iconFromNSImage(NSImage *nsImage)
+QIcon iconFromNSImage(void *rawImage)
 {
+    NSImage *nsImage = (__bridge NSImage *)rawImage;
     if (!nsImage) return {};
     const int px = 96;
     NSRect rect = NSMakeRect(0, 0, px, px);
@@ -42,29 +43,38 @@ QIcon iconFromNSImage(NSImage *nsImage)
     return QIcon(QPixmap::fromImage(img));
 }
 
-QIcon cachedIconForPath(const QString &path)
+QIcon iconForPath(const QString &path)
 {
     static QHash<QString, QIcon> cache;
     const auto it = cache.constFind(path);
     if (it != cache.constEnd()) return it.value();
     @autoreleasepool {
         NSImage *img = [[NSWorkspace sharedWorkspace] iconForFile:path.toNSString()];
-        QIcon icon = iconFromNSImage(img);
+        QIcon icon = iconFromNSImage((__bridge void *)img);
         if (!icon.isNull()) cache.insert(path, icon);
         return icon;
     }
 }
 
-bool isSelfBundleOrName(NSString *bundleId, NSString *name, NSString *path)
+bool isSelfBundle(const QString &bundleId, const QString &name, const QString &path)
 {
-    if (bundleId && ([bundleId isEqualToString:@"dev.floatingball.FloatingBall"] ||
-                     [bundleId containsString:@"FloatingBall"]))
+    if (bundleId == QLatin1String("dev.floatingball.FloatingBall") ||
+        bundleId.contains(QLatin1String("FloatingBall"), Qt::CaseInsensitive))
         return true;
-    if (name && [name isEqualToString:@"FloatingBall"])
+    if (name.compare(QLatin1String("FloatingBall"), Qt::CaseInsensitive) == 0)
         return true;
-    if (path && [path containsString:@"/FloatingBall.app"])
+    if (path.contains(QLatin1String("/FloatingBall.app"), Qt::CaseInsensitive))
         return true;
     return false;
+}
+
+namespace {
+
+bool isSelfBundleOrName(NSString *bundleId, NSString *name, NSString *path)
+{
+    return isSelfBundle(bundleId ? QString::fromNSString(bundleId) : QString(),
+                        name ? QString::fromNSString(name) : QString(),
+                        path ? QString::fromNSString(path) : QString());
 }
 
 QString localizedAppName(const QString &appPath)
@@ -156,20 +166,17 @@ QStringList categoriesForPath(const QString &appPath, const QString &bundleId, c
     return cats;
 }
 
-struct ObserverPack {
-    NSMutableArray *tokens = nil;
-};
-
 } // namespace
 
 QList<DockAppEntry> runningApps()
 {
     QList<DockAppEntry> list;
     @autoreleasepool {
+        const pid_t selfPid = ::getpid();
         NSArray<NSRunningApplication *> *apps = [NSWorkspace sharedWorkspace].runningApplications;
         for (NSRunningApplication *app in apps) {
             if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
-            if (app.isTerminated) continue;
+            if (app.isTerminated || app.processIdentifier == selfPid) continue;
             NSString *bundleId = app.bundleIdentifier;
             NSString *name = app.localizedName;
             NSString *path = app.bundleURL ? app.bundleURL.path : nil;
@@ -179,10 +186,11 @@ QList<DockAppEntry> runningApps()
             entry.id = bundleId ? QString::fromNSString(bundleId) : QString();
             entry.launchTarget = path ? QString::fromNSString(path) : QString();
             entry.name = name ? QString::fromNSString(name) : AppDockModel::displayNameForTarget(entry.launchTarget);
+            entry.appKey = (!entry.id.isEmpty() ? entry.id : entry.name).toLower();
             if (!entry.launchTarget.isEmpty())
-                entry.icon = cachedIconForPath(entry.launchTarget);
+                entry.icon = iconForPath(entry.launchTarget);
             if (entry.icon.isNull() && app.icon)
-                entry.icon = iconFromNSImage(app.icon);
+                entry.icon = iconFromNSImage((__bridge void *)app.icon);
             entry.running = true;
             entry.active = app.isActive;
             entry.pinned = false;
@@ -249,7 +257,7 @@ DockAppEntry entryForPath(const QString &appPath, bool pinned)
     entry.id = bundleIdForPath(appPath);
     entry.name = localizedAppName(appPath);
     entry.categories = categoriesForPath(appPath, entry.id, entry.name);
-    entry.icon = cachedIconForPath(appPath);
+    entry.icon = iconForPath(appPath);
     entry.pinned = pinned;
     return entry;
 }
@@ -284,9 +292,10 @@ DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry)
 {
     @autoreleasepool {
         // 1. If already running, activate immediately without relaunch delay!
+        const pid_t selfPid = ::getpid();
         NSArray<NSRunningApplication *> *running = [NSWorkspace sharedWorkspace].runningApplications;
         for (NSRunningApplication *app in running) {
-            if (app.isTerminated) continue;
+            if (app.isTerminated || app.processIdentifier == selfPid) continue;
             const bool idMatch = !entry.id.isEmpty() && app.bundleIdentifier &&
                                  [app.bundleIdentifier isEqualToString:entry.id.toNSString()];
             const bool pathMatch = !entry.launchTarget.isEmpty() && app.bundleURL &&
@@ -353,9 +362,10 @@ DesktopActions::Outcome minimizeAllWindows()
         // while Finder's desktop wallpaper & icons stay visible). Clicking the
         // desktop will NEVER snap windows back like Mission Control's Show Desktop peek.
         int hiddenCount = 0;
+        const pid_t selfPid = ::getpid();
         NSArray<NSRunningApplication *> *running = [NSWorkspace sharedWorkspace].runningApplications;
         for (NSRunningApplication *app in running) {
-            if (app.isTerminated) continue;
+            if (app.isTerminated || app.processIdentifier == selfPid) continue;
             if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
             NSString *bundleId = app.bundleIdentifier;
             NSString *name = app.localizedName;
@@ -373,9 +383,10 @@ DesktopActions::Outcome minimizeAllWindows()
 DesktopActions::Outcome quitApp(const DockAppEntry &entry)
 {
     @autoreleasepool {
+        const pid_t selfPid = ::getpid();
         NSArray<NSRunningApplication *> *running = [NSWorkspace sharedWorkspace].runningApplications;
         for (NSRunningApplication *app in running) {
-            if (app.isTerminated) continue;
+            if (app.isTerminated || app.processIdentifier == selfPid) continue;
             const bool idMatch = !entry.id.isEmpty() && app.bundleIdentifier &&
                                  [app.bundleIdentifier isEqualToString:entry.id.toNSString()];
             const bool pathMatch = !entry.launchTarget.isEmpty() && app.bundleURL &&
@@ -390,44 +401,174 @@ DesktopActions::Outcome quitApp(const DockAppEntry &entry)
     }
 }
 
-void *installWorkspaceObservers(AppDockModel *model)
+namespace {
+
+bool parseWindowIdToken(const QString &token, pid_t *pidOut, CGWindowID *widOut)
 {
-    if (!model) return nullptr;
-    @autoreleasepool {
-        auto *pack = new ObserverPack();
-        pack->tokens = [[NSMutableArray alloc] init];
-        NSNotificationCenter *nc = [NSWorkspace sharedWorkspace].notificationCenter;
-        QPointer<AppDockModel> guard(model);
-        NSArray<NSNotificationName> *names = @[
-            NSWorkspaceDidLaunchApplicationNotification,
-            NSWorkspaceDidTerminateApplicationNotification,
-            NSWorkspaceDidActivateApplicationNotification,
-            NSWorkspaceDidHideApplicationNotification,
-            NSWorkspaceDidUnhideApplicationNotification
-        ];
-        for (NSNotificationName n in names) {
-            id token = [nc addObserverForName:n object:nil queue:[NSOperationQueue mainQueue]
-                                   usingBlock:^(NSNotification *) {
-                if (guard) QTimer::singleShot(40, guard, &AppDockModel::appsChanged);
-            }];
-            if (token) [pack->tokens addObject:token];
-        }
-        return pack;
-    }
+    if (!token.startsWith(QLatin1String("mac:"))) return false;
+    const QStringList parts = token.split(QLatin1Char(':'));
+    if (parts.size() != 3) return false;
+    bool okPid = false, okWid = false;
+    const pid_t pid = static_cast<pid_t>(parts[1].toLongLong(&okPid));
+    const CGWindowID wid = static_cast<CGWindowID>(parts[2].toUInt(&okWid));
+    if (!okPid || !okWid || pid <= 0 || wid == 0) return false;
+    if (pidOut) *pidOut = pid;
+    if (widOut) *widOut = wid;
+    return true;
 }
 
-void removeWorkspaceObservers(void *raw)
+AXUIElementRef findAxWindow(pid_t pid, CGWindowID targetWid, const QString &fallbackTitle)
 {
-    if (!raw) return;
-    @autoreleasepool {
-        auto *pack = static_cast<ObserverPack *>(raw);
-        NSNotificationCenter *nc = [NSWorkspace sharedWorkspace].notificationCenter;
-        for (id token in pack->tokens) {
-            [nc removeObserver:token];
+    if (pid <= 0 || !AXIsProcessTrusted()) return nullptr;
+    AXUIElementRef appEl = AXUIElementCreateApplication(pid);
+    if (!appEl) return nullptr;
+    AXUIElementSetMessagingTimeout(appEl, 0.12f);
+
+    CFTypeRef winsRef = nullptr;
+    AXUIElementRef matched = nullptr;
+    AXUIElementRef titleFallback = nullptr;
+    if (AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute, &winsRef) == kAXErrorSuccess && winsRef) {
+        if (CFGetTypeID(winsRef) == CFArrayGetTypeID()) {
+            const CFIndex count = CFArrayGetCount((CFArrayRef)winsRef);
+            for (CFIndex i = 0; i < count; ++i) {
+                AXUIElementRef w = (AXUIElementRef)CFArrayGetValueAtIndex((CFArrayRef)winsRef, i);
+                if (!w) continue;
+                if (_AXUIElementGetWindow && targetWid != 0) {
+                    CGWindowID wid = 0;
+                    if (_AXUIElementGetWindow(w, &wid) == kAXErrorSuccess && wid == targetWid) {
+                        matched = (AXUIElementRef)CFRetain(w);
+                        break;
+                    }
+                }
+                if (!titleFallback && !fallbackTitle.isEmpty()) {
+                    CFTypeRef tRef = nullptr;
+                    if (AXUIElementCopyAttributeValue(w, kAXTitleAttribute, &tRef) == kAXErrorSuccess && tRef) {
+                        if (CFGetTypeID(tRef) == CFStringGetTypeID() &&
+                            QString::fromNSString((__bridge NSString *)tRef) == fallbackTitle) {
+                            titleFallback = (AXUIElementRef)CFRetain(w);
+                        }
+                        CFRelease(tRef);
+                    }
+                }
+            }
         }
-        [pack->tokens release];
-        delete pack;
+        CFRelease(winsRef);
     }
+    CFRelease(appEl);
+    if (matched) {
+        if (titleFallback) CFRelease(titleFallback);
+        return matched;
+    }
+    return titleFallback;
+}
+
+} // namespace
+
+bool activateWindow(const DockAppEntry &entry, DesktopActions::Outcome *out)
+{
+    pid_t pid = 0;
+    CGWindowID wid = 0;
+    if (!parseWindowIdToken(entry.windowId, &pid, &wid)) return false;
+    @autoreleasepool {
+        NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+        if (!app || app.isTerminated) return false;
+        [app unhide];
+        AXUIElementRef win = findAxWindow(pid, wid, entry.caption);
+        if (win) {
+            AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanFalse);
+            AXUIElementSetAttributeValue(win, kAXMainAttribute, kCFBooleanTrue);
+            AXUIElementPerformAction(win, kAXRaiseAction);
+            CFRelease(win);
+            if (@available(macOS 14.0, *)) {
+                [app activateWithOptions:0];
+            } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+            }
+            if (out) *out = {true, QStringLiteral("✓ 已切换到 ") + (!entry.caption.isEmpty() ? entry.caption : entry.name)};
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minimizeWindow(const DockAppEntry &entry, DesktopActions::Outcome *out)
+{
+    pid_t pid = 0;
+    CGWindowID wid = 0;
+    if (!parseWindowIdToken(entry.windowId, &pid, &wid)) return false;
+    AXUIElementRef win = findAxWindow(pid, wid, entry.caption);
+    if (!win) return false;
+    const AXError err = AXUIElementSetAttributeValue(win, kAXMinimizedAttribute, kCFBooleanTrue);
+    CFRelease(win);
+    if (err == kAXErrorSuccess) {
+        if (out) *out = {true, QStringLiteral("✓ 已最小化 ") + entry.name};
+        return true;
+    }
+    return false;
+}
+
+bool closeWindow(const DockAppEntry &entry, DesktopActions::Outcome *out)
+{
+    pid_t pid = 0;
+    CGWindowID wid = 0;
+    if (!parseWindowIdToken(entry.windowId, &pid, &wid)) return false;
+    AXUIElementRef win = findAxWindow(pid, wid, entry.caption);
+    if (!win) return false;
+    CFTypeRef closeBtnRef = nullptr;
+    bool closed = false;
+    if (AXUIElementCopyAttributeValue(win, kAXCloseButtonAttribute, &closeBtnRef) == kAXErrorSuccess && closeBtnRef) {
+        closed = (AXUIElementPerformAction((AXUIElementRef)closeBtnRef, kAXPressAction) == kAXErrorSuccess);
+        CFRelease(closeBtnRef);
+    }
+    CFRelease(win);
+    if (closed) {
+        if (out) *out = {true, QStringLiteral("✓ 已关闭 ") + (!entry.caption.isEmpty() ? entry.caption : entry.name)};
+        return true;
+    }
+    return false;
+}
+
+bool launchByBundleId(const QString &bundleId, DesktopActions::Outcome *out)
+{
+    const QString clean = bundleId.trimmed();
+    if (clean.isEmpty()) return false;
+    @autoreleasepool {
+        for (NSRunningApplication *app in [NSWorkspace sharedWorkspace].runningApplications) {
+            if (app.isTerminated || !app.bundleIdentifier) continue;
+            if (QString::fromNSString(app.bundleIdentifier).compare(clean, Qt::CaseInsensitive) == 0) {
+                [app unhide];
+                if (@available(macOS 14.0, *)) {
+                    [app activateWithOptions:NSApplicationActivateAllWindows];
+                } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                    [app activateWithOptions:NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+                }
+                if (app.bundleURL) {
+                    NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
+                    cfg.activates = YES;
+                    [[NSWorkspace sharedWorkspace] openApplicationAtURL:app.bundleURL configuration:cfg completionHandler:nil];
+                }
+                if (out) {
+                    const QString nm = app.localizedName ? QString::fromNSString(app.localizedName) : clean;
+                    *out = {true, QStringLiteral("✓ 已切换到 ") + nm};
+                }
+                return true;
+            }
+        }
+        if (NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:clean.toNSString()]) {
+            NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
+            cfg.activates = YES;
+            [[NSWorkspace sharedWorkspace] openApplicationAtURL:url configuration:cfg completionHandler:nil];
+            if (out) *out = {true, QStringLiteral("✓ 正在打开 ") + AppDockModel::displayNameForTarget(QString::fromNSString(url.path))};
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace AppDockMac

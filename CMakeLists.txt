@@ -50,7 +50,10 @@ function(floatingball_configure_common target)
     if(APPLE AND NOT IOS)
         target_sources(${target} PRIVATE
             appdock_mac.mm
+            appdock_windows_mac.mm
             systemstatus_mac.mm
+            systemstatus_notif_mac.mm
+            systemstatus_sensors_mac.mm
             panelbackdrop_mac.mm
             desktopactions_mac.mm
         )
@@ -61,11 +64,13 @@ function(floatingball_configure_common target)
             "-framework Carbon"
             "-framework CoreAudio"
             "-framework CoreGraphics"
+            "-framework CoreMediaIO"
             "-framework CoreWLAN"
             "-framework Foundation"
             "-framework IOBluetooth"
             "-framework IOKit"
             "-framework QuartzCore"
+            sqlite3
         )
     endif()
 
@@ -130,6 +135,15 @@ if(FLOATINGBALL_BUILD_TESTS)
     set_tests_properties(touch-ux-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     if(APPLE AND NOT IOS)
+        add_executable(floatingball-macos-parity-test
+            tests/macos-parity-test.mm
+            ${FLOATINGBALL_CORE_SOURCES}
+        )
+        floatingball_configure_common(floatingball-macos-parity-test)
+        add_test(NAME macos-parity-workflow
+                 COMMAND floatingball-macos-parity-test "${CMAKE_CURRENT_BINARY_DIR}/macos-parity-data")
+        set_tests_properties(macos-parity-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
         add_executable(floatingball-backdrop-check MACOSX_BUNDLE
             tests/backdrop-check.mm
             floatingwindow.cpp floatingwindow.h

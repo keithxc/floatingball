@@ -71,7 +71,8 @@ void configureGlassEffectView(NSView *view, CGFloat cornerRadius, bool interacti
     }
     SEL selTint = NSSelectorFromString(@"setTintColor:");
     if ([view respondsToSelector:selTint]) {
-        NSColor *tint = [NSColor colorWithSRGBRed:0.09 green:0.12 blue:0.20 alpha:0.28];
+        // Neutral Obsidian Frosted Glass tint (matches FloatingBall sphere & unified palette)
+        NSColor *tint = [NSColor colorWithSRGBRed:0.08 green:0.09 blue:0.11 alpha:0.34];
         ((void (*)(id, SEL, NSColor *))objc_msgSend)(view, selTint, tint);
     }
     // macOS 27.0+ native interactive Liquid Glass optical feedback

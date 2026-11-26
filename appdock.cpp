@@ -29,6 +29,7 @@
 #ifdef Q_OS_MACOS
 namespace AppDockMac {
 QList<DockAppEntry> runningApps();
+QList<DockAppEntry> openWindowsFast();
 QStringList systemDockPinnedPaths();
 QList<DockAppEntry> installedApps(int maxCount);
 DockAppEntry entryForPath(const QString &appPath, bool pinned);
@@ -36,6 +37,10 @@ DesktopActions::Outcome activateOrLaunch(const DockAppEntry &entry);
 DesktopActions::Outcome toggleOrActivate(const DockAppEntry &entry);
 DesktopActions::Outcome minimizeAllWindows();
 DesktopActions::Outcome quitApp(const DockAppEntry &entry);
+bool activateWindow(const DockAppEntry &entry, DesktopActions::Outcome *out);
+bool minimizeWindow(const DockAppEntry &entry, DesktopActions::Outcome *out);
+bool closeWindow(const DockAppEntry &entry, DesktopActions::Outcome *out);
+bool launchByBundleId(const QString &bundleId, DesktopActions::Outcome *out);
 void *installWorkspaceObservers(AppDockModel *model);
 void removeWorkspaceObservers(void *token);
 } // namespace AppDockMac
@@ -758,7 +763,7 @@ QList<DockAppEntry> AppDockModel::openWindows() const
     } else {
 #ifdef Q_OS_MACOS
         if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
-            raw = AppDockMac::runningApps();
+            raw = m_macWindowCacheReady ? m_macRunningWindows : AppDockMac::openWindowsFast();
         }
 #elif defined(Q_OS_LINUX)
         raw = m_linuxRunningApps;
@@ -826,6 +831,8 @@ void AppDockModel::notifyAppAttention(const QString &appName, const QString &des
     }
 #ifdef Q_OS_LINUX
     tryMatchList(m_linuxRunningApps);
+#elif defined(Q_OS_MACOS)
+    tryMatchList(m_macRunningWindows);
 #endif
     if (!matchedAny) {
         if (!k1.isEmpty()) m_notifiedAppKeys.insert(k1);
@@ -854,6 +861,8 @@ void AppDockModel::clearAttentionForApp(const DockAppEntry &entry)
     if (m_hasTestWindows) clearInList(m_testWindows);
 #ifdef Q_OS_LINUX
     clearInList(m_linuxRunningApps);
+#elif defined(Q_OS_MACOS)
+    clearInList(m_macRunningWindows);
 #endif
     if (changed) emit appsChanged();
 }
@@ -866,6 +875,8 @@ void AppDockModel::clearAllAttention()
     }
 #ifdef Q_OS_LINUX
     for (DockAppEntry &e : m_linuxRunningApps) e.demandsAttention = false;
+#elif defined(Q_OS_MACOS)
+    for (DockAppEntry &e : m_macRunningWindows) e.demandsAttention = false;
 #endif
     emit appsChanged();
 }
@@ -1097,6 +1108,10 @@ DesktopActions::Outcome AppDockModel::launchFresh(const DockAppEntry &entry) con
 DesktopActions::Outcome AppDockModel::toggleOrActivate(const DockAppEntry &entry) const
 {
 #ifdef Q_OS_MACOS
+    if (entry.running && entry.active && !entry.windowId.isEmpty()) {
+        DesktopActions::Outcome out;
+        if (AppDockMac::minimizeWindow(entry, &out)) return out;
+    }
     return AppDockMac::toggleOrActivate(entry);
 #elif defined(Q_OS_LINUX)
     if (entry.running && entry.active && !entry.windowId.isEmpty()) {
@@ -1150,6 +1165,10 @@ DesktopActions::Outcome AppDockModel::minimizeAllWindows() const
 DesktopActions::Outcome AppDockModel::activateOrLaunch(const DockAppEntry &entry) const
 {
 #ifdef Q_OS_MACOS
+    if (entry.running && !entry.windowId.isEmpty()) {
+        DesktopActions::Outcome out;
+        if (AppDockMac::activateWindow(entry, &out)) return out;
+    }
     return AppDockMac::activateOrLaunch(entry);
 #else
 #ifdef Q_OS_LINUX
@@ -1233,6 +1252,9 @@ bool AppDockModel::activateOrLaunchByHint(const QString &appName,
         return res.ok;
     }
 #else
+    if (!desktopEntry.trimmed().isEmpty() && AppDockMac::launchByBundleId(desktopEntry, out)) {
+        return true;
+    }
     const QList<DockAppEntry> inst = installedApps(160);
     for (const DockAppEntry &e : inst) {
         if (SystemStatusMonitor::notificationMatchesApp(probe, e.id, e.name, e.id)) {
@@ -1260,6 +1282,10 @@ DesktopActions::Outcome AppDockModel::quitApp(const DockAppEntry &entry)
         return {false, entry.name + QStringLiteral(" 当前未运行")};
     }
 #ifdef Q_OS_MACOS
+    if (entry.running && !entry.windowId.isEmpty()) {
+        DesktopActions::Outcome out;
+        if (AppDockMac::closeWindow(entry, &out)) return out;
+    }
     return AppDockMac::quitApp(entry);
 #elif defined(Q_OS_LINUX)
     if (entry.running && !entry.windowId.isEmpty()) {

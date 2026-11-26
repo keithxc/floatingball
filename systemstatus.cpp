@@ -437,6 +437,8 @@ void SystemStatusMonitor::startPlatformWatchers()
     initLinuxDBus();
     startNotificationMonitor();
     if (m_imeFastTimer) m_imeFastTimer->start();
+#elif defined(Q_OS_MACOS)
+    if (!m_macLiveWatchers) m_macLiveWatchers = SystemStatusMac::startLiveWatchers(this);
 #endif
     m_pollTimer->start();
 }
@@ -447,6 +449,11 @@ void SystemStatusMonitor::stopPlatformWatchers()
     if (m_imeFastTimer) m_imeFastTimer->stop();
 #ifdef Q_OS_LINUX
     stopNotificationMonitor();
+#elif defined(Q_OS_MACOS)
+    if (m_macLiveWatchers) {
+        SystemStatusMac::stopLiveWatchers(m_macLiveWatchers);
+        m_macLiveWatchers = nullptr;
+    }
 #endif
 }
 
@@ -668,6 +675,8 @@ QIcon lookupDesktopIconByIdOrName(const QString &desktopEntry, const QString &ap
             }
         }
     }
+#elif defined(Q_OS_MACOS)
+    return SystemStatusMac::lookupAppIcon(desktopEntry, appName);
 #else
     Q_UNUSED(desktopEntry); Q_UNUSED(appName);
 #endif
@@ -915,7 +924,9 @@ void SystemStatusMonitor::pushNotification(NotificationItem item)
 
     syncNotificationSnapshot();
     emit notificationsChanged();
-    emit notificationReceived(item.displayAppName(), item.desktopEntry, m_snapshot.lastNotificationSummary);
+    if (item.unread) {
+        emit notificationReceived(item.displayAppName(), item.desktopEntry, m_snapshot.lastNotificationSummary);
+    }
 }
 
 void SystemStatusMonitor::markNotificationsReadForApp(const QString &appKey,
@@ -1087,6 +1098,7 @@ void SystemStatusMonitor::pollSlowMetrics()
 #elif defined(Q_OS_MACOS)
     SystemStatusSnapshot next = m_snapshot;
     SystemStatusMac::populateSnapshot(&next);
+    SystemStatusMac::populatePrivacyAndNightShift(&next);
     emitIfChanged(next);
     QPointer<SystemStatusMonitor> self(this);
     DesktopActions::queryVolume([self](int pct, bool muted, bool ok) {
@@ -2144,6 +2156,10 @@ QString SystemStatusMonitor::toggleNightLight()
     emitIfChanged(next);
     QTimer::singleShot(450, this, [this] { refreshLinuxNightLight(); });
     return next.nightLightEnabled ? QStringLiteral("✓ 夜间护眼色已切换") : QStringLiteral("✓ 夜间护眼色已切换");
+#elif defined(Q_OS_MACOS)
+    const QString msg = SystemStatusMac::toggleNightLight();
+    QTimer::singleShot(350, this, [this] { pollSlowMetrics(); });
+    return msg;
 #else
     return {};
 #endif
