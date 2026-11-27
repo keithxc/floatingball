@@ -482,17 +482,32 @@ int main(int argc, char **argv)
         ball.fanOverlay()->syncProgress(1.0);
         app.processEvents();
         int attnSlotIdx = -1;
+        int closeSlotIdx12 = -1;
+        int lastRing1Idx12 = -1;
+        qreal maxRing1Y12 = -1e9;
         for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
             const RadialSlotItem &s = ball.fanOverlay()->slotsData()[i];
             if (s.kind == RadialSlotItem::AppSlot && s.app.windowId == QLatin1String("win-8")) {
                 attnSlotIdx = i;
-                break;
+            }
+            if (s.ringIndex == 1) {
+                lastRing1Idx12 = i;
+                maxRing1Y12 = qMax(maxRing1Y12, s.centerGlobal.y());
+                if (s.id == QLatin1String("close_active")) {
+                    closeSlotIdx12 = i;
+                }
             }
         }
-        check(attnSlotIdx >= 0 && ball.allOrbitSlotGlobalRects().size() == 17,
-              "all 12 open windows expand in outer rings around the 5 fixed inner buttons");
-        const QPointF win8Center = ball.fanOverlay()->slotsData()[attnSlotIdx].centerGlobal;
+        check(attnSlotIdx >= 0 && ball.allOrbitSlotGlobalRects().size() == 18,
+              "all 12 open windows expand in outer rings around the 5 fixed inner buttons plus fixed Ring-1 close orb");
+        check(closeSlotIdx12 >= 0 && closeSlotIdx12 == lastRing1Idx12 &&
+                  qAbs(ball.fanOverlay()->slotsData()[closeSlotIdx12].centerGlobal.y() - maxRing1Y12) < 1.0,
+              "close_active orb is pinned as the final bottom-most slot of Ring 1 even when windows overflow to Ring 2");
+        const QPointF closeCenter12 = ball.fanOverlay()->slotsData()[closeSlotIdx12].centerGlobal;
         const QPointF ballCenter = ball.anchorCenterGlobal();
+        const double closeAngle12 = qRadiansToDegrees(std::atan2(closeCenter12.y() - ballCenter.y(),
+                                                                 closeCenter12.x() - ballCenter.x()));
+        const QPointF win8Center = ball.fanOverlay()->slotsData()[attnSlotIdx].centerGlobal;
         const double expectedDeg = qRadiansToDegrees(std::atan2(win8Center.y() - ballCenter.y(),
                                                                 win8Center.x() - ballCenter.x()));
         const double radarDeg = qRadiansToDegrees(ball.attentionAnglesRad().first());
@@ -500,6 +515,18 @@ int main(int argc, char **argv)
         if (diffDeg > 180.0) diffDeg = 360.0 - diffDeg;
         check(diffDeg < 1.0,
               "directional radar dot on main ball aligns (< 1 deg) with notifying window's expanded orb position");
+
+        // Hovering close_active reveals the active window name; Voronoi magnetic snap near it never misfires Close!
+        ball.fanOverlay()->updateFinger(closeCenter12, closeSlotIdx12);
+        check(ball.fanOverlay()->activeLabelText().contains(QStringLiteral("关闭当前")) &&
+                  ball.fanOverlay()->activeLabelText().contains(QStringLiteral("KITTY")),
+              "hovering close_active reveals active window name before closing");
+        check(ball.fanOverlay()->hitSlotAtGlobal(closeCenter12, true) == closeSlotIdx12,
+              "direct pointer hit on close_active selects it cleanly");
+        const qreal closeR12 = ball.fanOverlay()->slotsData()[closeSlotIdx12].rectGlobal.width() * 0.5;
+        const QPointF nearOutsideClose = closeCenter12 + QPointF(0.0, closeR12 + 12.0);
+        check(ball.fanOverlay()->hitSlotAtGlobal(nearOutsideClose, true) != closeSlotIdx12,
+              "magnetic Voronoi snap past Ring 0 excludes close_active so swipes never misfire Close");
 
         // Middle-clicking win-8 in TapFanMode closes that window in-place while keeping the fan open!
         const QPointF win8Local = win8Center - QPointF(ball.fanOverlay()->geometry().topLeft());
@@ -511,7 +538,7 @@ int main(int argc, char **argv)
         app.sendEvent(ball.fanOverlay(), &midUp);
         app.processEvents();
         check(ball.dockModel()->openWindows().size() == 11 &&
-                  ball.allOrbitSlotGlobalRects().size() == 16 &&
+                  ball.allOrbitSlotGlobalRects().size() == 17 &&
                   ball.attentionAnglesRad().isEmpty(),
               "PC middle-click closes window orb in-place and clears directional message radar dot");
 
@@ -523,6 +550,74 @@ int main(int argc, char **argv)
         app.sendEvent(ball.fanOverlay(), &outsideClick);
         waitMs(190);
         check(!ball.isOrbitVisible(), "clicking outside floating ball and fan automatically collapses the fan");
+
+        // B2) Fixed Ring-1 tail muscle-memory check (4 windows) + tapping close_active closes active window!
+        {
+            QList<DockAppEntry> fourWins;
+            const QStringList fourNames{QStringLiteral("Chrome"), QStringLiteral("Kitty"),
+                                        QStringLiteral("Obsidian"), QStringLiteral("WeChat")};
+            for (int i = 0; i < 4; ++i) {
+                DockAppEntry w;
+                w.id = fourNames[i].toLower();
+                w.appKey = w.id;
+                w.name = fourNames[i];
+                w.caption = QStringLiteral("doc-%1 — %2").arg(i + 1).arg(w.name);
+                w.windowId = QStringLiteral("four-%1").arg(i + 1);
+                w.running = true;
+                w.active = (i == 1); // Kitty is active
+                fourWins.append(w);
+            }
+            ball.dockModel()->setOpenWindowsForTest(fourWins);
+            ball.fanOverlay()->openTapFan();
+            ball.fanOverlay()->syncProgress(1.0);
+            app.processEvents();
+
+            int closeIdx4 = -1;
+            int lastRing1Idx4 = -1;
+            for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
+                const auto &s = ball.fanOverlay()->slotsData()[i];
+                if (s.ringIndex == 1) {
+                    lastRing1Idx4 = i;
+                    if (s.id == QLatin1String("close_active")) closeIdx4 = i;
+                }
+            }
+            check(closeIdx4 >= 0 && closeIdx4 == lastRing1Idx4 &&
+                      ball.allOrbitSlotGlobalRects().size() == 10,
+                  "4 open windows place close_active at the tail of Ring 1 (5 + 4 + 1 = 10 slots)");
+            const QPointF closeCenter4 = ball.fanOverlay()->slotsData()[closeIdx4].centerGlobal;
+            const double closeAngle4 = qRadiansToDegrees(std::atan2(closeCenter4.y() - ballCenter.y(),
+                                                                    closeCenter4.x() - ballCenter.x()));
+            double angleDrift = std::abs(closeAngle4 - closeAngle12);
+            if (angleDrift > 180.0) angleDrift = 360.0 - angleDrift;
+            check(angleDrift < 1.0,
+                  "close_active stays anchored at the exact same Ring-1 tail angle across 4 vs 12 open windows");
+
+            check(ball.fanOverlay()->grab().save(QString::fromLocal8Bit(argv[1]) + "/ring1-close-active-preview.png"),
+                  "saved Ring-1 close_active rest preview outside source");
+            ball.fanOverlay()->updateFinger(closeCenter4, closeIdx4);
+            app.processEvents();
+            check(ball.fanOverlay()->activeLabelText() == QStringLiteral("关闭当前 · Kitty"),
+                  "hovering close_active displays exact active app name in callout pill");
+            check(ball.fanOverlay()->grab().save(QString::fromLocal8Bit(argv[1]) + "/ring1-close-active-hover.png"),
+                  "saved Ring-1 close_active hover preview outside source");
+
+            // Tap close_active -> closes Kitty (active), keeps remaining 3 windows, collapses fan!
+            const QPointF closeLocal4 = closeCenter4 - QPointF(ball.fanOverlay()->geometry().topLeft());
+            QMouseEvent tapDown(QEvent::MouseButtonPress, closeLocal4, closeCenter4,
+                                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent tapUp(QEvent::MouseButtonRelease, closeLocal4, closeCenter4,
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            app.sendEvent(ball.fanOverlay(), &tapDown);
+            app.sendEvent(ball.fanOverlay(), &tapUp);
+            waitMs(190);
+            const auto remaining = ball.dockModel()->openWindows();
+            bool kittyStillOpen = false;
+            for (const auto &w : remaining) {
+                if (w.windowId == QLatin1String("four-2")) kittyStillOpen = true;
+            }
+            check(remaining.size() == 3 && !kittyStillOpen && !ball.isOrbitVisible(),
+                  "tapping Ring-1 close_active closes the active window, keeps others open, and collapses fan");
+        }
 
         // C) Stress test: 100 open windows auto-distributed across multi-layer concentric arcs!
         QList<DockAppEntry> hundredWins;
@@ -543,7 +638,17 @@ int main(int argc, char **argv)
         app.processEvents();
 
         const QList<QRectF> all100 = ball.allOrbitSlotGlobalRects();
-        bool all100Valid = (all100.size() == 105 && ball.fanOverlay()->activeRingCount() >= 5);
+        int closeIdx100 = -1;
+        int lastRing1Idx100 = -1;
+        for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
+            const auto &s = ball.fanOverlay()->slotsData()[i];
+            if (s.ringIndex == 1) {
+                lastRing1Idx100 = i;
+                if (s.id == QLatin1String("close_active")) closeIdx100 = i;
+            }
+        }
+        bool all100Valid = (all100.size() == 106 && ball.fanOverlay()->activeRingCount() >= 5 &&
+                            closeIdx100 >= 0 && closeIdx100 == lastRing1Idx100);
         for (int i = 0; i < all100.size(); ++i) {
             const QRect r = all100[i].toAlignedRect();
             all100Valid = all100Valid && bounds.adjusted(-2, -2, 2, 2).contains(r);
@@ -1067,6 +1172,7 @@ int main(int argc, char **argv)
               "activating notifying open window clears unread notification and leaves zero ghost red dot");
 
         // 11c. Background / tray app notification (no open window) -> surfaces NotificationSlot orb + Notification Center!
+        ball.dockModel()->setOpenWindowsForTest({});
         NotificationItem tg1;
         tg1.appName = QStringLiteral("Telegram Desktop");
         tg1.desktopEntry = QStringLiteral("org.telegram.desktop");
@@ -1083,17 +1189,20 @@ int main(int argc, char **argv)
         app.processEvents();
 
         int notifSlotIdx = -1;
+        bool hasCloseWhenNoWindows = false;
         for (int i = 0; i < ball.fanOverlay()->slotsData().size(); ++i) {
             if (ball.fanOverlay()->slotsData()[i].kind == RadialSlotItem::NotificationSlot) {
                 notifSlotIdx = i;
-                break;
+            }
+            if (ball.fanOverlay()->slotsData()[i].id == QLatin1String("close_active")) {
+                hasCloseWhenNoWindows = true;
             }
         }
-        check(notifSlotIdx >= 0 &&
+        check(notifSlotIdx >= 0 && !hasCloseWhenNoWindows &&
                   ball.fanOverlay()->slotsData()[notifSlotIdx].unreadCount == 2 &&
                   ball.fanOverlay()->slotsData()[notifSlotIdx].label == QStringLiteral("Telegram Desktop") &&
                   !ball.attentionAnglesRad().isEmpty(),
-              "background/tray unread notifications surface a grouped NotificationSlot orb with exact count and radar bearing");
+              "background/tray unread notifications surface a grouped NotificationSlot orb without close_active when 0 windows are open");
 
         ball.fanOverlay()->updateFinger(ball.fanOverlay()->slotsData()[notifSlotIdx].centerGlobal, notifSlotIdx);
         check(ball.fanOverlay()->activeLabelText().contains(QStringLiteral("Telegram Desktop")) &&

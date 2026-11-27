@@ -79,6 +79,7 @@ FloatingIcons::Icon iconForAction(const QString &id)
     if (id == QLatin1String("win_hub")) return FloatingIcons::WindowsHub;
     if (id == QLatin1String("tools_hub")) return FloatingIcons::ToolsHub;
     if (id == QLatin1String("launcher")) return FloatingIcons::Launcher;
+    if (id == QLatin1String("close_active")) return FloatingIcons::Close;
     if (id == QLatin1String("sys_wifi")) return FloatingIcons::Wifi;
     if (id == QLatin1String("sys_bluetooth")) return FloatingIcons::Bluetooth;
     if (id == QLatin1String("sys_mihomo")) return FloatingIcons::Proxy;
@@ -637,6 +638,9 @@ void RadialFanOverlay::recomputeFanLayout()
         } else if (id == QLatin1String("ime")) {
             item->shortLabel = QStringLiteral("输入法");
             item->accentColor = QColor("#7dd3fc");
+        } else if (id == QLatin1String("close_active")) {
+            item->shortLabel = QStringLiteral("关闭");
+            item->accentColor = QColor("#ff5f57");
         }
     };
 
@@ -769,8 +773,11 @@ void RadialFanOverlay::recomputeFanLayout()
     }
     if (windowQueue.isEmpty()) return;
 
+    const bool includeCloseActive = !openWins.isEmpty();
     const int totalWins = windowQueue.size();
+    const int totalOuterSlots = totalWins + (includeCloseActive ? 1 : 0);
     const double halfScanSweep = cornerQuadrant ? 47.0 : 87.0;
+    const double preferredCloseTailMag = cornerQuadrant ? 47.0 : 80.0;
 
     auto scanArcSegments = [&](qreal radius, const QRectF &safeBounds) -> QList<QPair<double, double>> {
         QList<QPair<double, double>> runs;
@@ -799,10 +806,10 @@ void RadialFanOverlay::recomputeFanLayout()
 
     // Adaptive diameter solver: keeps spacious 48-50pt orbs for everyday window counts,
     // and smoothly tightens down only when 40..100+ windows are open so every window fits on-screen!
-    qreal outerDiameter = (totalWins <= 8 ? 50.0
-        : (totalWins <= 20 ? 46.0
-           : (totalWins <= 40 ? 42.0
-              : (totalWins <= 65 ? 37.0 : 33.0)))) * scale;
+    qreal outerDiameter = (totalOuterSlots <= 8 ? 50.0
+        : (totalOuterSlots <= 20 ? 46.0
+           : (totalOuterSlots <= 40 ? 42.0
+              : (totalOuterSlots <= 65 ? 37.0 : 33.0)))) * scale;
     outerDiameter = qBound(22.0, outerDiameter, 52.0);
 
     while (outerDiameter > 22.5) {
@@ -811,20 +818,37 @@ void RadialFanOverlay::recomputeFanLayout()
         const qreal firstGap = (m_slotDiameter + outerDiameter) * 0.5 + qMax(14.0, 18.0 * scale);
         const QRectF safe = QRectF(bounds).adjusted(halfD + 5.0, halfD + 5.0, -halfD - 5.0, -halfD - 5.0);
         int estCap = 0;
-        for (int r = 1; r <= 36 && estCap < totalWins; ++r) {
+        for (int r = 1; r <= 36 && estCap < totalOuterSlots; ++r) {
             const qreal radius = m_fanRadius + firstGap + (r - 1) * stepR;
-            const auto segs = scanArcSegments(radius, safe);
+            auto segs = scanArcSegments(radius, safe);
             if (segs.isEmpty()) {
                 if (radius > qMax(bounds.width(), bounds.height())) break;
                 continue;
             }
+            if (reverseSweep) {
+                std::reverse(segs.begin(), segs.end());
+            }
             const double chordRatio = qMin(0.95, (outerDiameter + 4.5 * scale) / (2.0 * radius));
             const double minStep = qMax(3.6, qRadiansToDegrees(2.0 * qAsin(chordRatio)));
-            for (const auto &seg : segs) {
-                estCap += qMax(1, static_cast<int>(qFloor((seg.second - seg.first) / minStep)) + 1);
+            for (int si = 0; si < segs.size(); ++si) {
+                const auto &seg = segs[si];
+                if (r == 1 && includeCloseActive && si == segs.size() - 1) {
+                    const double closeOff = reverseSweep
+                        ? qBound(seg.first, -preferredCloseTailMag, seg.second)
+                        : qBound(seg.first, preferredCloseTailMag, seg.second);
+                    estCap += 1; // fixed close_active orb at Ring 1 tail
+                    const double appSpan = reverseSweep
+                        ? (seg.second - (closeOff + minStep))
+                        : ((closeOff - minStep) - seg.first);
+                    if (appSpan >= 0.0) {
+                        estCap += qMax(1, static_cast<int>(qFloor(appSpan / minStep)) + 1);
+                    }
+                } else {
+                    estCap += qMax(1, static_cast<int>(qFloor((seg.second - seg.first) / minStep)) + 1);
+                }
             }
         }
-        if (estCap >= totalWins) break;
+        if (estCap >= totalOuterSlots) break;
         outerDiameter = qMax(22.0, outerDiameter - 2.5);
     }
 
@@ -846,7 +870,8 @@ void RadialFanOverlay::recomputeFanLayout()
     };
 
     int winCursor = 0;
-    for (int r = 1; r <= 42 && winCursor < totalWins; ++r) {
+    bool closePlaced = !includeCloseActive;
+    for (int r = 1; r <= 42 && (winCursor < totalWins || !closePlaced); ++r) {
         const qreal radius = m_fanRadius + firstRingGap + (r - 1) * ringStep;
         auto segs = scanArcSegments(radius, safeBounds);
         if (segs.isEmpty()) {
@@ -863,18 +888,58 @@ void RadialFanOverlay::recomputeFanLayout()
         const qreal ringProg = qBound(0.0, (m_progress - ringDelay) / qMax(0.25, 1.0 - ringDelay), 1.0);
         const qreal effProg = (m_mode == FlickFanMode) ? 1.0 : ringProg;
 
+        // Pin "Close Active Window" at the fixed tail anchor of Ring 1 (last segment's tail),
+        // so muscle memory stays rock-solid across 1..100+ open windows and apps overflow to Ring 2+.
+        double reservedCloseOffset = 0.0;
+        QPointF reservedCloseCenter;
+        bool hasReservedClose = false;
+        if (!closePlaced) {
+            const auto &lastSeg = segs.last();
+            const double targetOff = reverseSweep
+                ? qBound(lastSeg.first, -preferredCloseTailMag, lastSeg.second)
+                : qBound(lastSeg.first, preferredCloseTailMag, lastSeg.second);
+            const double stepIn = reverseSweep ? 1.0 : -1.0;
+            const int maxTries = qMax(1, static_cast<int>(qCeil(lastSeg.second - lastSeg.first)) + 1);
+            for (int t = 0; t < maxTries; ++t) {
+                const double candOff = targetOff + stepIn * t;
+                if (candOff < lastSeg.first - 0.01 || candOff > lastSeg.second + 0.01) break;
+                const double rad = qDegreesToRadians(centerDeg + candOff);
+                const QPointF pt = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
+                if (safeBounds.contains(pt) && fitsWithoutOverlap(pt, outerDiameter)) {
+                    reservedCloseOffset = candOff;
+                    reservedCloseCenter = pt;
+                    hasReservedClose = true;
+                    break;
+                }
+            }
+        }
+
         int placedInRing = 0;
-        for (const auto &seg : segs) {
+        for (int si = 0; si < segs.size(); ++si) {
             if (winCursor >= totalWins) break;
-            const double arcSpanDeg = seg.second - seg.first;
+            QPair<double, double> seg = segs[si];
+            const bool isCloseSeg = (hasReservedClose && si == segs.size() - 1);
+            if (isCloseSeg) {
+                if (reverseSweep) {
+                    seg.first = reservedCloseOffset + minAngleStep;
+                } else {
+                    seg.second = reservedCloseOffset - minAngleStep;
+                }
+                if (seg.second < seg.first - 0.01) {
+                    continue;
+                }
+            }
+
+            const double arcSpanDeg = qMax(0.0, seg.second - seg.first);
             const int segMaxCap = qMax(1, static_cast<int>(qFloor(arcSpanDeg / minAngleStep)) + 1);
             const int remaining = totalWins - winCursor;
             int count = qMin(segMaxCap, remaining);
 
             // Stagger odd/even parity gently when multiple rings exist so honeycombs interleave cleanly
             if (segs.size() == 1 && count > 1 && remaining > count) {
+                const int effectiveCount = count + (isCloseSeg ? 1 : 0);
                 const bool wantEven = (r % 2 == 1);
-                if (((count % 2 == 0) != wantEven) && count - 1 >= 2) {
+                if (((effectiveCount % 2 == 0) != wantEven) && count - 1 >= 2) {
                     --count;
                 }
             }
@@ -892,6 +957,10 @@ void RadialFanOverlay::recomputeFanLayout()
                 const QPointF finalCenter = m_ballCenterGlobal + QPointF(qCos(rad), qSin(rad)) * radius;
                 if (!safeBounds.contains(finalCenter)) continue;
                 if (!fitsWithoutOverlap(finalCenter, outerDiameter)) continue;
+                if (hasReservedClose &&
+                    QLineF(finalCenter, reservedCloseCenter).length() < outerDiameter + 3.0) {
+                    continue;
+                }
 
                 RadialSlotItem item = windowQueue[winCursor++];
                 item.ringIndex = r;
@@ -908,6 +977,28 @@ void RadialFanOverlay::recomputeFanLayout()
                 finalDiametersPlaced.append(outerDiameter);
                 ++placedInRing;
             }
+        }
+
+        if (hasReservedClose) {
+            RadialSlotItem closeItem;
+            closeItem.kind = RadialSlotItem::ActionSlot;
+            closeItem.ringIndex = r;
+            closeItem.id = QStringLiteral("close_active");
+            closeItem.label = m_owner->actionLabel(closeItem.id);
+            populateFixedActionMeta(&closeItem);
+            closeItem.finalCenterGlobal = reservedCloseCenter;
+            closeItem.centerGlobal = (m_mode == FlickFanMode)
+                ? reservedCloseCenter
+                : (m_ballCenterGlobal + (reservedCloseCenter - m_ballCenterGlobal) * effProg);
+            const qreal dNow = (m_mode == FlickFanMode) ? outerDiameter : (outerDiameter * (0.35 + 0.65 * effProg));
+            closeItem.rectGlobal = QRectF(closeItem.centerGlobal.x() - dNow * 0.5,
+                                          closeItem.centerGlobal.y() - dNow * 0.5,
+                                          dNow, dNow);
+            m_slots.append(closeItem);
+            finalCentersPlaced.append(reservedCloseCenter);
+            finalDiametersPlaced.append(outerDiameter);
+            ++placedInRing;
+            closePlaced = true;
         }
 
         if (placedInRing > 0) {
@@ -1014,6 +1105,28 @@ QString RadialFanOverlay::activeLabelText() const
         }
     } else if (item.kind == RadialSlotItem::TrayMenuSlot) {
         text = item.trayItem.title + QStringLiteral(" › ") + item.label;
+    } else if (item.id == QLatin1String("close_active") && m_owner) {
+        const QList<DockAppEntry> openWins = m_owner->dockModel()->openWindows();
+        const DockAppEntry *target = nullptr;
+        for (const DockAppEntry &w : openWins) {
+            if (w.active && !w.minimized) {
+                target = &w;
+                break;
+            }
+        }
+        if (!target) {
+            for (const DockAppEntry &w : openWins) {
+                if (w.active) {
+                    target = &w;
+                    break;
+                }
+            }
+        }
+        if (target && !target->name.trimmed().isEmpty()) {
+            text = QStringLiteral("关闭当前 · ") + target->name.trimmed();
+        } else {
+            text = QStringLiteral("关闭当前窗口");
+        }
     } else if (item.id == QLatin1String("tray_hub") && m_owner) {
         const SystemStatusSnapshot &st = m_owner->statusMonitor()->snapshot();
         if (st.unreadNotifications > 0) {
@@ -1089,7 +1202,9 @@ void RadialFanOverlay::updateHitMask()
                               QRegion::Ellipse);
         }
         for (const RadialSlotItem &s : m_slots) {
-            const int pad = (s.kind == RadialSlotItem::AppSlot || s.kind == RadialSlotItem::NotificationSlot) ? 16 : 12;
+            const int pad = (s.kind == RadialSlotItem::AppSlot ||
+                             s.kind == RadialSlotItem::NotificationSlot ||
+                             s.id == QLatin1String("close_active")) ? 16 : 12;
             const QRect local = s.rectGlobal.translated(-origin).toAlignedRect().adjusted(-pad, -pad, pad, pad);
             if (!local.isEmpty())
                 region += QRegion(local, QRegion::Ellipse);
@@ -1178,7 +1293,8 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     qreal directBestDist = 1e9;
     for (int i = 0; i < m_slots.size(); ++i) {
         if (pastRing0 && m_slots[i].ringIndex == 0) continue;
-        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + 6.0;
+        const qreal pad = (m_slots[i].id == QLatin1String("close_active")) ? 3.0 : 6.0;
+        const qreal hitR = m_slots[i].rectGlobal.width() * 0.5 + pad;
         const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
         if (d <= hitR && d < directBestDist) {
             directBestDist = d;
@@ -1192,6 +1308,7 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
     // - Inside Ring 0: angular sector match on the 5 fixed buttons.
     // - Past Ring 0: 2D Euclidean Voronoi snap across all outer-ring open windows (ringIndex >= 1),
     //   so partially filled outer rings never create dead zones and Ring 0 never pulls back!
+    //   Destructive close_active is excluded from magnetic Voronoi snap so swipes never misfire it.
     if (dist > m_outermostRadius + 40.0) return -1;
 
     if (pastRing0) {
@@ -1199,6 +1316,7 @@ int RadialFanOverlay::hitSlotAtGlobal(const QPointF &globalPt, bool magneticSect
         qreal nearestDist = 1e9;
         for (int i = 0; i < m_slots.size(); ++i) {
             if (m_slots[i].ringIndex < 1) continue;
+            if (m_slots[i].id == QLatin1String("close_active")) continue;
             const qreal maxSnap = qMax(48.0, m_slots[i].rectGlobal.width() * 1.18);
             const qreal d = QLineF(globalPt, m_slots[i].centerGlobal).length();
             if (d <= maxSnap && d < nearestDist) {
@@ -1840,7 +1958,10 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
         }
         if (m_mode == FlickFanMode && m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size()) {
             const QPointF slotLocal = m_slots[m_highlightedSlot].centerGlobal - origin;
-            p.setPen(QPen(QColor(102, 188, 255, 175), 2.5, Qt::SolidLine, Qt::RoundCap));
+            const QColor rayColor = (m_slots[m_highlightedSlot].id == QLatin1String("close_active"))
+                ? QColor(255, 95, 87, 200)
+                : QColor(102, 188, 255, 175);
+            p.setPen(QPen(rayColor, 2.5, Qt::SolidLine, Qt::RoundCap));
             p.drawLine(localBallCenter, slotLocal);
         }
         p.restore();
@@ -1860,7 +1981,9 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
         const RadialSlotItem &item = m_slots[i];
         QRectF slotRect = item.rectGlobal.translated(-origin);
         const bool selected = (i == m_highlightedSlot);
-        if (selected && (item.kind == RadialSlotItem::AppSlot || item.kind == RadialSlotItem::NotificationSlot) &&
+        if (selected && (item.kind == RadialSlotItem::AppSlot ||
+                         item.kind == RadialSlotItem::NotificationSlot ||
+                         item.id == QLatin1String("close_active")) &&
             slotRect.width() < 44.0) {
             const qreal grown = qMin(48.0, slotRect.width() * 1.28);
             const QPointF sc = slotRect.center();
@@ -2103,6 +2226,47 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
                                             slotRect.top() + slotRect.height() * 0.14),
                                  qMax(1, item.unreadCount), font());
             }
+        } else if (item.id == QLatin1String("close_active")) {
+            // Fixed Ring-1 tail "Close Active Window" crimson frosted glass orb:
+            // distinct macOS-inspired red accent with soft aura so it stands apart from open apps.
+            const QPointF c = slotRect.center();
+            const qreal haloRadius = slotRect.width() * (selected ? 0.72 : 0.64);
+            QRadialGradient halo(c, haloRadius);
+            if (selected) {
+                halo.setColorAt(0.00, QColor(255, 95, 87, 210));
+                halo.setColorAt(0.50, QColor(217, 56, 50, 118));
+                halo.setColorAt(1.00, QColor(180, 34, 34, 0));
+            } else {
+                halo.setColorAt(0.00, QColor(188, 46, 54, 128));
+                halo.setColorAt(0.55, QColor(110, 24, 32, 58));
+                halo.setColorAt(1.00, QColor(80, 16, 24, 0));
+            }
+            p.setPen(Qt::NoPen);
+            p.setBrush(halo);
+            p.drawEllipse(c, haloRadius, haloRadius);
+
+            const QRectF face = slotRect.adjusted(1.8, 1.8, -1.8, -1.8);
+            p.setBrush(QColor(0, 0, 0, 56));
+            p.drawEllipse(face.translated(0, 1.6));
+
+            QLinearGradient grad(face.topLeft(), face.bottomRight());
+            if (selected) {
+                grad.setColorAt(0.0, QColor(255, 95, 87, 248));
+                grad.setColorAt(1.0, QColor(212, 48, 44, 250));
+            } else {
+                grad.setColorAt(0.0, QColor(152, 42, 48, 240));
+                grad.setColorAt(1.0, QColor(78, 22, 28, 246));
+            }
+            p.setBrush(grad);
+            p.setPen(QPen(selected ? QColor("#ffaaa4") : QColor(255, 108, 98, 210), selected ? 2.1 : 1.5));
+            p.drawEllipse(face);
+
+            const qreal iconDim = face.width() * 0.56;
+            const QRectF iconRect(face.center().x() - iconDim * 0.5,
+                                  face.center().y() - iconDim * 0.5,
+                                  iconDim, iconDim);
+            FloatingIcons::draw(p, FloatingIcons::Close, iconRect,
+                                selected ? QColor("#ffffff") : QColor("#ffe4e2"));
         } else {
             // Inner rings (Ring 1 & Ring 2): tactile obsidian glass quick-action spheres
             // Special styling for KWin virtual desktop slots (vdesk1..vdesk4 -> 広/栞/発/伝)
@@ -2215,7 +2379,9 @@ void RadialFanOverlay::paintEvent(QPaintEvent *)
             p.setFont(f);
             const QFontMetrics fm(f);
             const QString elided = fm.elidedText(rawLabelText, Qt::ElideRight, qMax(80, int(pill.width()) - 24));
-            p.setPen(QPen(QColor(255, 255, 255, 55), 1.0));
+            const bool closeHover = (m_highlightedSlot >= 0 && m_highlightedSlot < m_slots.size() &&
+                                     m_slots[m_highlightedSlot].id == QLatin1String("close_active"));
+            p.setPen(QPen(closeHover ? QColor(255, 95, 87, 165) : QColor(255, 255, 255, 55), closeHover ? 1.2 : 1.0));
             p.setBrush(QColor(18, 22, 30, 232));
             p.drawRoundedRect(pill, 16, 16);
             p.setPen(QColor("#f5f8fd"));
@@ -2255,7 +2421,8 @@ const QStringList &FloatingBall::availableActions()
         QStringLiteral("win_hub"),
         QStringLiteral("tray_hub"),
         QStringLiteral("sys_hub"),
-        QStringLiteral("tools_hub")
+        QStringLiteral("tools_hub"),
+        QStringLiteral("close_active")
     };
     return ids;
 }
@@ -2640,6 +2807,7 @@ QString FloatingBall::actionLabel(const QString &id) const
     if (id == QLatin1String("notifications")) return tr("通知中心");
     if (id == QLatin1String("sys_hub")) return tr("系统控制中心");
     if (id == QLatin1String("tools_hub")) return tr("常用触控工具");
+    if (id == QLatin1String("close_active")) return tr("关闭当前窗口");
     return id;
 }
 
@@ -3505,6 +3673,29 @@ void FloatingBall::executeAction(const QString &id)
     else if (id == QLatin1String("trash")) toastOutcome(DesktopActions::openTrash());
     else if (id == QLatin1String("launcher")) toggleAppLauncher();
     else if (id == QLatin1String("sys_hub")) openSystemPopover(SystemPopover::TabHome);
+    else if (id == QLatin1String("close_active")) {
+        const QList<DockAppEntry> openWins = dockModel()->openWindows();
+        const DockAppEntry *target = nullptr;
+        for (const DockAppEntry &w : openWins) {
+            if (w.active && !w.minimized) {
+                target = &w;
+                break;
+            }
+        }
+        if (!target) {
+            for (const DockAppEntry &w : openWins) {
+                if (w.active) {
+                    target = &w;
+                    break;
+                }
+            }
+        }
+        if (target) {
+            toastOutcome(dockModel()->quitApp(*target));
+        } else {
+            toastOutcome(DesktopActions::closeActiveWindow());
+        }
+    }
 }
 
 void FloatingBall::captureRegion()
@@ -5223,7 +5414,7 @@ void FloatingBall::showSettings()
 
     auto *gestureGuide = new QLabel(
         tr("交互提示：\n"
-           "• 最内圈固定 5 个系统总控按钮；外侧自动把所有已打开窗口分层展开（支持鼠标左键切换、中键直接关闭）\n"
+           "• 最内圈固定 5 个系统总控按钮；第 2 层起自动把已打开窗口分层展开，第 2 层末端固定「关闭当前窗口」红球（任意窗口也支持鼠标中键快关）\n"
            "• 有新消息的窗口会在正圆主球边缘对应方位亮起红点，点开主球顺着方向一眼命中\n"
            "• 向屏幕外边框方向轻推主球可手动临时收成竖胶囊；全屏看视频/游戏会自动靠边形变"),
         appearance);
