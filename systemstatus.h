@@ -105,6 +105,10 @@ struct SystemStatusSnapshot {
     int memoryPercent = 0; // 0..100
     double memoryUsedGiB = 0.0;
     double memoryTotalGiB = 0.0;
+    bool diskAvailable = false;
+    int diskPercent = 0; // 0..100
+    double diskUsedGiB = 0.0;
+    double diskTotalGiB = 0.0;
 
     // Network (bottom 5 signal dots; red when offline)
     bool networkConnected = false;

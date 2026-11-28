@@ -19,6 +19,7 @@
 #include <QVariantAnimation>
 #include <QWidget>
 #include "appdock.h"
+#include "statusorbrenderer.h"
 #include "systemstatus.h"
 
 class AppLauncherPopover;
@@ -222,6 +223,7 @@ public:
     void openSystemPopover(int tab);
     void toggleAppLauncher();
     void showSettings();
+    void showOrbFaceSettings();
 
     ClipboardBubble *clipboardBubble();
     QuickDeck *quickDeck();
@@ -243,6 +245,8 @@ public:
     void setDockModeEnabled(bool enabled);
     bool statusOrbMode() const { return m_statusOrbMode; }
     void setStatusOrbMode(bool enabled);
+    const StatusOrbRenderer::FaceConfig &orbFaceConfig() const { return m_orbFaceConfig; }
+    void setOrbFaceConfig(const StatusOrbRenderer::FaceConfig &cfg);
     bool autoHideEnabled() const { return m_autoHideEnabled; }
     void setAutoHideEnabled(bool enabled);
     bool autoTuckFullscreen() const { return m_autoTuckFullscreen; }
@@ -341,6 +345,7 @@ private:
     void syncSharedPreferencesFrom(const FloatingBall *source);
     void broadcastSharedPreferences();
     void setHiddenOnThisScreen(bool hidden);
+    void openSettingsDialog(int initialTab);
     void initTray();
     void setBallVisible(bool visible);
 
@@ -394,6 +399,7 @@ private:
     int m_ringCount = kDefaultRingCount; // Preserved for settings compat; outer rings auto-size to open windows
     bool m_dockModeEnabled = true;       // outer rings expand all live open windows
     bool m_statusOrbMode = true;         // Primary circular 24H clock + status ball
+    StatusOrbRenderer::FaceConfig m_orbFaceConfig;
     bool m_multiScreenEnabled = true;    // Scheme A: independent docked orb per screen, shared content
     bool m_hiddenOnThisScreen = false;
     bool m_userHiddenAll = false;

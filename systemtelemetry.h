@@ -15,6 +15,10 @@ struct Sample {
     int memoryPercent = 0; // 0..100
     double memoryUsedGiB = 0.0;
     double memoryTotalGiB = 0.0;
+    bool diskAvailable = false;
+    int diskPercent = 0; // 0..100
+    double diskUsedGiB = 0.0;
+    double diskTotalGiB = 0.0;
 };
 
 struct CpuTickSnapshot {
@@ -40,10 +44,16 @@ public:
 private:
     bool readCpuRaw(int *percentOut);
     bool readMemory(int *percentOut, double *usedGiBOut, double *totalGiBOut) const;
+    bool readDisk(int *percentOut, double *usedGiBOut, double *totalGiBOut) const;
 
     CpuTickSnapshot m_prevCpu;
     bool m_hasEma = false;
     double m_cpuEma = 0.0;
+    int m_diskPollTick = 0;
+    bool m_hasDiskCache = false;
+    int m_cachedDiskPct = 0;
+    double m_cachedDiskUsedGiB = 0.0;
+    double m_cachedDiskTotalGiB = 0.0;
 };
 
 void applySample(const Sample &sample, SystemStatusSnapshot *snapshot);

@@ -50,6 +50,8 @@ function(floatingball_configure_common target)
         systemstatus.cpp systemstatus.h
         systemtelemetry.cpp systemtelemetry.h
         statusorbrenderer.cpp statusorbrenderer.h
+        statusorbconfig.cpp
+        orbfacestudio.cpp orbfacestudio.h
         desktopactions.cpp desktopactions.h
         panelbackdrop.cpp panelbackdrop.h
     )

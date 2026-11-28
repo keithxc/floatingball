@@ -1,9 +1,11 @@
 #include "systemtelemetry.h"
 #include "systemstatus.h"
 
+#include <QDir>
 #include <QFile>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QStorageInfo>
 #include <QtMath>
 
 #include <cstdlib>
@@ -201,6 +203,24 @@ bool Sampler::readMemory(int *percentOut, double *usedGiBOut, double *totalGiBOu
 #endif
 }
 
+bool Sampler::readDisk(int *percentOut, double *usedGiBOut, double *totalGiBOut) const
+{
+    // Query user's home volume so macOS APFS reports /System/Volumes/Data instead of the read-only OS snapshot.
+    QStorageInfo storage(QDir::homePath());
+    if (!storage.isValid() || storage.bytesTotal() <= 0) storage = QStorageInfo::root();
+    if (!storage.isValid() || storage.bytesTotal() <= 0) return false;
+    const qint64 total = storage.bytesTotal();
+    const qint64 avail = qMax<qint64>(0, storage.bytesAvailable());
+    const qint64 used = qMax<qint64>(0, total - avail);
+    const double totalGiB = static_cast<double>(total) / kGiB;
+    const double usedGiB = static_cast<double>(used) / kGiB;
+    const int pct = qBound(0, qRound(static_cast<double>(used) * 100.0 / static_cast<double>(total)), 100);
+    if (percentOut) *percentOut = pct;
+    if (usedGiBOut) *usedGiBOut = usedGiB;
+    if (totalGiBOut) *totalGiBOut = totalGiB;
+    return true;
+}
+
 Sample Sampler::sample()
 {
     Sample out;
@@ -219,6 +239,23 @@ Sample Sampler::sample()
         out.memoryUsedGiB = usedGiB;
         out.memoryTotalGiB = totalGiB;
     }
+    // Refresh disk statfs every ~25s (every 10 samples) to stay virtually zero-cost.
+    if (!m_hasDiskCache || (m_diskPollTick++ % 10) == 0) {
+        int diskPct = 0;
+        double dUsed = 0.0, dTotal = 0.0;
+        if (readDisk(&diskPct, &dUsed, &dTotal)) {
+            m_hasDiskCache = true;
+            m_cachedDiskPct = diskPct;
+            m_cachedDiskUsedGiB = dUsed;
+            m_cachedDiskTotalGiB = dTotal;
+        }
+    }
+    if (m_hasDiskCache) {
+        out.diskAvailable = true;
+        out.diskPercent = m_cachedDiskPct;
+        out.diskUsedGiB = m_cachedDiskUsedGiB;
+        out.diskTotalGiB = m_cachedDiskTotalGiB;
+    }
     return out;
 }
 
@@ -231,6 +268,10 @@ void applySample(const Sample &sample, SystemStatusSnapshot *snapshot)
     snapshot->memoryPercent = sample.memoryPercent;
     snapshot->memoryUsedGiB = sample.memoryUsedGiB;
     snapshot->memoryTotalGiB = sample.memoryTotalGiB;
+    snapshot->diskAvailable = sample.diskAvailable;
+    snapshot->diskPercent = sample.diskPercent;
+    snapshot->diskUsedGiB = sample.diskUsedGiB;
+    snapshot->diskTotalGiB = sample.diskTotalGiB;
 }
 
 QString openSystemMonitor()

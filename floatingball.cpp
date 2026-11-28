@@ -4,6 +4,7 @@
 #include "clipboardbubble.h"
 #include "desktopactions.h"
 #include "floatingwindow.h"
+#include "orbfacestudio.h"
 #include "panelbackdrop.h"
 #include "quickdeck.h"
 #include "statusorbrenderer.h"
@@ -2853,6 +2854,7 @@ void FloatingBall::loadPreferences()
     const bool defaultStatusOrb = false;
 #endif
     m_statusOrbMode = s.value("ball/statusOrbMode", defaultStatusOrb).toBool();
+    m_orbFaceConfig = StatusOrbRenderer::loadFaceConfig(s);
     m_multiScreenEnabled = s.value("ball/multiScreenEnabled", true).toBool();
     m_preferredDiameter = qBound(qreal(kMinDiameter), s.value("ball/diameter", m_statusOrbMode ? 60.0 : 56.0).toReal(), qreal(kMaxDiameter));
     m_idleOpacity = qBound(0.15, s.value("ball/idleOpacity", 0.82).toReal(), 1.0);
@@ -2881,6 +2883,7 @@ void FloatingBall::savePreferences()
     s.setValue("ball/ringLayoutVersion", 4);
     s.setValue("ball/dockModeEnabled", m_dockModeEnabled);
     s.setValue("ball/statusOrbMode", m_statusOrbMode);
+    StatusOrbRenderer::saveFaceConfig(s, m_orbFaceConfig);
     s.setValue("ball/multiScreenEnabled", m_multiScreenEnabled);
     s.setValue("ball/diameter", m_preferredDiameter);
     s.setValue("ball/idleOpacity", m_idleOpacity);
@@ -2934,6 +2937,7 @@ void FloatingBall::syncSharedPreferencesFrom(const FloatingBall *source)
     m_ringCount = source->m_ringCount;
     m_dockModeEnabled = source->m_dockModeEnabled;
     m_statusOrbMode = source->m_statusOrbMode;
+    m_orbFaceConfig = source->m_orbFaceConfig;
     m_multiScreenEnabled = source->m_multiScreenEnabled;
     m_idleOpacity = source->m_idleOpacity;
     m_activeOpacity = source->m_activeOpacity;
@@ -3146,6 +3150,26 @@ void FloatingBall::setStatusOrbMode(bool enabled)
     if (m_orbitVisible && m_fanOverlay) m_fanOverlay->refreshLiveLayout();
 }
 
+void FloatingBall::setOrbFaceConfig(const StatusOrbRenderer::FaceConfig &cfg)
+{
+    if (m_primaryPeer) {
+        m_primaryPeer->setOrbFaceConfig(cfg);
+        return;
+    }
+    if (m_orbFaceConfig == cfg) return;
+    m_orbFaceConfig = cfg;
+    if (m_statusOrbMode) {
+        const QString tipStr = StatusOrbRenderer::buildTooltip(statusMonitor()->snapshot(), m_orbFaceConfig);
+        if (!tipStr.isEmpty()) {
+            setToolTip(tipStr);
+            for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
+        }
+    }
+    savePreferences();
+    broadcastSharedPreferences();
+    update();
+}
+
 void FloatingBall::setAutoHideEnabled(bool enabled)
 {
     if (m_primaryPeer) {
@@ -3220,7 +3244,7 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
         m_statusMonitor = new SystemStatusMonitor(this);
         connect(m_statusMonitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &st) {
             if (m_statusOrbMode) {
-                const QString tipStr = StatusOrbRenderer::buildTooltip(st);
+                const QString tipStr = StatusOrbRenderer::buildTooltip(st, m_orbFaceConfig);
                 if (!tipStr.isEmpty()) {
                     setToolTip(tipStr);
                     for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
@@ -4908,17 +4932,19 @@ void FloatingBall::paintEvent(QPaintEvent *)
                     p.drawText(QRectF(capRect.left(), c.y() + 0.5, capRect.width(), 16.0), Qt::AlignCenter, mm);
                 }
 
-                // Bottom compact battery or desktop memory bar
-                StatusOrbRenderer::paintVerticalCapsuleBar(p, capRect, st);
+                // Bottom compact bar (follows top gauge metric)
+                StatusOrbRenderer::paintVerticalCapsuleBar(p, capRect, st, m_orbFaceConfig);
 
                 // Project directional message radar dots onto the inner screen-facing edge!
-                const qreal innerX = (m_dockSide == DockLeft) ? (capRect.right() - 3.2) : (capRect.left() + 3.2);
-                for (qreal rad : m_attentionAnglesRad) {
-                    const qreal normY = qBound(-0.82, std::sin(rad), 0.82);
-                    const QPointF dp(innerX, c.y() + normY * (capRect.height() * 0.36));
-                    p.setPen(QPen(QColor("#ffffff"), 0.9));
-                    p.setBrush(QColor("#ff4d6d"));
-                    p.drawEllipse(dp, 3.2, 3.2);
+                if (m_orbFaceConfig.showRadarDots) {
+                    const qreal innerX = (m_dockSide == DockLeft) ? (capRect.right() - 3.2) : (capRect.left() + 3.2);
+                    for (qreal rad : m_attentionAnglesRad) {
+                        const qreal normY = qBound(-0.82, std::sin(rad), 0.82);
+                        const QPointF dp(innerX, c.y() + normY * (capRect.height() * 0.36));
+                        p.setPen(QPen(QColor("#ffffff"), 0.9));
+                        p.setBrush(QColor("#ff4d6d"));
+                        p.drawEllipse(dp, 3.2, 3.2);
+                    }
                 }
             } else {
                 // Horizontal capsule on Top/Bottom screen edges
@@ -4929,13 +4955,15 @@ void FloatingBall::paintEvent(QPaintEvent *)
                 p.setPen(!imeFlash.isEmpty() ? QColor("#7dd3fc") : QColor("#f8fafc"));
                 p.drawText(capRect, Qt::AlignCenter, !imeFlash.isEmpty() ? imeFlash : (hh + QLatin1Char(':') + mm));
 
-                const qreal innerY = (m_dockSide == DockTop) ? (capRect.bottom() - 3.2) : (capRect.top() + 3.2);
-                for (qreal rad : m_attentionAnglesRad) {
-                    const qreal normX = qBound(-0.82, std::cos(rad), 0.82);
-                    const QPointF dp(c.x() + normX * (capRect.width() * 0.36), innerY);
-                    p.setPen(QPen(QColor("#ffffff"), 0.9));
-                    p.setBrush(QColor("#ff4d6d"));
-                    p.drawEllipse(dp, 3.2, 3.2);
+                if (m_orbFaceConfig.showRadarDots) {
+                    const qreal innerY = (m_dockSide == DockTop) ? (capRect.bottom() - 3.2) : (capRect.top() + 3.2);
+                    for (qreal rad : m_attentionAnglesRad) {
+                        const qreal normX = qBound(-0.82, std::cos(rad), 0.82);
+                        const QPointF dp(c.x() + normX * (capRect.width() * 0.36), innerY);
+                        p.setPen(QPen(QColor("#ffffff"), 0.9));
+                        p.setBrush(QColor("#ff4d6d"));
+                        p.drawEllipse(dp, 3.2, 3.2);
+                    }
                 }
             }
         }
@@ -4995,7 +5023,7 @@ void FloatingBall::paintEvent(QPaintEvent *)
                                    iconDim, iconDim),
                             QColor("#f5f8fd"));
     } else if (m_statusOrbMode) {
-        StatusOrbRenderer::paintFace(p, sphereCenter, d, radius, font(), st, hh, mm, imeFlash);
+        StatusOrbRenderer::paintFace(p, sphereCenter, d, radius, font(), st, hh, mm, imeFlash, m_orbFaceConfig);
     } else {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(QColor(255, 255, 255, 130), qMax(1.4, d * 0.036)));
@@ -5008,7 +5036,7 @@ void FloatingBall::paintEvent(QPaintEvent *)
     // ★ 7. Directional Message Radar Dots on the Main Ball Rim! ★
     // Each notifying window in the outer rings (or tray attention) projects a crisp dot
     // at its exact expansion bearing angle on the main ball's perimeter!
-    if (m_statusOrbMode && !m_attentionAnglesRad.isEmpty()) {
+    if (m_statusOrbMode && m_orbFaceConfig.showRadarDots && !m_attentionAnglesRad.isEmpty()) {
         const qreal rimR = radius * 0.89;
         const qreal dotR = qMax(2.6, d * 0.050);
         for (qreal rad : m_attentionAnglesRad) {
@@ -5088,6 +5116,7 @@ void FloatingBall::initTray()
         const int count = dockModel()->importFromSystemDock();
         DesktopActions::showToast(tr("✓ 已同步 %1 个系统 Dock 应用").arg(count), anchorCenterGlobal().toPoint());
     });
+    menu->addAction(tr("表盘自定义…"), this, &FloatingBall::showOrbFaceSettings);
     menu->addAction(tr("设置…"), this, &FloatingBall::showSettings);
     menu->addAction(tr("退出"), qApp, &QApplication::quit);
     m_trayIcon->setContextMenu(menu);
@@ -5173,6 +5202,7 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
         menu.addAction(tr("在此屏幕隐藏悬浮球"), this, [this] { setHiddenOnThisScreen(true); });
         menu.addAction(tr("恢复全部屏幕悬浮球"), this, &FloatingBall::restoreAllScreenBalls);
     }
+    menu.addAction(tr("表盘自定义…"), this, &FloatingBall::showOrbFaceSettings);
     menu.addAction(tr("设置…"), this, &FloatingBall::showSettings);
     if (m_trayIcon || (m_primaryPeer && m_primaryPeer->m_trayIcon))
         menu.addAction(tr("隐藏悬浮球"), this, [this] { setBallVisible(false); });
@@ -5183,10 +5213,14 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
     refreshBallOpacity();
 }
 
-void FloatingBall::showSettings()
+void FloatingBall::showSettings() { openSettingsDialog(1); }
+
+void FloatingBall::showOrbFaceSettings() { openSettingsDialog(0); }
+
+void FloatingBall::openSettingsDialog(int initialTab)
 {
     if (m_primaryPeer) {
-        m_primaryPeer->showSettings();
+        m_primaryPeer->openSettingsDialog(initialTab);
         return;
     }
     if (m_settingsOpen) return;
@@ -5195,12 +5229,27 @@ void FloatingBall::showSettings()
     closeFan(true);
     m_idleTimer->stop();
 
+    const StatusOrbRenderer::FaceConfig origFace = m_orbFaceConfig;
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("floatingballSettings"));
-    dialog.setWindowTitle(tr("FloatingBall · 多层悬浮球与悬浮 Dock 设置"));
+    dialog.setWindowTitle(tr("FloatingBall · 表盘自定义与设置"));
+    PanelBackdrop::configureFloatingSurface(&dialog, true);
     auto *layout = new QVBoxLayout(&dialog);
     auto *tabs = new QTabWidget(&dialog);
     layout->addWidget(tabs);
+
+    // Tab 0: Orb Face Studio & Live Preview
+    auto *orbStudio = new OrbFaceStudio(
+        statusMonitor(), m_orbFaceConfig, qRound(m_preferredDiameter), m_statusOrbMode, &dialog);
+    connect(orbStudio, &OrbFaceStudio::configChanged, &dialog, [this](const StatusOrbRenderer::FaceConfig &previewCfg) {
+        m_orbFaceConfig = previewCfg;
+        update();
+        for (FloatingBall *rep : replicaBalls()) {
+            rep->m_orbFaceConfig = previewCfg;
+            rep->update();
+        }
+    });
+    tabs->addTab(orbStudio, tr("表盘与预览"));
 
     // Tab 1: Appearance, Multi-Ring & Edge Ring
     auto *appearance = new QWidget(&dialog);
@@ -5213,6 +5262,7 @@ void FloatingBall::showSettings()
     auto *statusOrbCheck = new QCheckBox(tr("启用正圆双行 24H 时钟主球 + 方向消息雷达点（替代传统状态栏）"), appearance);
     statusOrbCheck->setObjectName(QStringLiteral("statusOrbCheck"));
     statusOrbCheck->setChecked(m_statusOrbMode);
+    connect(statusOrbCheck, &QCheckBox::toggled, orbStudio, &OrbFaceStudio::setStatusOrbEnabled);
 
     auto *multiScreenCheck = new QCheckBox(tr("多显示器每屏独立显示悬浮球（点开内容一致，各屏位置与展开方向独立）"), appearance);
     multiScreenCheck->setObjectName(QStringLiteral("multiScreenCheck"));
@@ -5223,6 +5273,7 @@ void FloatingBall::showSettings()
     diameter->setRange(kMinDiameter, kMaxDiameter);
     diameter->setValue(qRound(m_preferredDiameter));
     diameter->setSuffix(QStringLiteral(" px"));
+    connect(diameter, qOverload<int>(&QSpinBox::valueChanged), orbStudio, &OrbFaceStudio::setDiameter);
 
     auto *idle = new QSpinBox(appearance);
     idle->setRange(15, 100);
@@ -5402,6 +5453,7 @@ void FloatingBall::showSettings()
         autoHide->setChecked(false);
         autoTuckFs->setChecked(true);
         crosshairPull->setChecked(true);
+        orbStudio->resetDefaults();
         status->clear();
     });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&, this] {
@@ -5417,6 +5469,7 @@ void FloatingBall::showSettings()
         }
         m_dockModeEnabled = dockCheck->isChecked();
         setStatusOrbMode(statusOrbCheck->isChecked());
+        m_orbFaceConfig = orbStudio->config();
         m_multiScreenEnabled = multiScreenCheck->isChecked();
         m_snapEnabled = snap->isChecked();
         m_autoHideEnabled = autoHide->isChecked();
@@ -5438,13 +5491,25 @@ void FloatingBall::showSettings()
 
         if (!m_snapEnabled) m_dockSide = 0;
         else snapToEdge(false);
+        if (m_statusOrbMode) {
+            const QString tipStr = StatusOrbRenderer::buildTooltip(statusMonitor()->snapshot(), m_orbFaceConfig);
+            if (!tipStr.isEmpty()) {
+                setToolTip(tipStr);
+                for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
+            }
+        }
         savePreferences();
         syncScreenReplicas();
         broadcastSharedPreferences();
         dialog.accept();
     });
 
-    dialog.resize(520, 480);
-    dialog.exec();
+    tabs->setCurrentIndex(qBound(0, initialTab, tabs->count() - 1));
+    dialog.resize(620, 560);
+    if (dialog.exec() != QDialog::Accepted) {
+        m_orbFaceConfig = origFace;
+        update();
+        broadcastSharedPreferences();
+    }
     refreshBallOpacity();
 }

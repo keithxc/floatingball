@@ -1,12 +1,17 @@
 #include "floatingball.h"
+#include "orbfacestudio.h"
 #include "statusorbrenderer.h"
 #include "systempopover.h"
 #include "systemstatus.h"
 #include "systemtelemetry.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QImage>
+#include <QLabel>
+#include <QPushButton>
 #include <QSettings>
 #include <QToolButton>
 #include <QtMath>
@@ -58,6 +63,7 @@ int main(int argc, char **argv)
     }
     const QString outDir = QString::fromLocal8Bit(argv[1]);
     QDir().mkpath(outDir);
+    QDir(outDir + QStringLiteral("/settings")).removeRecursively();
 
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, outDir + QStringLiteral("/settings"));
@@ -136,9 +142,9 @@ int main(int argc, char **argv)
                   deskTip.contains(QStringLiteral("CPU 42%")),
               "desktop orb tooltip shows Memory (with GB) and CPU telemetry");
         const auto deskPill = StatusOrbRenderer::formatHeaderPill(desktop);
-        check(deskPill.text == QStringLiteral("CPU 42% · RAM 64%") &&
+        check(deskPill.text == QStringLiteral("C 42% · M 64%") &&
                   deskPill.accent == QLatin1String("blue") && deskPill.opensMonitor,
-              "desktop Control Center header pill shows CPU + RAM and opens Activity Monitor");
+              "desktop Control Center header pill shows compact non-eliding C/M readout and opens Activity Monitor");
 
         desktop.memoryPercent = 90;
         const auto hotPill = StatusOrbRenderer::formatHeaderPill(desktop);
@@ -229,10 +235,116 @@ int main(int argc, char **argv)
         ball.systemPopover()->setAutoDismissEnabled(false);
         app.processEvents();
         auto *pill = ball.systemPopover()->findChild<QToolButton *>(QStringLiteral("powerPill"));
-        check(pill != nullptr && pill->text() == QStringLiteral("CPU 78% · RAM 72%"),
-              "Control Center powerPill displays live CPU + RAM summary on desktop");
+        check(pill != nullptr && pill->text() == QStringLiteral("C 78% · M 72%"),
+              "Control Center powerPill displays compact non-eliding CPU + RAM summary on desktop");
         ball.systemPopover()->grab().save(outDir + QStringLiteral("/desktop-control-center-preview.png"));
         ball.systemPopover()->hide();
+
+        // 5. FaceConfig persistence, presets, Disk telemetry, custom slots & OrbFaceStudio live preview
+        {
+            SystemTelemetry::Sampler sampler;
+            const auto s = sampler.sample();
+            check(s.diskAvailable && s.diskTotalGiB > 1.0 && s.diskPercent >= 0 && s.diskPercent <= 100,
+                  "native SystemTelemetry::Sampler reads valid root/home Disk usage");
+
+            StatusOrbRenderer::FaceConfig custom;
+            custom.topArc = StatusOrbRenderer::MetricSlot::Disk;
+            custom.leftArc = StatusOrbRenderer::MetricSlot::Cpu;
+            custom.rightArc = StatusOrbRenderer::MetricSlot::Memory;
+            custom.bottomDots = StatusOrbRenderer::MetricSlot::Network;
+            custom.centerMode = StatusOrbRenderer::CenterMode::CpuMemory;
+            custom.accentTheme = StatusOrbRenderer::AccentTheme::Emerald;
+            custom.showPrivacyDots = false;
+            custom.showRadarDots = false;
+
+            QSettings cfgStore(outDir + QStringLiteral("/face-roundtrip.ini"), QSettings::IniFormat);
+            StatusOrbRenderer::saveFaceConfig(cfgStore, custom);
+            cfgStore.sync();
+            const auto loaded = StatusOrbRenderer::loadFaceConfig(cfgStore);
+            check(loaded == custom, "FaceConfig saves and loads all slots, centerMode, theme, and toggles verbatim");
+
+            // Apply custom face onto live FloatingBall and verify tooltip + persistence
+            desktop.diskAvailable = true;
+            desktop.diskPercent = 76;
+            desktop.diskUsedGiB = 350.0;
+            desktop.diskTotalGiB = 460.0;
+            ball.statusMonitor()->setSnapshotForTest(desktop);
+            ball.setOrbFaceConfig(custom);
+            app.processEvents();
+            check(ball.orbFaceConfig() == custom &&
+                      ball.toolTip().contains(QStringLiteral("磁盘 76%")) &&
+                      ball.toolTip().contains(QStringLiteral("CPU 78%")) &&
+                      ball.toolTip().contains(QStringLiteral("内存 72%")),
+                  "FloatingBall::setOrbFaceConfig updates active config and dynamic tooltip");
+
+            // Pure minimal preset hides outer gauges cleanly
+            const auto minimal = StatusOrbRenderer::presetConfig(QStringLiteral("minimal"));
+            ball.setOrbFaceConfig(minimal);
+            app.processEvents();
+            const QImage minImg = ball.grab().toImage();
+            const int leftLitMinimal = countBrightPixelsInArc(minImg, 145.0, 215.0, 0.74, 0.94);
+            check(leftLitMinimal == 0, "minimal preset cleanly hides left outer arc");
+
+            // Watch preset with 12-hour DialTicks renders visibly
+            const auto watch = StatusOrbRenderer::presetConfig(QStringLiteral("watch"));
+            ball.setOrbFaceConfig(watch);
+            app.processEvents();
+            const QImage watchImg = ball.grab().toImage();
+            watchImg.save(outDir + QStringLiteral("/watch-face-preview.png"));
+            const int tickLit = countBrightPixelsInArc(watchImg, 20.0, 160.0, 0.70, 0.92);
+            check(tickLit >= 6, "watch preset renders 12-hour DialTicks ring");
+
+            // OrbFaceStudio interactive widget + 3-view live preview canvas
+            OrbFaceStudio studio(ball.statusMonitor(), StatusOrbRenderer::FaceConfig{}, 60, true);
+            studio.resize(600, 420);
+            studio.show();
+            app.processEvents();
+
+            int emittedCount = 0;
+            StatusOrbRenderer::FaceConfig lastEmitted;
+            QObject::connect(&studio, &OrbFaceStudio::configChanged, &studio,
+                             [&](const StatusOrbRenderer::FaceConfig &c) {
+                ++emittedCount;
+                lastEmitted = c;
+            });
+
+            auto *telBtn = studio.findChild<QPushButton *>(QStringLiteral("orbPreset_telemetry"));
+            auto *simChk = studio.findChild<QCheckBox *>(QStringLiteral("orbPreviewSimulate"));
+            auto *tipLbl = studio.findChild<QLabel *>(QStringLiteral("orbTooltipPreview"));
+            auto *centerCombo = studio.findChild<QComboBox *>(QStringLiteral("orbCenterModeCombo"));
+            check(telBtn != nullptr && simChk != nullptr && tipLbl != nullptr && centerCombo != nullptr,
+                  "OrbFaceStudio exposes preset buttons, simulate toggle, slot combos, and tooltip preview");
+
+            telBtn->click();
+            app.processEvents();
+            check(emittedCount >= 1 &&
+                      lastEmitted == StatusOrbRenderer::presetConfig(QStringLiteral("telemetry")) &&
+                      studio.config() == lastEmitted,
+                  "clicking telemetry preset updates studio combos and emits configChanged");
+
+            simChk->setChecked(true);
+            studio.setDiameter(72);
+            app.processEvents();
+            const QImage studioShot = studio.grab().toImage();
+            studioShot.save(outDir + QStringLiteral("/orb-face-studio-preview.png"));
+            check(studioShot.width() >= 580 && studioShot.height() >= 380 &&
+                      tipLbl->text().contains(QStringLiteral("CPU 87%")) &&
+                      tipLbl->text().contains(QStringLiteral("内存 89%")),
+                  "OrbFaceStudio live preview updates canvas and tooltip readout in simulated high-load mode");
+
+            const int singleIdx = centerCombo->findData(QStringLiteral("clock_single"));
+            check(singleIdx >= 0, "OrbFaceStudio center combo includes clock_single mode");
+            centerCombo->setCurrentIndex(singleIdx);
+            app.processEvents();
+            check(studio.config().centerMode == StatusOrbRenderer::CenterMode::ClockSingle,
+                  "changing center combo updates OrbFaceStudio FaceConfig live");
+
+            studio.resetDefaults();
+            app.processEvents();
+            check(studio.config() == StatusOrbRenderer::FaceConfig{},
+                  "OrbFaceStudio::resetDefaults restores default Auto FaceConfig");
+            studio.hide();
+        }
     }
 
     return 0;

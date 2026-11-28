@@ -56,6 +56,7 @@ bool snapshotsEqual(const SystemStatusSnapshot &a, const SystemStatusSnapshot &b
            a.cpuAvailable == b.cpuAvailable && a.cpuPercent == b.cpuPercent &&
            a.memoryAvailable == b.memoryAvailable && a.memoryPercent == b.memoryPercent &&
            qRound(a.memoryUsedGiB * 10.0) == qRound(b.memoryUsedGiB * 10.0) &&
+           a.diskAvailable == b.diskAvailable && a.diskPercent == b.diskPercent &&
            a.networkConnected == b.networkConnected && a.signalQuality == b.signalQuality && a.networkText == b.networkText &&
            a.inputPresent == b.inputPresent && a.inputLabel == b.inputLabel &&
            a.micActive == b.micActive && a.micUsers == b.micUsers &&
