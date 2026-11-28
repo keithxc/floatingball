@@ -403,9 +403,6 @@ bool openPowerMenu()
 
 bool openSpotlight()
 {
-    // Cmd+Space opens macOS native Spotlight search
-    const auto out = DesktopActions::showOverview();
-    Q_UNUSED(out);
     return QProcess::startDetached(QStringLiteral("/usr/bin/open"),
                                    {QStringLiteral("-a"), QStringLiteral("Spotlight")});
 }

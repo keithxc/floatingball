@@ -50,6 +50,7 @@ function(floatingball_configure_common target)
     if(APPLE AND NOT IOS)
         target_sources(${target} PRIVATE
             appdock_mac.mm
+            appdock_ax_mac.mm
             appdock_windows_mac.mm
             systemstatus_mac.mm
             systemstatus_notif_mac.mm
@@ -105,6 +106,7 @@ endfunction()
 floatingball_configure_common(FloatingBall)
 
 set_target_properties(FloatingBall PROPERTIES
+    MACOSX_BUNDLE_GUI_IDENTIFIER "dev.floatingball.FloatingBall"
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE

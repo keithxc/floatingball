@@ -37,8 +37,21 @@
             doCheck = true;
             checkPhase = ''
               runHook preCheck
+              export HOME="$TMPDIR/floatingball-test-home"
+              mkdir -p "$HOME"
               QT_QPA_PLATFORM=offscreen ctest --output-on-failure
               runHook postCheck
+            '';
+            postInstall = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              mkdir -p "$out/Applications"
+              if [ -d "$out/FloatingBall.app" ]; then
+                mv "$out/FloatingBall.app" "$out/Applications/FloatingBall.app"
+                ln -s Applications/FloatingBall.app "$out/FloatingBall.app"
+              fi
+            '';
+            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              mkdir -p "$out/bin"
+              ln -sf ../Applications/FloatingBall.app/Contents/MacOS/FloatingBall "$out/bin/FloatingBall"
             '';
             meta.mainProgram = "FloatingBall";
           };

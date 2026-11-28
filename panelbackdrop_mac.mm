@@ -86,7 +86,6 @@ void configureGlassEffectView(NSView *view, CGFloat cornerRadius, bool interacti
 
 void applyNativeFloatingPolicy(QWidget *widget, bool activateOnShow)
 {
-    Q_UNUSED(activateOnShow);
     if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa") || !widget->isWindow()) return;
     NSView *qtView = reinterpret_cast<NSView *>(widget->winId());
     if (!qtView || !qtView.window) return;
@@ -108,6 +107,20 @@ void applyNativeFloatingPolicy(QWidget *widget, bool activateOnShow)
     behavior &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
     behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
     window.collectionBehavior = behavior;
+    // Under LSUIElement (accessory activation policy), keyboard-accepting panels
+    // (AppLauncher search, Control Center Wi-Fi prompt) need explicit app activation
+    // on show so typing and Escape work immediately without appearing in the Dock.
+    if (activateOnShow && widget->isVisible()) {
+        if (@available(macOS 14.0, *)) {
+            [NSApp activate];
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+        }
+        [window makeKeyAndOrderFront:nil];
+    }
 }
 
 class MacFloatingSurfaceFilter final : public QObject {

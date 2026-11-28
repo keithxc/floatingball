@@ -70,7 +70,9 @@ QString resolveAppPathForHint(const QString &bundleId, const QString &appName)
         if (found.isEmpty() && !nm.isEmpty()) {
             static const QStringList dirs{
                 QStringLiteral("/Applications"),
+                QStringLiteral("/Applications/Nix Apps"),
                 QDir::homePath() + QStringLiteral("/Applications"),
+                QDir::homePath() + QStringLiteral("/Applications/Home Manager Apps"),
                 QStringLiteral("/System/Applications"),
                 QStringLiteral("/System/Applications/Utilities"),
                 QStringLiteral("/System/Library/CoreServices")
