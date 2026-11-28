@@ -1,5 +1,7 @@
 #pragma once
 
+#include "systemtelemetry.h"
+
 #include <QDateTime>
 #include <QIcon>
 #include <QList>
@@ -8,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 #include <functional>
+#include <memory>
 
 class QProcess;
 class QTimer;
@@ -94,6 +97,14 @@ struct SystemStatusSnapshot {
     bool batteryPresent = false;
     int batteryPercent = 0;
     bool batteryPluggedIn = false;
+
+    // Desktop telemetry fallbacks when battery/brightness are absent (or user-selected)
+    bool cpuAvailable = false;
+    int cpuPercent = 0; // 0..100, EMA-smoothed
+    bool memoryAvailable = false;
+    int memoryPercent = 0; // 0..100
+    double memoryUsedGiB = 0.0;
+    double memoryTotalGiB = 0.0;
 
     // Network (bottom 5 signal dots; red when offline)
     bool networkConnected = false;
@@ -199,6 +210,7 @@ public:
 #ifdef Q_OS_MACOS
     void handleMacInputSourceChanged(const QString &label, const QString &description);
 #endif
+    void refreshTelemetry();
 
 signals:
     void statusChanged(const SystemStatusSnapshot &snapshot);
@@ -246,8 +258,10 @@ private:
     QString m_notifBuffer;
     QTimer *m_notifFlushTimer = nullptr;
     QTimer *m_pollTimer = nullptr;
+    QTimer *m_telemetryTimer = nullptr;
     QTimer *m_imeFastTimer = nullptr;
     QProcess *m_notifMonitor = nullptr;
+    std::unique_ptr<SystemTelemetry::Sampler> m_telemetrySampler;
     int m_brightnessMax = 100;
 #ifdef Q_OS_MACOS
     void *m_macLiveWatchers = nullptr;

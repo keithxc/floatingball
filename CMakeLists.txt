@@ -45,7 +45,14 @@ qt_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES})
 function(floatingball_configure_common target)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(${target} PRIVATE Qt6::Widgets Qt6::Network)
-    target_sources(${target} PRIVATE appdock.cpp appdock.h systemstatus.cpp systemstatus.h desktopactions.cpp desktopactions.h panelbackdrop.cpp panelbackdrop.h)
+    target_sources(${target} PRIVATE
+        appdock.cpp appdock.h
+        systemstatus.cpp systemstatus.h
+        systemtelemetry.cpp systemtelemetry.h
+        statusorbrenderer.cpp statusorbrenderer.h
+        desktopactions.cpp desktopactions.h
+        panelbackdrop.cpp panelbackdrop.h
+    )
 
     if(APPLE AND NOT IOS)
         target_sources(${target} PRIVATE
@@ -135,6 +142,15 @@ if(FLOATINGBALL_BUILD_TESTS)
     add_test(NAME touch-ux-workflow
              COMMAND floatingball-touch-ux-test "${CMAKE_CURRENT_BINARY_DIR}/touch-ux-data")
     set_tests_properties(touch-ux-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(floatingball-telemetry-orb-test
+        tests/telemetry-orb-test.cpp
+        ${FLOATINGBALL_CORE_SOURCES}
+    )
+    floatingball_configure_common(floatingball-telemetry-orb-test)
+    add_test(NAME telemetry-orb-workflow
+             COMMAND floatingball-telemetry-orb-test "${CMAKE_CURRENT_BINARY_DIR}/telemetry-orb-data")
+    set_tests_properties(telemetry-orb-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     if(APPLE AND NOT IOS)
         add_executable(floatingball-macos-parity-test

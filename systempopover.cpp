@@ -2,7 +2,9 @@
 #include "desktopactions.h"
 #include "floatingwindow.h"
 #include "panelbackdrop.h"
+#include "statusorbrenderer.h"
 #include "systemstatus.h"
+#include "systemtelemetry.h"
 #include "touchscroll.h"
 #include "uiicons.h"
 
@@ -698,6 +700,11 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     m_powerPill->setCursor(Qt::PointingHandCursor);
     connect(m_powerPill, &QToolButton::clicked, this, [this] {
         if (!m_monitor) return;
+        if (StatusOrbRenderer::formatHeaderPill(m_monitor->snapshot()).opensMonitor) {
+            hide();
+            DesktopActions::showToast(SystemTelemetry::openSystemMonitor(), mapToGlobal(rect().center()));
+            return;
+        }
         showStatusBanner(m_monitor->cyclePowerProfile());
         syncHomeFromSnapshot();
     });
@@ -2105,24 +2112,12 @@ void SystemPopover::syncHomeFromSnapshot()
     if (!m_monitor) return;
     const SystemStatusSnapshot &st = m_monitor->snapshot();
 
-    // Header integrated Battery + Power Profile Pill
+    // Header integrated Battery + Power Profile (laptop) or CPU + RAM telemetry pill (desktop)
     if (m_powerPill) {
-        QString pwrTxt = QStringLiteral("平衡");
-        QString pwrAcc = QStringLiteral("blue");
-        if (st.powerProfile == QLatin1String("power-saver")) {
-            pwrTxt = QStringLiteral("节能");
-            pwrAcc = QStringLiteral("green");
-        } else if (st.powerProfile == QLatin1String("performance")) {
-            pwrTxt = QStringLiteral("性能");
-            pwrAcc = QStringLiteral("rose");
-        }
-        const QString label = st.batteryPresent
-            ? QStringLiteral("%1%%2 %3")
-                  .arg(st.batteryPercent)
-                  .arg(st.batteryPluggedIn ? QStringLiteral("⚡") : QString(), pwrTxt)
-            : pwrTxt;
-        m_powerPill->setText(label);
-        m_powerPill->setProperty("accent", pwrAcc);
+        const auto pill = StatusOrbRenderer::formatHeaderPill(st);
+        m_powerPill->setText(pill.text);
+        m_powerPill->setToolTip(pill.tooltip);
+        m_powerPill->setProperty("accent", pill.accent);
         repolish(m_powerPill);
     }
 

@@ -6,6 +6,7 @@
 #include "floatingwindow.h"
 #include "panelbackdrop.h"
 #include "quickdeck.h"
+#include "statusorbrenderer.h"
 #include "systempopover.h"
 #include "uiicons.h"
 
@@ -3219,20 +3220,8 @@ SystemStatusMonitor *FloatingBall::statusMonitor()
         m_statusMonitor = new SystemStatusMonitor(this);
         connect(m_statusMonitor, &SystemStatusMonitor::statusChanged, this, [this](const SystemStatusSnapshot &st) {
             if (m_statusOrbMode) {
-                QStringList tips;
-                tips.append(QTime::currentTime().toString(QStringLiteral("HH:mm")));
-                if (st.batteryPresent)
-                    tips.append(tr("电量 %1%%2").arg(st.batteryPercent).arg(st.batteryPluggedIn ? tr("（充电中）") : QString()));
-                if (!st.networkText.isEmpty()) tips.append(st.networkText);
-                if (st.brightnessAvailable) tips.append(tr("亮度 %1%").arg(st.brightnessPercent));
-                if (st.volumeAvailable) tips.append(st.volumeMuted ? tr("音量 静音") : tr("音量 %1%").arg(st.volumePercent));
-                if (st.inputPresent && !st.inputDescription.isEmpty()) tips.append(tr("输入法 %1").arg(st.inputDescription));
-                if (st.micActive) tips.append(tr("麦克风：%1").arg(st.micUsers.join(QStringLiteral("、"))));
-                if (st.cameraActive) tips.append(tr("摄像头：%1").arg(st.cameraUsers.join(QStringLiteral("、"))));
-                if (st.hasNotificationDot())
-                    tips.append(st.lastNotificationSummary.isEmpty() ? tr("有未读通知") : st.lastNotificationSummary);
-                if (!tips.isEmpty()) {
-                    const QString tipStr = tips.join(QStringLiteral(" · "));
+                const QString tipStr = StatusOrbRenderer::buildTooltip(st);
+                if (!tipStr.isEmpty()) {
                     setToolTip(tipStr);
                     for (FloatingBall *rep : replicaBalls()) rep->setToolTip(tipStr);
                 }
@@ -4919,20 +4908,8 @@ void FloatingBall::paintEvent(QPaintEvent *)
                     p.drawText(QRectF(capRect.left(), c.y() + 0.5, capRect.width(), 16.0), Qt::AlignCenter, mm);
                 }
 
-                // Bottom compact battery bar
-                if (st.batteryPresent) {
-                    const qreal bw = capRect.width() * 0.54;
-                    const QRectF bTrack(c.x() - bw * 0.5, capRect.bottom() - 9.5, bw, 3.2);
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(QColor(242, 246, 252, 52));
-                    p.drawRoundedRect(bTrack, 1.6, 1.6);
-                    const QColor bCol = st.batteryPluggedIn ? QColor("#6edba0")
-                        : (st.batteryPercent < 15 ? QColor("#ef5350")
-                           : (st.batteryPercent < 25 ? QColor("#f4c542") : QColor("#dce8f8")));
-                    p.setBrush(bCol);
-                    p.drawRoundedRect(QRectF(bTrack.left(), bTrack.top(),
-                                             bw * qBound(0, st.batteryPercent, 100) / 100.0, 3.2), 1.6, 1.6);
-                }
+                // Bottom compact battery or desktop memory bar
+                StatusOrbRenderer::paintVerticalCapsuleBar(p, capRect, st);
 
                 // Project directional message radar dots onto the inner screen-facing edge!
                 const qreal innerX = (m_dockSide == DockLeft) ? (capRect.right() - 3.2) : (capRect.left() + 3.2);
@@ -5018,126 +4995,7 @@ void FloatingBall::paintEvent(QPaintEvent *)
                                    iconDim, iconDim),
                             QColor("#f5f8fd"));
     } else if (m_statusOrbMode) {
-        const QColor ink(QStringLiteral("#f2f6fc"));
-        const QColor dimInk(242, 246, 252, 52);
-
-        const qreal rOuter = radius * 0.84;
-        const qreal rInner = radius * 0.65;
-        const QRectF outerArcRect(sphereCenter.x() - rOuter, sphereCenter.y() - rOuter, rOuter * 2.0, rOuter * 2.0);
-        const QRectF innerArcRect(sphereCenter.x() - rInner, sphereCenter.y() - rInner, rInner * 2.0, rInner * 2.0);
-
-        // 1. Left outer continuous arc: Screen Brightness (bottom -> top)
-        if (st.brightnessAvailable) {
-            const qreal trackW = qMax(1.6, d * 0.036);
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(dimInk, trackW, Qt::SolidLine, Qt::RoundCap));
-            p.drawArc(outerArcRect, qRound(220.0 * 16), qRound(-80.0 * 16));
-            if (st.brightnessPercent > 0) {
-                p.setPen(QPen(ink, trackW, Qt::SolidLine, Qt::RoundCap));
-                p.drawArc(outerArcRect, qRound(220.0 * 16),
-                          qRound(-80.0 * qBound(0, st.brightnessPercent, 100) / 100.0 * 16));
-            }
-        }
-
-        // 2. Right outer 13-dot arc: Playback Volume (bottom -> top, all dim when muted)
-        if (st.volumeAvailable) {
-            const int litDots = st.volumeMuted
-                ? 0
-                : static_cast<int>(qCeil(qBound(0, st.volumePercent, 100) * 13.0 / 100.0));
-            const qreal dotR = qMax(0.95, d * 0.019);
-            p.setPen(Qt::NoPen);
-            for (int i = 0; i < 13; ++i) {
-                const qreal deg = 40.0 - 80.0 * i / 12.0;
-                const qreal rad = qDegreesToRadians(deg);
-                const QPointF pt(sphereCenter.x() + rOuter * qCos(rad),
-                                 sphereCenter.y() + rOuter * qSin(rad));
-                p.setBrush(i < litDots ? ink : dimInk);
-                p.drawEllipse(pt, dotR, dotR);
-            }
-        }
-
-        // 3. Top 250-deg inner arc: Battery
-        if (st.batteryPresent) {
-            const qreal battW = qMax(2.0, d * 0.046);
-            const QColor battColor = st.batteryPluggedIn ? QColor("#6edba0")
-                : (st.batteryPercent < 15 ? QColor("#ef5350")
-                   : (st.batteryPercent < 25 ? QColor("#f4c542") : ink));
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(dimInk, battW, Qt::SolidLine, Qt::RoundCap));
-            p.drawArc(innerArcRect, qRound(215.0 * 16), qRound(-250.0 * 16));
-            if (st.batteryPercent > 0) {
-                p.setPen(QPen(battColor, battW, Qt::SolidLine, Qt::RoundCap));
-                p.drawArc(innerArcRect, qRound(215.0 * 16),
-                          qRound(-250.0 * qBound(0, st.batteryPercent, 100) / 100.0 * 16));
-            }
-        }
-
-        // 4. Bottom 5 signal dots: Network (offline = 5 red dots)
-        {
-            const bool offline = !st.networkConnected;
-            const int litSignal = offline ? 5 : qBound(0, static_cast<int>(qCeil(st.signalQuality / 20.0)), 5);
-            const QColor sigColor = offline ? QColor("#ef5350") : ink;
-            const qreal sigR = qMax(1.15, d * 0.022);
-            p.setPen(Qt::NoPen);
-            for (int i = 0; i < 5; ++i) {
-                const qreal deg = 130.0 - i * 20.0;
-                const qreal rad = qDegreesToRadians(deg);
-                const QPointF pt(sphereCenter.x() + rInner * qCos(rad),
-                                 sphereCenter.y() + rInner * qSin(rad));
-                p.setBrush(i < litSignal ? sigColor : dimInk);
-                p.drawEllipse(pt, sigR, sigR);
-            }
-        }
-
-        // 5. Center Emblem:
-        //    • Default: 2-Line 24H Zero-Padded Clock ("09" over "05")
-        //    • Transient on keyboard/IME activity: crisp IME badge ("双" or "EN")
-        if (!imeFlash.isEmpty()) {
-            const qreal badgeW = rInner * 1.38;
-            const qreal badgeH = rInner * 1.12;
-            p.setPen(Qt::NoPen);
-            p.setBrush(QColor(56, 189, 248, 52));
-            p.drawRoundedRect(QRectF(sphereCenter.x() - badgeW * 0.5, sphereCenter.y() - badgeH * 0.5,
-                                     badgeW, badgeH), 7.0, 7.0);
-            QFont f = font();
-            f.setPixelSize(qRound(imeFlash == QStringLiteral("双") ? d * 0.28 : d * 0.23));
-            f.setWeight(QFont::Bold);
-            p.setFont(f);
-            p.setPen(QColor("#7dd3fc"));
-            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() - rInner - 0.5,
-                              rInner * 2.0, rInner * 2.0),
-                       Qt::AlignCenter, imeFlash);
-        } else {
-            QFont f = font();
-            f.setPixelSize(qMax(10, qRound(d * 0.215)));
-            f.setWeight(QFont::Bold);
-            p.setFont(f);
-            const qreal lineH = d * 0.235;
-            const qreal vShift = d * 0.102;
-            p.setPen(QColor("#f8fafc"));
-            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() - vShift - lineH * 0.5,
-                              rInner * 2.0, lineH),
-                       Qt::AlignCenter, hh);
-            p.setPen(QColor("#cbd5e1"));
-            p.drawText(QRectF(sphereCenter.x() - rInner, sphereCenter.y() + vShift - lineH * 0.5,
-                              rInner * 2.0, lineH),
-                       Qt::AlignCenter, mm);
-        }
-
-        // 6. Privacy indicator micro-dots (Top-Right = Mic, Bottom-Right = Camera)
-        const qreal cornerOffset = radius * 0.59;
-        const qreal cornerDotR = qMax(2.1, d * 0.042);
-        p.setPen(Qt::NoPen);
-        if (st.micActive) {
-            const QPointF pt(sphereCenter.x() + cornerOffset, sphereCenter.y() - cornerOffset);
-            p.setBrush(QColor("#ff9f0a"));
-            p.drawEllipse(pt, cornerDotR, cornerDotR);
-        }
-        if (st.cameraActive) {
-            const QPointF pt(sphereCenter.x() + cornerOffset, sphereCenter.y() + cornerOffset);
-            p.setBrush(QColor("#34c759"));
-            p.drawEllipse(pt, cornerDotR, cornerDotR);
-        }
+        StatusOrbRenderer::paintFace(p, sphereCenter, d, radius, font(), st, hh, mm, imeFlash);
     } else {
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(QColor(255, 255, 255, 130), qMax(1.4, d * 0.036)));

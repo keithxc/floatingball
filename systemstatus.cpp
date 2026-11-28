@@ -50,31 +50,20 @@ namespace {
 
 bool snapshotsEqual(const SystemStatusSnapshot &a, const SystemStatusSnapshot &b)
 {
-    return a.brightnessAvailable == b.brightnessAvailable &&
-           a.brightnessPercent == b.brightnessPercent &&
-           a.volumeAvailable == b.volumeAvailable &&
-           a.volumePercent == b.volumePercent &&
-           a.volumeMuted == b.volumeMuted &&
-           a.batteryPresent == b.batteryPresent &&
-           a.batteryPercent == b.batteryPercent &&
-           a.batteryPluggedIn == b.batteryPluggedIn &&
-           a.networkConnected == b.networkConnected &&
-           a.signalQuality == b.signalQuality &&
-           a.networkText == b.networkText &&
-           a.inputPresent == b.inputPresent &&
-           a.inputLabel == b.inputLabel &&
-           a.micActive == b.micActive &&
-           a.micUsers == b.micUsers &&
-           a.cameraActive == b.cameraActive &&
-           a.cameraUsers == b.cameraUsers &&
-           a.unreadNotifications == b.unreadNotifications &&
-           a.trayNeedsAttention == b.trayNeedsAttention &&
-           a.lastNotificationSummary == b.lastNotificationSummary &&
-           a.virtualDesktops == b.virtualDesktops &&
-           a.bluetoothAvailable == b.bluetoothAvailable &&
-           a.bluetoothPowered == b.bluetoothPowered &&
-           a.dndEnabled == b.dndEnabled &&
-           a.nightLightEnabled == b.nightLightEnabled &&
+    return a.brightnessAvailable == b.brightnessAvailable && a.brightnessPercent == b.brightnessPercent &&
+           a.volumeAvailable == b.volumeAvailable && a.volumePercent == b.volumePercent && a.volumeMuted == b.volumeMuted &&
+           a.batteryPresent == b.batteryPresent && a.batteryPercent == b.batteryPercent && a.batteryPluggedIn == b.batteryPluggedIn &&
+           a.cpuAvailable == b.cpuAvailable && a.cpuPercent == b.cpuPercent &&
+           a.memoryAvailable == b.memoryAvailable && a.memoryPercent == b.memoryPercent &&
+           qRound(a.memoryUsedGiB * 10.0) == qRound(b.memoryUsedGiB * 10.0) &&
+           a.networkConnected == b.networkConnected && a.signalQuality == b.signalQuality && a.networkText == b.networkText &&
+           a.inputPresent == b.inputPresent && a.inputLabel == b.inputLabel &&
+           a.micActive == b.micActive && a.micUsers == b.micUsers &&
+           a.cameraActive == b.cameraActive && a.cameraUsers == b.cameraUsers &&
+           a.unreadNotifications == b.unreadNotifications && a.trayNeedsAttention == b.trayNeedsAttention &&
+           a.lastNotificationSummary == b.lastNotificationSummary && a.virtualDesktops == b.virtualDesktops &&
+           a.bluetoothAvailable == b.bluetoothAvailable && a.bluetoothPowered == b.bluetoothPowered &&
+           a.dndEnabled == b.dndEnabled && a.nightLightEnabled == b.nightLightEnabled &&
            a.powerProfile == b.powerProfile;
 }
 
@@ -402,6 +391,9 @@ SystemStatusMonitor::SystemStatusMonitor(QObject *parent) : QObject(parent)
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(5000);
     connect(m_pollTimer, &QTimer::timeout, this, &SystemStatusMonitor::pollSlowMetrics);
+    m_telemetryTimer = new QTimer(this);
+    m_telemetryTimer->setInterval(2500);
+    connect(m_telemetryTimer, &QTimer::timeout, this, &SystemStatusMonitor::refreshTelemetry);
 #ifdef Q_OS_LINUX
     m_imeFastTimer = new QTimer(this);
     m_imeFastTimer->setInterval(550);
@@ -441,11 +433,13 @@ void SystemStatusMonitor::startPlatformWatchers()
     if (!m_macLiveWatchers) m_macLiveWatchers = SystemStatusMac::startLiveWatchers(this);
 #endif
     m_pollTimer->start();
+    if (m_telemetryTimer) m_telemetryTimer->start();
 }
 
 void SystemStatusMonitor::stopPlatformWatchers()
 {
     if (m_pollTimer) m_pollTimer->stop();
+    if (m_telemetryTimer) m_telemetryTimer->stop();
     if (m_imeFastTimer) m_imeFastTimer->stop();
 #ifdef Q_OS_LINUX
     stopNotificationMonitor();
@@ -1101,6 +1095,7 @@ void SystemStatusMonitor::refreshNow()
 void SystemStatusMonitor::pollSlowMetrics()
 {
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) return;
+    refreshTelemetry();
 #ifdef Q_OS_LINUX
     refreshLinuxBrightness();
     refreshLinuxBattery();
