@@ -2,6 +2,7 @@
 #include "systemstatus.h"
 #include "uiicons.h"
 
+#include <QCollator>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
@@ -13,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocale>
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
@@ -21,6 +23,7 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
+#include <algorithm>
 
 #ifdef Q_OS_LINUX
 #include <QDBusConnection>
@@ -939,30 +942,43 @@ QList<DockAppEntry> AppDockModel::openWindows() const
 
     if (raw.isEmpty()) return raw;
 
-    // Stably cluster windows belonging to the same appKey contiguously while
-    // preserving first-seen app order and per-window creation order!
+    // Cluster windows by appKey, sort app groups in fixed A->Z / Chinese Pinyin order
+    // (preserving per-window creation order inside each app) for cross-restart muscle memory.
     QStringList appOrder;
     QHash<QString, QList<DockAppEntry>> byApp;
     for (const DockAppEntry &src : raw) {
         if (!src.running) continue;
         DockAppEntry e = src;
-        if (e.appKey.isEmpty()) {
+        if (e.appKey.isEmpty())
             e.appKey = (!e.id.isEmpty() ? e.id : (!e.launchTarget.isEmpty() ? displayNameForTarget(e.launchTarget) : e.name)).toLower();
-        }
-        if (!e.active && m_notifiedAppKeys.contains(e.appKey)) {
-            e.demandsAttention = true;
-        }
-        if (!byApp.contains(e.appKey)) {
-            appOrder.append(e.appKey);
-        }
+        if (!e.active && m_notifiedAppKeys.contains(e.appKey)) e.demandsAttention = true;
+        if (!byApp.contains(e.appKey)) appOrder.append(e.appKey);
         byApp[e.appKey].append(e);
     }
 
+    QCollator collator(QLocale(QLocale::Chinese, QLocale::China));
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    collator.setNumericMode(true);
+    auto sortNameFor = [&byApp](const QString &key) -> QString {
+        const auto it = byApp.constFind(key);
+        if (it != byApp.constEnd() && !it->isEmpty()) {
+            const QString nm = it->first().name.trimmed();
+            if (!nm.isEmpty()) return nm;
+        }
+        return key;
+    };
+    std::sort(appOrder.begin(), appOrder.end(), [&](const QString &a, const QString &b) {
+        const QString na = sortNameFor(a), nb = sortNameFor(b);
+        const int ba = na.isEmpty() ? 2 : (na.at(0).unicode() < 128 ? 0 : 1);
+        const int bb = nb.isEmpty() ? 2 : (nb.at(0).unicode() < 128 ? 0 : 1);
+        if (ba != bb) return ba < bb;
+        const int cmp = collator.compare(na, nb);
+        return cmp != 0 ? (cmp < 0) : (a < b);
+    });
+
     QList<DockAppEntry> clustered;
     clustered.reserve(raw.size());
-    for (const QString &key : appOrder) {
-        clustered.append(byApp.value(key));
-    }
+    for (const QString &key : appOrder) clustered.append(byApp.value(key));
     return clustered;
 }
 

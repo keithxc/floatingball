@@ -463,14 +463,17 @@ int main(int argc, char **argv)
         ball.dockModel()->setOpenWindowsForTest(twelveWins);
         app.processEvents();
 
-        // Verify same-app clustering order (all kitty, then all firefox, then all code)
+        // Verify fixed A->Z app clustering order (code, then firefox, then kitty)
+        // while keeping per-window creation order intact within each app!
         const QList<DockAppEntry> clustered = ball.dockModel()->openWindows();
         check(clustered.size() == 12 &&
-                  clustered[0].appKey == QLatin1String("kitty") &&
-                  clustered[3].appKey == QLatin1String("kitty") &&
+                  clustered[0].appKey == QLatin1String("code") &&
+                  clustered[0].windowId == QLatin1String("win-3") &&
+                  clustered[3].appKey == QLatin1String("code") &&
+                  clustered[3].windowId == QLatin1String("win-12") &&
                   clustered[4].appKey == QLatin1String("firefox") &&
-                  clustered[8].appKey == QLatin1String("code"),
-              "openWindows stably clusters windows of the same application together");
+                  clustered[8].appKey == QLatin1String("kitty"),
+              "openWindows stably clusters windows by app in fixed A->Z order while preserving intra-app window order");
 
         // Verify directional message radar dot on collapsed main ball!
         const QImage ballWithMsg = ball.grab().toImage();

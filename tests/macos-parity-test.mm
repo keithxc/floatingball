@@ -179,17 +179,22 @@ int main(int argc, char **argv)
         chrome2.windowId = QStringLiteral("mac:1001:901");
         chrome2.active = false;
 
-        ball.dockModel()->applyMacWindowSnapshot({chrome1, wechat, chrome2}, false);
+        ball.dockModel()->applyMacWindowSnapshot({wechat, chrome1, chrome2}, false);
         app.processEvents();
 
         const QList<DockAppEntry> clustered = ball.dockModel()->openWindows();
         if (!liveMode) {
             // In offscreen mode openWindows() reads m_macRunningWindows only when live; test via setOpenWindowsForTest too
-            ball.dockModel()->setOpenWindowsForTest({chrome1, wechat, chrome2});
+            ball.dockModel()->setOpenWindowsForTest({wechat, chrome1, chrome2});
         }
         const QList<DockAppEntry> wins = ball.dockModel()->openWindows();
-        check(wins.size() >= 3 && wins[0].appKey == wins[1].appKey && wins[0].windowId != wins[1].windowId,
-              "macOS multi-window snapshot stably clusters multiple windows of the same app");
+        check(wins.size() >= 3 &&
+                  wins[0].appKey == QLatin1String("com.google.chrome") &&
+                  wins[1].appKey == QLatin1String("com.google.chrome") &&
+                  wins[0].windowId == QLatin1String("mac:1001:137") &&
+                  wins[1].windowId == QLatin1String("mac:1001:901") &&
+                  wins[2].appKey == QLatin1String("com.tencent.xinwechat"),
+              "macOS multi-window snapshot stably sorts apps A->Z and preserves intra-app window order");
 
         // Fullscreen auto-tuck morph -> slim edge capsule, then exit -> restores circular ball
         ball.dockModel()->applyMacWindowSnapshot({chrome1, wechat, chrome2}, true);

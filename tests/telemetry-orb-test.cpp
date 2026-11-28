@@ -411,6 +411,45 @@ int main(int argc, char **argv)
             }
             check(inspectedModal && noTabs && hasCore && removedBloat && liveResized && ball.width() == origWidth,
                   "FloatingBall::showSettings presents single-page unified Settings with live resize and Cancel rollback");
+
+            // 7. Fixed deterministic A->Z / Chinese Pinyin ordering of open-window switching orbs
+            auto makeWin = [](const QString &key, const QString &name, const QString &wid) {
+                DockAppEntry e;
+                e.id = key;
+                e.appKey = key;
+                e.name = name;
+                e.windowId = wid;
+                e.running = true;
+                return e;
+            };
+            ball.dockModel()->setOpenWindowsForTest({
+                makeWin(QStringLiteral("term"), QStringLiteral("终端"), QStringLiteral("w1")),
+                makeWin(QStringLiteral("wechat"), QStringLiteral("微信"), QStringLiteral("w2")),
+                makeWin(QStringLiteral("ghostty"), QStringLiteral("Ghostty"), QStringLiteral("w3")),
+                makeWin(QStringLiteral("chrome"), QStringLiteral("Chrome"), QStringLiteral("w4")),
+                makeWin(QStringLiteral("notes"), QStringLiteral("备忘录"), QStringLiteral("w5")),
+                makeWin(QStringLiteral("chrome"), QStringLiteral("Chrome"), QStringLiteral("w6")),
+                makeWin(QStringLiteral("finder"), QStringLiteral("访达"), QStringLiteral("w7")),
+                makeWin(QStringLiteral("antigravity"), QStringLiteral("Antigravity"), QStringLiteral("w8")),
+            });
+            const QList<DockAppEntry> sorted = ball.dockModel()->openWindows();
+            QStringList gotNames;
+            for (const DockAppEntry &e : sorted) gotNames.append(e.name + QLatin1Char(':') + e.windowId);
+            const QStringList wantNames{
+                QStringLiteral("Antigravity:w8"),
+                QStringLiteral("Chrome:w4"),
+                QStringLiteral("Chrome:w6"),
+                QStringLiteral("Ghostty:w3"),
+                QStringLiteral("备忘录:w5"),
+                QStringLiteral("访达:w7"),
+                QStringLiteral("微信:w2"),
+                QStringLiteral("终端:w1"),
+            };
+            if (gotNames != wantNames) {
+                std::fprintf(stderr, "SORT GOT: %s\n", gotNames.join(QStringLiteral(", ")).toUtf8().constData());
+            }
+            check(gotNames == wantNames,
+                  "openWindows sorts app groups in deterministic A->Z + Chinese Pinyin order while preserving intra-app window creation order");
         }
     }
 
