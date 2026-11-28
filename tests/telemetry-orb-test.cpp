@@ -8,11 +8,16 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QDir>
 #include <QImage>
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QSpinBox>
+#include <QSystemTrayIcon>
+#include <QTabWidget>
+#include <QTimer>
 #include <QToolButton>
 #include <QtMath>
 #include <cstdio>
@@ -230,15 +235,31 @@ int main(int argc, char **argv)
         ball.expandFromEdge();
         app.processEvents();
 
-        // Control Center header pill shows live CPU · RAM readout
+        // Control Center header pill shows live CPU · RAM readout + FloatingBall settings button
         ball.openSystemPopover(SystemPopover::TabHome);
         ball.systemPopover()->setAutoDismissEnabled(false);
         app.processEvents();
         auto *pill = ball.systemPopover()->findChild<QToolButton *>(QStringLiteral("powerPill"));
+        auto *orbSetBtn = ball.systemPopover()->findChild<QToolButton *>(QStringLiteral("hdrOrbSettingsBtn"));
         check(pill != nullptr && pill->text() == QStringLiteral("C 78% · M 72%"),
               "Control Center powerPill displays compact non-eliding CPU + RAM summary on desktop");
+        check(orbSetBtn != nullptr && orbSetBtn->isVisible() && orbSetBtn->toolTip() == QStringLiteral("悬浮球设置"),
+              "Control Center header exposes dedicated FloatingBall Settings button on Home page");
         ball.systemPopover()->grab().save(outDir + QStringLiteral("/desktop-control-center-preview.png"));
-        ball.systemPopover()->hide();
+        int orbSettingsSignalCount = 0;
+        QObject::connect(ball.systemPopover(), &SystemPopover::orbSettingsRequested, &app, [&] {
+            ++orbSettingsSignalCount;
+        });
+        // Prevent modal dialog from blocking during signal-only verification by disconnecting ball's slot temporarily
+        QObject::disconnect(ball.systemPopover(), &SystemPopover::orbSettingsRequested, &ball, &FloatingBall::showSettings);
+        orbSetBtn->click();
+        app.processEvents();
+        check(orbSettingsSignalCount == 1 && !ball.systemPopover()->isVisible(),
+              "clicking Control Center orb settings button hides popover and emits orbSettingsRequested");
+        QObject::connect(ball.systemPopover(), &SystemPopover::orbSettingsRequested, &ball, &FloatingBall::showSettings);
+
+        check(ball.findChildren<QSystemTrayIcon *>().isEmpty(),
+              "FloatingBall does not create a system tray icon");
 
         // 5. FaceConfig persistence, presets, Disk telemetry, custom slots & OrbFaceStudio live preview
         {
@@ -344,6 +365,52 @@ int main(int argc, char **argv)
             check(studio.config() == StatusOrbRenderer::FaceConfig{},
                   "OrbFaceStudio::resetDefaults restores default Auto FaceConfig");
             studio.hide();
+
+            // 6. Unified single-page Settings dialog (merged face + core behavior, zero extra tabs)
+            ball.setOrbFaceConfig(StatusOrbRenderer::FaceConfig{});
+            const int origWidth = ball.width();
+            bool inspectedModal = false;
+            bool noTabs = false;
+            bool hasCore = false;
+            bool removedBloat = false;
+            bool liveResized = false;
+            int resizedWidth = 0;
+            QTimer::singleShot(80, &app, [&] {
+                auto *dlg = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                if (!dlg) return;
+                inspectedModal = true;
+                noTabs = dlg->findChildren<QTabWidget *>().isEmpty();
+                hasCore =
+                    dlg->findChild<OrbFaceStudio *>(QStringLiteral("orbFaceStudio")) != nullptr &&
+                    dlg->findChild<QSpinBox *>(QStringLiteral("ballDiameter")) != nullptr &&
+                    dlg->findChild<QSpinBox *>(QStringLiteral("ballOpacity")) != nullptr &&
+                    dlg->findChild<QCheckBox *>(QStringLiteral("snapEdgeCheck")) != nullptr &&
+                    dlg->findChild<QCheckBox *>(QStringLiteral("autoTuckFsCheck")) != nullptr &&
+                    dlg->findChild<QCheckBox *>(QStringLiteral("multiScreenCheck")) != nullptr;
+                removedBloat =
+                    dlg->findChild<QObject *>(QStringLiteral("dockPinnedList")) == nullptr &&
+                    dlg->findChild<QObject *>(QStringLiteral("orbitAction0")) == nullptr &&
+                    dlg->findChild<QObject *>(QStringLiteral("panelOpacity")) == nullptr &&
+                    dlg->findChild<QObject *>(QStringLiteral("panelBlur")) == nullptr &&
+                    dlg->findChild<QObject *>(QStringLiteral("dockModeCheck")) == nullptr;
+                auto *diamSpin = dlg->findChild<QSpinBox *>(QStringLiteral("ballDiameter"));
+                if (diamSpin) diamSpin->setValue(72);
+                app.processEvents();
+                resizedWidth = ball.width();
+                liveResized = (resizedWidth > origWidth);
+                dlg->grab().save(outDir + QStringLiteral("/unified-settings-dialog-preview.png"));
+                dlg->reject();
+            });
+            ball.showSettings();
+            app.processEvents();
+            if (!(inspectedModal && noTabs && hasCore && removedBloat && liveResized && ball.width() == origWidth)) {
+                std::fprintf(stderr,
+                             "DIAG: inspected=%d noTabs=%d hasCore=%d removedBloat=%d liveResized=%d origW=%d resizedW=%d finalW=%d\n",
+                             int(inspectedModal), int(noTabs), int(hasCore), int(removedBloat),
+                             int(liveResized), origWidth, resizedWidth, ball.width());
+            }
+            check(inspectedModal && noTabs && hasCore && removedBloat && liveResized && ball.width() == origWidth,
+                  "FloatingBall::showSettings presents single-page unified Settings with live resize and Cancel rollback");
         }
     }
 

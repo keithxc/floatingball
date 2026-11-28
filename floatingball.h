@@ -27,7 +27,6 @@ class ClipboardBubble;
 class QuickDeck;
 class SystemPopover;
 class QScreen;
-class QSystemTrayIcon;
 class QTimer;
 class FloatingBall;
 
@@ -223,7 +222,6 @@ public:
     void openSystemPopover(int tab);
     void toggleAppLauncher();
     void showSettings();
-    void showOrbFaceSettings();
 
     ClipboardBubble *clipboardBubble();
     QuickDeck *quickDeck();
@@ -345,8 +343,6 @@ private:
     void syncSharedPreferencesFrom(const FloatingBall *source);
     void broadcastSharedPreferences();
     void setHiddenOnThisScreen(bool hidden);
-    void openSettingsDialog(int initialTab);
-    void initTray();
     void setBallVisible(bool visible);
 
     QStringList m_orbitActions;
@@ -357,7 +353,6 @@ private:
     QuickDeck *m_quickDeck = nullptr;
     SystemPopover *m_systemPopover = nullptr;
     AppLauncherPopover *m_appLauncher = nullptr;
-    QSystemTrayIcon *m_trayIcon = nullptr;
 
     GestureMode m_gestureMode = GestureIdle;
     int m_activeTouchId = -1;

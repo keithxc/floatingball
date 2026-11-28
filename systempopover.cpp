@@ -575,14 +575,10 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     setObjectName(QStringLiteral("systemPopover"));
     setProperty("floatingballSurface", true);
     setWindowTitle(QStringLiteral("FloatingBall · 控制中心"));
-    // Frameless top-most floating panel; accepts soft on-demand activation so
-    // Esc and click-outside-to-dismiss work natively on Wayland LayerShellQt.
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_MacAlwaysShowToolWindow);
     setAttribute(Qt::WA_TranslucentBackground);
-    // Dynamic tight height (updated by updatePopoverHeight) eliminates empty dead space
-    // while keeping fixed width so LayerShellQt layout stays crisp across all pages.
-    setFixedSize(344, 266);
+    setFixedSize(358, 266);
     setProperty("panelBlurInset", 10);
     setProperty("panelBlurRadius", 24);
 
@@ -615,6 +611,8 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         "QToolButton#hdrIconBtn:hover { background:rgba(255,255,255,24); border:1px solid rgba(255,255,255,44); }"
         "QToolButton#hdrIconBtn[unread=\"true\"] { background:rgba(255,77,109,46); color:#ffe4e6; border:1px solid rgba(255,107,138,150); }"
         "QToolButton#hdrIconBtn[unread=\"true\"]:hover { background:rgba(255,77,109,74); }"
+        "QToolButton#hdrOrbSettingsBtn { background:rgba(124,200,255,22); color:#7dd3fc; border:1px solid rgba(124,200,255,72); border-radius:14px; }"
+        "QToolButton#hdrOrbSettingsBtn:hover { background:rgba(124,200,255,44); border:1px solid rgba(124,200,255,140); }"
         "QToolButton#hdrDangerBtn { background:rgba(255,255,255,11); color:#fda4af; border:1px solid rgba(255,255,255,22); border-radius:14px; }"
         "QToolButton#hdrDangerBtn:hover { background:rgba(244,63,94,52); border:1px solid rgba(251,113,133,125); }"
         "QPushButton#notifBanner { background:rgba(255,77,109,28); border:1px solid rgba(255,112,140,105); border-radius:15px; text-align:left; }"
@@ -665,12 +663,11 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
     root->setContentsMargins(12, 11, 12, 11);
     root->setSpacing(8);
 
-    // ---- Shared Top Draggable Header ----
     auto *header = new PopoverDragHeader(card);
     header->setCursor(Qt::OpenHandCursor);
     auto *hdrRow = new QHBoxLayout(header);
     hdrRow->setContentsMargins(0, 0, 0, 0);
-    hdrRow->setSpacing(5);
+    hdrRow->setSpacing(4);
 
     m_backBtn = new QToolButton(header);
     m_backBtn->setObjectName(QStringLiteral("backPill"));
@@ -723,33 +720,20 @@ SystemPopover::SystemPopover(SystemStatusMonitor *monitor, QWidget *parent)
         return b;
     };
 
-    m_hdrNotifBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Bell, QColor("#e2e8f0"),
-                               QStringLiteral("通知中心"));
+    m_hdrNotifBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Bell, QColor("#e2e8f0"), QStringLiteral("通知中心"));
     connect(m_hdrNotifBtn, &QToolButton::clicked, this, [this] { showPage(PageNotifications); });
     hdrRow->addWidget(m_hdrNotifBtn);
-
-    m_hdrSettingsBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Settings, QColor("#e2e8f0"),
-                                  QStringLiteral("系统设置"));
-    connect(m_hdrSettingsBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openKdeModule(QString());
-    });
+    m_hdrOrbSettingsBtn = makeHdrBtn(QStringLiteral("hdrOrbSettingsBtn"), FloatingIcons::Orb, QColor("#7dd3fc"), QStringLiteral("悬浮球设置"));
+    connect(m_hdrOrbSettingsBtn, &QToolButton::clicked, this, [this] { hide(); emit orbSettingsRequested(); });
+    hdrRow->addWidget(m_hdrOrbSettingsBtn);
+    m_hdrSettingsBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Settings, QColor("#e2e8f0"), QStringLiteral("系统设置"));
+    connect(m_hdrSettingsBtn, &QToolButton::clicked, this, [this] { hide(); if (m_monitor) m_monitor->openKdeModule(QString()); });
     hdrRow->addWidget(m_hdrSettingsBtn);
-
-    m_hdrLockBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Lock, QColor("#e2e8f0"),
-                              QStringLiteral("锁屏"));
-    connect(m_hdrLockBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->lockScreen();
-    });
+    m_hdrLockBtn = makeHdrBtn(QStringLiteral("hdrIconBtn"), FloatingIcons::Lock, QColor("#e2e8f0"), QStringLiteral("锁屏"));
+    connect(m_hdrLockBtn, &QToolButton::clicked, this, [this] { hide(); if (m_monitor) m_monitor->lockScreen(); });
     hdrRow->addWidget(m_hdrLockBtn);
-
-    m_hdrPowerBtn = makeHdrBtn(QStringLiteral("hdrDangerBtn"), FloatingIcons::Power, QColor("#fda4af"),
-                               QStringLiteral("关机 / 休眠"));
-    connect(m_hdrPowerBtn, &QToolButton::clicked, this, [this] {
-        hide();
-        if (m_monitor) m_monitor->openPowerMenu();
-    });
+    m_hdrPowerBtn = makeHdrBtn(QStringLiteral("hdrDangerBtn"), FloatingIcons::Power, QColor("#fda4af"), QStringLiteral("关机 / 休眠"));
+    connect(m_hdrPowerBtn, &QToolButton::clicked, this, [this] { hide(); if (m_monitor) m_monitor->openPowerMenu(); });
     hdrRow->addWidget(m_hdrPowerBtn);
 
     m_refreshBtn = new QToolButton(header);
@@ -1981,6 +1965,7 @@ void SystemPopover::syncHeaderForPage()
     m_titleLbl->setVisible(!isHome);
     if (m_powerPill) m_powerPill->setVisible(isHome);
     if (m_hdrNotifBtn) m_hdrNotifBtn->setVisible(isHome);
+    if (m_hdrOrbSettingsBtn) m_hdrOrbSettingsBtn->setVisible(isHome);
     if (m_hdrSettingsBtn) m_hdrSettingsBtn->setVisible(isHome);
     if (m_hdrLockBtn) m_hdrLockBtn->setVisible(isHome);
     if (m_hdrPowerBtn) m_hdrPowerBtn->setVisible(isHome);

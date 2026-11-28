@@ -8,6 +8,9 @@ class QWidget;
 namespace PanelBackdrop {
 bool supported();
 bool setEnabled(QWidget *widget, bool enabled);
+// Keep the app hidden from the macOS Dock (accessory policy) even when launched
+// directly outside its .app bundle or when a settings dialog is active.
+void configureAccessoryApp();
 // Configure native floating tool-window behavior (non-activating touch surface,
 // persistent across Spaces and full-screen apps on macOS).
 void configureFloatingSurface(QWidget *widget, bool activateOnShow);

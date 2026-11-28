@@ -365,6 +365,16 @@ bool PanelBackdrop::setEnabled(QWidget *widget, bool enabled)
     return bridge(widget)->setEnabled(enabled);
 }
 
+void PanelBackdrop::configureAccessoryApp()
+{
+    if (QGuiApplication::platformName() != QStringLiteral("cocoa")) return;
+    @autoreleasepool {
+        if (NSApp) {
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        }
+    }
+}
+
 void PanelBackdrop::configureFloatingSurface(QWidget *widget, bool activateOnShow)
 {
     if (!widget || QThread::currentThread() != widget->thread()) return;

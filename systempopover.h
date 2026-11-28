@@ -71,6 +71,7 @@ signals:
     void audioStateChanged(int percent, bool muted);
     void brightnessStateChanged(int percent);
     void quickDeckRequested();
+    void orbSettingsRequested();
     void notificationActivated(const NotificationItem &item);
 
 protected:
@@ -198,6 +199,7 @@ private:
     QLabel *m_titleLbl = nullptr;
     QToolButton *m_powerPill = nullptr;
     QToolButton *m_hdrNotifBtn = nullptr;
+    QToolButton *m_hdrOrbSettingsBtn = nullptr;
     QToolButton *m_hdrSettingsBtn = nullptr;
     QToolButton *m_hdrLockBtn = nullptr;
     QToolButton *m_hdrPowerBtn = nullptr;

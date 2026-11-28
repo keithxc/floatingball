@@ -368,6 +368,8 @@ bool PanelBackdrop::setEnabled(QWidget *widget, bool enabled)
     return false;
 }
 
+void PanelBackdrop::configureAccessoryApp() {}
+
 void PanelBackdrop::configureFloatingSurface(QWidget *widget, bool activateOnShow)
 {
     if (!widget) return;

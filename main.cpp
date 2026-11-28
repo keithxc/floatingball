@@ -1,5 +1,6 @@
 #include "floatingball.h"
 #include "clipboardbubble.h"
+#include "panelbackdrop.h"
 #include "quickdeck.h"
 
 #include <QApplication>
@@ -65,6 +66,7 @@ int main(int argc, char *argv[])
 
     QApplication a(argc, argv);
     a.setQuitOnLastWindowClosed(false);
+    PanelBackdrop::configureAccessoryApp();
 #ifndef Q_OS_MACOS
     // Cocoa reads the layered bundle icon; a Qt pixmap would flatten its variants.
     QIcon appIcon;
@@ -135,6 +137,7 @@ int main(int argc, char *argv[])
         } else {
             w.restoreAllScreenBalls();
             w.expandFromEdge();
+            w.show();
             w.raise();
         }
     };

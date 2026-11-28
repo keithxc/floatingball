@@ -16,22 +16,19 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
-#include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEasingCurve>
 #include <QEnterEvent>
-#include <QFileDialog>
 #include <QFileInfo>
-#include <QFormLayout>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineF>
-#include <QListWidget>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QMoveEvent>
@@ -46,8 +43,6 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QSystemTrayIcon>
-#include <QTabWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -2668,7 +2663,6 @@ FloatingBall::FloatingBall(QWidget *parent,
             QTimer::singleShot(80, this, [this] { recoverVisibleAfterOutputChange(); });
         });
 
-        initTray();
         adaptToScreen();
         refreshBallOpacity();
 
@@ -3401,6 +3395,7 @@ SystemPopover *FloatingBall::systemPopover()
             if (m_statusMonitor) m_statusMonitor->updateBrightness(pct, true);
         });
         connect(m_systemPopover, &SystemPopover::quickDeckRequested, this, &FloatingBall::toggleQuickDeck);
+        connect(m_systemPopover, &SystemPopover::orbSettingsRequested, this, &FloatingBall::showSettings);
         connect(m_systemPopover, &SystemPopover::notificationActivated, this, &FloatingBall::openNotificationTarget);
     }
     return m_systemPopover;
@@ -5063,69 +5058,8 @@ void FloatingBall::paintEvent(QPaintEvent *)
 }
 
 // ============================================================================
-// Tray, Context Menu & Settings Dialog (Multi-Ring + Dock Replacement)
+// Visibility, Context Menu & Unified Settings Dialog
 // ============================================================================
-
-void FloatingBall::initTray()
-{
-    if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
-    QIcon trayIco(QStringLiteral(":/icons/floatingball-32.png"));
-    if (trayIco.isNull()) trayIco = FloatingIcons::make(FloatingIcons::Orb, QColor("#eef4fc"), 32);
-    m_trayIcon = new QSystemTrayIcon(trayIco, this);
-    m_trayIcon->setToolTip(QStringLiteral("FloatingBall · 多层触控悬浮球 & 悬浮 Dock"));
-    auto *menu = new QMenu(this);
-    auto *visibility = menu->addAction(tr("显示悬浮球"));
-    visibility->setCheckable(true);
-    visibility->setChecked(true);
-    connect(visibility, &QAction::toggled, this, &FloatingBall::setBallVisible);
-    connect(menu, &QMenu::aboutToShow, this, [this, visibility] {
-        const QSignalBlocker b(visibility);
-        visibility->setChecked(isVisible());
-    });
-#ifdef Q_OS_LINUX
-    menu->addAction(tr("截屏 / 录屏"), this, &FloatingBall::captureRegion);
-#else
-    menu->addAction(tr("区域截图"), this, &FloatingBall::captureRegion);
-    menu->addAction(tr("屏幕录制"), this, &FloatingBall::recordScreen);
-#endif
-    menu->addAction(tr("触控剪贴板"), this, &FloatingBall::toggleClipboardBubble);
-    menu->addAction(tr("触控快捷甲板"), this, &FloatingBall::toggleQuickDeck);
-
-    auto *ringsMenu = menu->addMenu(tr("外围悬浮层数（1~%1 层）").arg(kMaxRingCount));
-    for (int n : {1, 2, 3, 4, 6, 8, 10, 15, 20, 30}) {
-        QAction *a = ringsMenu->addAction(
-            n == kDefaultRingCount ? tr("%1 层（默认 · 2层动作+已开应用）").arg(n)
-                                   : (n == kMaxRingCount ? tr("%1 层（铺满屏幕自适应上限）").arg(n) : tr("%1 层").arg(n)));
-        connect(a, &QAction::triggered, this, [this, n] {
-            setRingCount(n);
-            DesktopActions::showToast(tr("外围悬浮层数已设为 %1 层（自动限屏不越界）").arg(n), anchorCenterGlobal().toPoint());
-        });
-    }
-
-    menu->addSeparator();
-    auto *multiScreenAct = menu->addAction(tr("多显示器每屏独立显示悬浮球"));
-    multiScreenAct->setCheckable(true);
-    multiScreenAct->setChecked(m_multiScreenEnabled);
-    connect(multiScreenAct, &QAction::toggled, this, &FloatingBall::setMultiScreenEnabled);
-    connect(menu, &QMenu::aboutToShow, this, [this, multiScreenAct] {
-        const QSignalBlocker b(multiScreenAct);
-        multiScreenAct->setChecked(m_multiScreenEnabled);
-    });
-    menu->addAction(tr("恢复全部屏幕悬浮球"), this, &FloatingBall::restoreAllScreenBalls);
-    menu->addAction(tr("从系统 Dock 同步常驻应用"), this, [this] {
-        const int count = dockModel()->importFromSystemDock();
-        DesktopActions::showToast(tr("✓ 已同步 %1 个系统 Dock 应用").arg(count), anchorCenterGlobal().toPoint());
-    });
-    menu->addAction(tr("表盘自定义…"), this, &FloatingBall::showOrbFaceSettings);
-    menu->addAction(tr("设置…"), this, &FloatingBall::showSettings);
-    menu->addAction(tr("退出"), qApp, &QApplication::quit);
-    m_trayIcon->setContextMenu(menu);
-    connect(m_trayIcon, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
-        if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
-            setBallVisible(!isVisible());
-    });
-    m_trayIcon->show();
-}
 
 void FloatingBall::setBallVisible(bool visible)
 {
@@ -5179,21 +5113,16 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
 
     if (m_dockSide != DockFree) {
         if (m_edgeTucked) {
-            menu.addAction(tr("恢复正圆双行时钟主球"), this, [this] {
+            menu.addAction(tr("恢复正圆主球"), this, [this] {
                 m_manualTucked = false;
                 expandFromEdge();
             });
         } else {
-            menu.addAction(tr("临时靠边收成竖胶囊（看视频 / 游戏免打扰）"), this, [this] {
+            menu.addAction(tr("靠边收成竖胶囊"), this, [this] {
                 tuckToEdgeCapsule(true, true);
             });
         }
     }
-
-    auto *statusOrbAction = menu.addAction(tr("状态仪双行 24H 时钟主球（替代系统状态栏）"));
-    statusOrbAction->setCheckable(true);
-    statusOrbAction->setChecked(m_statusOrbMode);
-    connect(statusOrbAction, &QAction::toggled, this, &FloatingBall::setStatusOrbMode);
     if (!m_attentionAnglesRad.isEmpty() || (m_statusMonitor && m_statusMonitor->snapshot().hasNotificationDot())) {
         menu.addAction(tr("清除未读消息方位红点"), this, &FloatingBall::clearNotificationDot);
     }
@@ -5202,10 +5131,7 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
         menu.addAction(tr("在此屏幕隐藏悬浮球"), this, [this] { setHiddenOnThisScreen(true); });
         menu.addAction(tr("恢复全部屏幕悬浮球"), this, &FloatingBall::restoreAllScreenBalls);
     }
-    menu.addAction(tr("表盘自定义…"), this, &FloatingBall::showOrbFaceSettings);
-    menu.addAction(tr("设置…"), this, &FloatingBall::showSettings);
-    if (m_trayIcon || (m_primaryPeer && m_primaryPeer->m_trayIcon))
-        menu.addAction(tr("隐藏悬浮球"), this, [this] { setBallVisible(false); });
+    menu.addAction(tr("悬浮球设置…"), this, &FloatingBall::showSettings);
     menu.addSeparator();
     menu.addAction(tr("退出悬浮球"), qApp, &QApplication::quit);
     FloatingWindow::execPopupMenu(&menu, globalPos);
@@ -5213,14 +5139,10 @@ void FloatingBall::showContextMenu(const QPoint &globalPos)
     refreshBallOpacity();
 }
 
-void FloatingBall::showSettings() { openSettingsDialog(1); }
-
-void FloatingBall::showOrbFaceSettings() { openSettingsDialog(0); }
-
-void FloatingBall::openSettingsDialog(int initialTab)
+void FloatingBall::showSettings()
 {
     if (m_primaryPeer) {
-        m_primaryPeer->openSettingsDialog(initialTab);
+        m_primaryPeer->showSettings();
         return;
     }
     if (m_settingsOpen) return;
@@ -5230,15 +5152,22 @@ void FloatingBall::openSettingsDialog(int initialTab)
     m_idleTimer->stop();
 
     const StatusOrbRenderer::FaceConfig origFace = m_orbFaceConfig;
+    const qreal origDiameter = m_preferredDiameter;
+    const QRect origGeometry = geometry();
+    const qreal origIdleOpacity = m_idleOpacity;
+    const qreal origActiveOpacity = m_activeOpacity;
+    bool restoredDefaults = false;
+
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("floatingballSettings"));
-    dialog.setWindowTitle(tr("FloatingBall · 表盘自定义与设置"));
+    dialog.setWindowTitle(tr("FloatingBall · 悬浮球设置"));
     PanelBackdrop::configureFloatingSurface(&dialog, true);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *tabs = new QTabWidget(&dialog);
-    layout->addWidget(tabs);
 
-    // Tab 0: Orb Face Studio & Live Preview
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 12, 14, 12);
+    layout->setSpacing(10);
+
+    // Unified single-page studio: 3-view live preview + face slots + compact appearance/behavior
     auto *orbStudio = new OrbFaceStudio(
         statusMonitor(), m_orbFaceConfig, qRound(m_preferredDiameter), m_statusOrbMode, &dialog);
     connect(orbStudio, &OrbFaceStudio::configChanged, &dialog, [this](const StatusOrbRenderer::FaceConfig &previewCfg) {
@@ -5249,247 +5178,108 @@ void FloatingBall::openSettingsDialog(int initialTab)
             rep->update();
         }
     });
-    tabs->addTab(orbStudio, tr("表盘与预览"));
+    layout->addWidget(orbStudio);
 
-    // Tab 1: Appearance, Multi-Ring & Edge Ring
-    auto *appearance = new QWidget(&dialog);
-    auto *appForm = new QFormLayout(appearance);
+    auto *divider = new QFrame(&dialog);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(divider);
 
-    auto *dockCheck = new QCheckBox(tr("外圈自动展开所有已打开窗口（同应用稳定聚类，鼠标中键快关）"), appearance);
-    dockCheck->setObjectName(QStringLiteral("dockModeCheck"));
-    dockCheck->setChecked(m_dockModeEnabled);
+    auto *formBox = new QVBoxLayout();
+    formBox->setContentsMargins(6, 0, 6, 0);
+    formBox->setSpacing(8);
 
-    auto *statusOrbCheck = new QCheckBox(tr("启用正圆双行 24H 时钟主球 + 方向消息雷达点（替代传统状态栏）"), appearance);
-    statusOrbCheck->setObjectName(QStringLiteral("statusOrbCheck"));
-    statusOrbCheck->setChecked(m_statusOrbMode);
-    connect(statusOrbCheck, &QCheckBox::toggled, orbStudio, &OrbFaceStudio::setStatusOrbEnabled);
+    auto *metricsRow = new QHBoxLayout();
+    metricsRow->setSpacing(10);
 
-    auto *multiScreenCheck = new QCheckBox(tr("多显示器每屏独立显示悬浮球（点开内容一致，各屏位置与展开方向独立）"), appearance);
-    multiScreenCheck->setObjectName(QStringLiteral("multiScreenCheck"));
-    multiScreenCheck->setChecked(m_multiScreenEnabled);
-
-    auto *diameter = new QSpinBox(appearance);
+    auto *diameter = new QSpinBox(&dialog);
     diameter->setObjectName(QStringLiteral("ballDiameter"));
     diameter->setRange(kMinDiameter, kMaxDiameter);
     diameter->setValue(qRound(m_preferredDiameter));
     diameter->setSuffix(QStringLiteral(" px"));
-    connect(diameter, qOverload<int>(&QSpinBox::valueChanged), orbStudio, &OrbFaceStudio::setDiameter);
+    connect(diameter, qOverload<int>(&QSpinBox::valueChanged), &dialog, [this, orbStudio](int val) {
+        orbStudio->setDiameter(val);
+        updateBallGeometry(QSizeF(val * m_screenScale, val * m_screenScale), QPointF(), false, false);
+    });
 
-    auto *idle = new QSpinBox(appearance);
-    idle->setRange(15, 100);
-    idle->setValue(qRound(m_idleOpacity * 100));
-    idle->setSuffix(QStringLiteral(" %"));
+    auto *opacity = new QSpinBox(&dialog);
+    opacity->setObjectName(QStringLiteral("ballOpacity"));
+    opacity->setRange(25, 100);
+    opacity->setValue(qRound(m_idleOpacity * 100));
+    opacity->setSuffix(QStringLiteral(" %"));
+    connect(opacity, qOverload<int>(&QSpinBox::valueChanged), &dialog, [this](int val) {
+        const qreal idleVal = val / 100.0;
+        m_idleOpacity = idleVal;
+        m_activeOpacity = qMin(1.0, idleVal + 0.12);
+        animateBallOpacity(idleVal, 80);
+    });
 
-    auto *active = new QSpinBox(appearance);
-    active->setRange(40, 100);
-    active->setValue(qRound(m_activeOpacity * 100));
-    active->setSuffix(QStringLiteral(" %"));
+    metricsRow->addWidget(new QLabel(tr("悬浮球尺寸"), &dialog));
+    metricsRow->addWidget(diameter);
+    metricsRow->addSpacing(14);
+    metricsRow->addWidget(new QLabel(tr("不透明度"), &dialog));
+    metricsRow->addWidget(opacity);
+    metricsRow->addStretch(1);
+    formBox->addLayout(metricsRow);
 
-    auto *panels = new QSpinBox(appearance);
-    panels->setObjectName(QStringLiteral("panelOpacity"));
-    panels->setRange(15, 88);
-    panels->setValue(qRound(FloatingWindow::panelOpacity() * 100));
-    panels->setSuffix(QStringLiteral(" %"));
+    auto *behaviorRow = new QHBoxLayout();
+    behaviorRow->setSpacing(16);
 
-    auto *blur = new QCheckBox(tr("原生毛玻璃背景（macOS Liquid Glass）"), appearance);
-    blur->setObjectName(QStringLiteral("panelBlur"));
-    blur->setEnabled(FloatingWindow::panelBlurSupported());
-    blur->setChecked(blur->isEnabled() && FloatingWindow::panelBlurEnabled());
-
-    auto *snap = new QCheckBox(tr("松手自动贴靠屏幕四边（上 / 下 / 左 / 右）"), appearance);
+    auto *snap = new QCheckBox(tr("松手贴边吸附"), &dialog);
+    snap->setObjectName(QStringLiteral("snapEdgeCheck"));
     snap->setChecked(m_snapEnabled);
 
-    auto *autoHide = new QCheckBox(tr("闲置自动靠边形变为竖胶囊（默认关闭 · 常驻显示正圆时钟主球）"), appearance);
-    autoHide->setChecked(m_autoHideEnabled);
-
-    auto *autoTuckFs = new QCheckBox(tr("全屏看视频 / 打游戏时自动靠边形变为竖胶囊（退出全屏自动恢复圆球）"), appearance);
+    auto *autoTuckFs = new QCheckBox(tr("全屏自动收成胶囊"), &dialog);
+    autoTuckFs->setObjectName(QStringLiteral("autoTuckFsCheck"));
     autoTuckFs->setChecked(m_autoTuckFullscreen);
 
-    auto *crosshairPull = new QCheckBox(tr("拉出最外层环一键唤起系统截屏（Spectacle / macshot）"), appearance);
-    crosshairPull->setChecked(m_crosshairPullEnabled);
+    auto *multiScreen = new QCheckBox(tr("多屏独立显示"), &dialog);
+    multiScreen->setObjectName(QStringLiteral("multiScreenCheck"));
+    multiScreen->setChecked(m_multiScreenEnabled);
 
-    appForm->addRow(dockCheck);
-    appForm->addRow(statusOrbCheck);
-    appForm->addRow(multiScreenCheck);
-    appForm->addRow(tr("悬浮球尺寸"), diameter);
-    appForm->addRow(tr("闲置透明度"), idle);
-    appForm->addRow(tr("激活透明度"), active);
-    appForm->addRow(tr("浮卡暗色罩层"), panels);
-    appForm->addRow(blur);
-    appForm->addRow(snap);
-    appForm->addRow(autoHide);
-    appForm->addRow(autoTuckFs);
-    appForm->addRow(crosshairPull);
-
-    auto *gestureGuide = new QLabel(
-        tr("交互提示：\n"
-           "• 最内圈固定 5 个系统总控按钮；第 2 层起自动把已打开窗口分层展开，第 2 层末端固定「关闭当前窗口」红球（任意窗口也支持鼠标中键快关）\n"
-           "• 有新消息的窗口会在正圆主球边缘对应方位亮起红点，点开主球顺着方向一眼命中\n"
-           "• 向屏幕外边框方向轻推主球可手动临时收成竖胶囊；全屏看视频/游戏会自动靠边形变"),
-        appearance);
-    gestureGuide->setWordWrap(true);
-    appForm->addRow(gestureGuide);
-    tabs->addTab(appearance, tr("形态与手势"));
-
-    // Tab 2: Inner Ring (Ring 1) 5-Slot Actions
-    auto *fanPage = new QWidget(&dialog);
-    auto *fanForm = new QFormLayout(fanPage);
-    QList<QComboBox *> slotCombos;
-    const QStringList slotNames{
-        tr("内圈槽位 1（最上）"),
-        tr("内圈槽位 2（中上）"),
-        tr("内圈槽位 3（正中 C 位）"),
-        tr("内圈槽位 4（中下）"),
-        tr("内圈槽位 5（最下）")
-    };
-    for (int i = 0; i < kOrbitSlotCount; ++i) {
-        auto *combo = new QComboBox(fanPage);
-        combo->setObjectName(QStringLiteral("orbitAction%1").arg(i));
-        for (const QString &id : availableActions())
-            combo->addItem(actionLabel(id), id);
-        combo->setCurrentIndex(combo->findData(m_orbitActions.value(i)));
-        slotCombos.append(combo);
-        fanForm->addRow(slotNames[i], combo);
-    }
-    auto *fanHint = new QLabel(tr("内圈固定为 5 个高频系统触控动作；第 2 层起自动展示你的悬浮 Dock 应用。"), fanPage);
-    fanHint->setWordWrap(true);
-    fanForm->addRow(fanHint);
-    tabs->addTab(fanPage, tr("内圈五槽动作"));
-
-    // Tab 3: Floating Dock Pinned Apps Manager
-    auto *dockPage = new QWidget(&dialog);
-    auto *dockLayout = new QVBoxLayout(dockPage);
-    auto *dockDesc = new QLabel(
-        tr("固定在悬浮 Dock 中的应用（排在第 2~10 层前列；其余正在运行的桌面应用也会自动追加在后面）："), dockPage);
-    dockDesc->setWordWrap(true);
-    dockLayout->addWidget(dockDesc);
-
-    auto *pinnedList = new QListWidget(dockPage);
-    pinnedList->setObjectName(QStringLiteral("dockPinnedList"));
-    auto populatePinned = [pinnedList](const QStringList &targets) {
-        pinnedList->clear();
-        for (const QString &t : targets) {
-            auto *it = new QListWidgetItem(AppDockModel::displayNameForTarget(t) + QStringLiteral("  (") + t + QStringLiteral(")"));
-            it->setData(Qt::UserRole, t);
-            pinnedList->addItem(it);
-        }
-    };
-    populatePinned(dockModel()->pinnedTargets());
-    dockLayout->addWidget(pinnedList, 1);
-
-    auto *dockBtnRow = new QHBoxLayout();
-    auto *syncDockBtn = new QPushButton(tr("从系统 Dock 导入"), dockPage);
-    auto *addAppBtn = new QPushButton(tr("添加应用…"), dockPage);
-    auto *upBtn = new QPushButton(tr("上移"), dockPage);
-    auto *downBtn = new QPushButton(tr("下移"), dockPage);
-    auto *removeBtn = new QPushButton(tr("移除"), dockPage);
-    for (QPushButton *b : {syncDockBtn, addAppBtn, upBtn, downBtn, removeBtn}) dockBtnRow->addWidget(b);
-    dockLayout->addLayout(dockBtnRow);
-
-    connect(syncDockBtn, &QPushButton::clicked, &dialog, [this, populatePinned] {
-        dockModel()->importFromSystemDock();
-        populatePinned(dockModel()->pinnedTargets());
-    });
-    connect(addAppBtn, &QPushButton::clicked, &dialog, [&dialog, pinnedList] {
-#ifdef Q_OS_MACOS
-        const QString picked = QFileDialog::getExistingDirectory(
-            &dialog, tr("选择要固定到悬浮 Dock 的应用 (.app)"), QStringLiteral("/Applications"));
-#else
-        const QString picked = QFileDialog::getOpenFileName(
-            &dialog, tr("选择应用 (.desktop)"), QStringLiteral("/usr/share/applications"),
-            QStringLiteral("Desktop Entries (*.desktop);;All Files (*)"));
-#endif
-        if (picked.isEmpty()) return;
-        for (int i = 0; i < pinnedList->count(); ++i) {
-            if (pinnedList->item(i)->data(Qt::UserRole).toString() == picked) return;
-        }
-        auto *it = new QListWidgetItem(AppDockModel::displayNameForTarget(picked) + QStringLiteral("  (") + picked + QStringLiteral(")"));
-        it->setData(Qt::UserRole, picked);
-        pinnedList->addItem(it);
-    });
-    connect(upBtn, &QPushButton::clicked, &dialog, [pinnedList] {
-        const int row = pinnedList->currentRow();
-        if (row <= 0) return;
-        QListWidgetItem *it = pinnedList->takeItem(row);
-        pinnedList->insertItem(row - 1, it);
-        pinnedList->setCurrentRow(row - 1);
-    });
-    connect(downBtn, &QPushButton::clicked, &dialog, [pinnedList] {
-        const int row = pinnedList->currentRow();
-        if (row < 0 || row >= pinnedList->count() - 1) return;
-        QListWidgetItem *it = pinnedList->takeItem(row);
-        pinnedList->insertItem(row + 1, it);
-        pinnedList->setCurrentRow(row + 1);
-    });
-    connect(removeBtn, &QPushButton::clicked, &dialog, [pinnedList] {
-        const int row = pinnedList->currentRow();
-        if (row >= 0) delete pinnedList->takeItem(row);
-    });
-    tabs->addTab(dockPage, tr("悬浮 Dock 应用"));
-
-    auto *status = new QLabel(&dialog);
-    status->setStyleSheet(QStringLiteral("color:#e05268;"));
-    status->setWordWrap(true);
-    layout->addWidget(status);
+    behaviorRow->addWidget(snap);
+    behaviorRow->addWidget(autoTuckFs);
+    behaviorRow->addWidget(multiScreen);
+    behaviorRow->addStretch(1);
+    formBox->addLayout(behaviorRow);
+    layout->addLayout(formBox);
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Save | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults, &dialog);
+    if (auto *b = buttons->button(QDialogButtonBox::Save)) b->setText(tr("保存"));
+    if (auto *b = buttons->button(QDialogButtonBox::Cancel)) b->setText(tr("取消"));
+    if (auto *b = buttons->button(QDialogButtonBox::RestoreDefaults)) b->setText(tr("恢复默认"));
     layout->addWidget(buttons);
 
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QAbstractButton::clicked, &dialog, [=] {
-        const QStringList defs = defaultOrbitActions();
-        for (int i = 0; i < kOrbitSlotCount; ++i)
-            slotCombos[i]->setCurrentIndex(slotCombos[i]->findData(defs[i]));
-        dockCheck->setChecked(true);
-        statusOrbCheck->setChecked(true);
-        multiScreenCheck->setChecked(true);
+    connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QAbstractButton::clicked, &dialog, [&, orbStudio] {
+        restoredDefaults = true;
         diameter->setValue(60);
-        idle->setValue(82);
-        active->setValue(94);
-        panels->setValue(58);
-        blur->setChecked(blur->isEnabled());
+        opacity->setValue(82);
         snap->setChecked(true);
-        autoHide->setChecked(false);
         autoTuckFs->setChecked(true);
-        crosshairPull->setChecked(true);
+        multiScreen->setChecked(true);
+        orbStudio->setStatusOrbEnabled(true);
         orbStudio->resetDefaults();
-        status->clear();
     });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&, this] {
-        QStringList chosen;
-        for (QComboBox *c : slotCombos) chosen.append(c->currentData().toString());
-        if (QSet<QString>(chosen.begin(), chosen.end()).size() != kOrbitSlotCount) {
-            status->setText(tr("内圈请选择五个互不重复的快捷动作。"));
-            return;
+        if (restoredDefaults) {
+            m_dockModeEnabled = true;
+            m_autoHideEnabled = false;
+            m_crosshairPullEnabled = true;
+            setStatusOrbMode(true);
+            setOrbitActions(defaultOrbitActions());
         }
-        if (active->value() < idle->value()) {
-            status->setText(tr("激活透明度需大于或等于闲置透明度。"));
-            return;
-        }
-        m_dockModeEnabled = dockCheck->isChecked();
-        setStatusOrbMode(statusOrbCheck->isChecked());
         m_orbFaceConfig = orbStudio->config();
-        m_multiScreenEnabled = multiScreenCheck->isChecked();
+        m_multiScreenEnabled = multiScreen->isChecked();
         m_snapEnabled = snap->isChecked();
-        m_autoHideEnabled = autoHide->isChecked();
         m_autoTuckFullscreen = autoTuckFs->isChecked();
         m_fullscreenTucked = (m_autoTuckFullscreen && dockModel()->activeWindowFullscreen());
-        m_crosshairPullEnabled = crosshairPull->isChecked();
-        m_idleOpacity = idle->value() / 100.0;
-        m_activeOpacity = active->value() / 100.0;
-        FloatingWindow::setPanelOpacity(panels->value() / 100.0);
-        if (blur->isEnabled()) FloatingWindow::setPanelBlurEnabled(blur->isChecked());
+        m_idleOpacity = opacity->value() / 100.0;
+        m_activeOpacity = qMin(1.0, m_idleOpacity + 0.12);
         updateBallGeometry(QSizeF(diameter->value() * m_screenScale, diameter->value() * m_screenScale),
                            QPointF(), false, false);
-        setOrbitActions(chosen);
-
-        QStringList newPinned;
-        for (int i = 0; i < pinnedList->count(); ++i)
-            newPinned.append(pinnedList->item(i)->data(Qt::UserRole).toString());
-        dockModel()->setPinnedTargets(newPinned);
-
-        if (!m_snapEnabled) m_dockSide = 0;
+        if (!m_snapEnabled) m_dockSide = DockFree;
         else snapToEdge(false);
         if (m_statusOrbMode) {
             const QString tipStr = StatusOrbRenderer::buildTooltip(statusMonitor()->snapshot(), m_orbFaceConfig);
@@ -5504,10 +5294,15 @@ void FloatingBall::openSettingsDialog(int initialTab)
         dialog.accept();
     });
 
-    tabs->setCurrentIndex(qBound(0, initialTab, tabs->count() - 1));
-    dialog.resize(620, 560);
+    dialog.resize(610, 520);
     if (dialog.exec() != QDialog::Accepted) {
         m_orbFaceConfig = origFace;
+        m_preferredDiameter = origDiameter;
+        m_idleOpacity = origIdleOpacity;
+        m_activeOpacity = origActiveOpacity;
+        applyGeometry(origGeometry, false);
+        m_expandedDockGeometry = geometry();
+        animateBallOpacity(m_idleOpacity, 80);
         update();
         broadcastSharedPreferences();
     }
